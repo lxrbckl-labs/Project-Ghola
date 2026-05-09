@@ -1,0 +1,43 @@
+{
+  "id": "reference.hello-nomeda",
+  "name": "Hello Nomeda",
+  "version": "0.0.1",
+  "description": "Reference module exercising every contribution point.",
+  "author": "Nomeda",
+  "entry": "index.js",
+  "contributes": {
+    "promptFragments": [
+      {
+        "target": "tpm",
+        "section": "Greeting tool",
+        "contentPath": "prompt.md",
+        "order": 100
+      }
+    ],
+    "settings": {
+      "greeting": {
+        "type": "string",
+        "label": "Greeting",
+        "description": "Text used by the hello tool.",
+        "default": "hello",
+        "required": false
+      }
+    },
+    "settingsPanelSections": [
+      {
+        "id": "hello-nomeda.section",
+        "title": "Hello Nomeda",
+        "placement": "general"
+      }
+    ],
+    "tools": [
+      {
+        "id": "hello-nomeda.greet",
+        "name": "greet",
+        "type": "script",
+        "command": "echo $greeting",
+        "description": "Echoes the configured greeting string."
+      }
+    ]
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "name": "nomeda",
+  "displayName": "Nomeda",
+  "description": "Modular multi-agent dev team for VS Code.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "nomeda.openSettings",
+        "title": "Nomeda: Open Settings"
+      },
+      {
+        "command": "nomeda.openSession",
+        "title": "Nomeda: Open Session"
+      },
+      {
+        "command": "nomeda.reloadModules",
+        "title": "Nomeda: Reload Modules"
+      }
+    ],
+    "configuration": {
+      "title": "Nomeda",
+      "properties": {
+        "nomeda.modulesDir": {
+          "type": "string",
+          "default": ".nomeda/modules",
+          "description": "Directory (relative to workspace root) containing Nomeda modules."
+        },
+        "nomeda.stateFile": {
+          "type": "string",
+          "default": ".nomeda/state.json",
+          "description": "Path (relative to workspace root) to the Nomeda agent state file."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "dev": "concurrently --kill-others-on-fail --names build,extension --prefix-colors yellow,cyan \"npm:watch\" \"echo Press F5 in VS Code to launch the Extension Development Host\"",
+    "watch": "node esbuild.config.js --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "concurrently": "^8.2.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "ajv": "^8.12.0"
+  }
+}

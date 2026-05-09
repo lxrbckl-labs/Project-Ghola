@@ -1,0 +1,15 @@
+{
+  "id": "core.tpm",
+  "name": "TPM Core",
+  "version": "0.1.0",
+  "description": "Base agent definition for the Technical Program Manager (TPM) — the long-running coordinator that deploys SWE and QA subagents.",
+  "author": "Nomeda",
+  "contributes": {
+    "agents": [
+      {
+        "id": "tpm",
+        "definitionPath": "tpm.md"
+      }
+    ]
+  }
+}

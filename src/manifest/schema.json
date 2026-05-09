@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nomeda.local/schemas/module-manifest.json",
+  "title": "Nomeda Module Manifest",
+  "type": "object",
+  "required": ["id", "name", "version"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "description": "Unique module id."
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+].+)?$"
+    },
+    "description": { "type": "string" },
+    "author": { "type": "string" },
+    "entry": { "type": "string" },
+    "contributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "promptFragments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["target", "contentPath"],
+            "additionalProperties": false,
+            "properties": {
+              "target": { "type": "string", "minLength": 1 },
+              "section": { "type": "string" },
+              "contentPath": { "type": "string", "minLength": 1 },
+              "order": { "type": "number" }
+            }
+          }
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "definitionPath"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "definitionPath": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "settings": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["type", "label"],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["string", "number", "boolean", "enum", "path"]
+              },
+              "label": { "type": "string" },
+              "description": { "type": "string" },
+              "default": {},
+              "required": { "type": "boolean" },
+              "options": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        },
+        "settingsPanelSections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "title", "placement"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "placement": { "type": "string" },
+              "contentPath": { "type": "string" }
+            }
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "type", "description"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "type": { "type": "string", "enum": ["script", "mcp"] },
+              "description": { "type": "string" },
+              "command": { "type": "string" },
+              "mcpServer": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

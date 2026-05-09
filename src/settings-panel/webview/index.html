@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<!--
+  This file is a static reference of the webview shell. The actual HTML served
+  to the webview is rendered programmatically in src/settings-panel/host.ts so
+  it can inject the CSP nonce, the asWebviewUri-resolved script URL, and
+  inlined styles. Keep this file in sync for documentation purposes only.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nomeda Settings</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script src="../../../dist/webview.js"></script>
+  </body>
+</html>
