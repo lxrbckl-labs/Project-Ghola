@@ -32,13 +32,13 @@
       "properties": {
         "nomeda.modulesDir": {
           "type": "string",
-          "default": ".nomeda/modules",
+          "default": "modules",
           "description": "Directory (relative to workspace root) containing Nomeda modules."
         },
-        "nomeda.stateFile": {
+        "nomeda.sessionCommand": {
           "type": "string",
-          "default": ".nomeda/state.json",
-          "description": "Path (relative to workspace root) to the Nomeda agent state file."
+          "default": "claude",
+          "description": "Command phrase sent to the Nomeda Session terminal after launch (e.g. 'claude', 'claude --resume'). Leave empty to skip."
         }
       }
     }

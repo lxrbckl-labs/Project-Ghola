@@ -3,9 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
 import type { PromptComposer } from '../prompts/composer';
-import type { StateWatcher, SessionState } from '../state/watcher';
 import type {
-  AgentStatusSummary,
   HostToWebviewMessage,
   ModuleSummary,
   WebviewToHostMessage,
@@ -21,12 +19,10 @@ export class SettingsPanel implements vscode.Disposable {
     private readonly context: vscode.ExtensionContext,
     private readonly loader: ModuleLoader,
     private readonly composer: PromptComposer,
-    private readonly state: StateWatcher,
     private readonly logger?: vscode.OutputChannel,
   ) {
     this.disposables.push(
       this.loader.onDidChange(() => this.postModules()),
-      this.state.onDidChange((s) => this.postAgentState(s)),
     );
   }
 
@@ -129,6 +125,11 @@ export class SettingsPanel implements vscode.Disposable {
       case 'openSession':
         await vscode.commands.executeCommand('nomeda.openSession');
         break;
+      case 'updateConfiguration':
+        await vscode.workspace
+          .getConfiguration(msg.section)
+          .update(msg.key, msg.value, vscode.ConfigurationTarget.Global);
+        break;
       default:
         this.logger?.appendLine(`[panel] unknown message: ${JSON.stringify(msg)}`);
     }
@@ -150,7 +151,10 @@ export class SettingsPanel implements vscode.Disposable {
   private postSettings(): void {
     if (!this.panel) return;
     const values = this.context.workspaceState.get<Record<string, unknown>>(SETTINGS_KEY, {});
-    this.post({ type: 'settingsLoaded', values });
+    const sessionCommand = vscode.workspace
+      .getConfiguration('nomeda')
+      .get<string>('sessionCommand', 'claude');
+    this.post({ type: 'settingsLoaded', values, sessionCommand });
   }
 
   private async saveSettings(values: Record<string, unknown>): Promise<void> {
@@ -166,17 +170,6 @@ export class SettingsPanel implements vscode.Disposable {
     if (!this.panel) return;
     const prompt = await this.composer.compose(agent);
     this.post({ type: 'composedPromptUpdated', agent, prompt });
-  }
-
-  private postAgentState(state: SessionState): void {
-    if (!this.panel) return;
-    const agents: AgentStatusSummary[] = Object.entries(state.agents).map(([id, e]) => ({
-      id,
-      status: e.status,
-      instance: e.instance,
-      lastHeartbeat: e.last_heartbeat,
-    }));
-    this.post({ type: 'agentStateUpdated', agents });
   }
 
   private post(msg: HostToWebviewMessage): void {

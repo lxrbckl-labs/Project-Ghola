@@ -6,8 +6,6 @@ import { ModuleState } from './modules/state';
 import { PromptComposer } from './prompts/composer';
 import { SessionLauncher } from './session/launcher';
 import { SettingsPanel } from './settings-panel/host';
-import { StateWatcher } from './state/watcher';
-import { NomedaStatusBar } from './status-bar';
 
 export function activate(context: vscode.ExtensionContext): void {
   const logger = vscode.window.createOutputChannel('Nomeda');
@@ -23,30 +21,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const composer = new PromptComposer(loader, logger);
 
-  const stateFileAbs = resolveStateFile();
-  const watcher = new StateWatcher(stateFileAbs, logger);
-  context.subscriptions.push(watcher);
-
-  const statusBar = new NomedaStatusBar();
-  context.subscriptions.push(statusBar);
-  context.subscriptions.push(watcher.onDidChange((s) => statusBar.update(s)));
-
   const session = new SessionLauncher(loader, composer, logger);
-  const panel = new SettingsPanel(context, loader, composer, watcher, logger);
+  const panel = new SettingsPanel(context, loader, composer, logger);
   context.subscriptions.push(panel);
 
   registerCommands(context, {
     loader,
     panel,
     session,
-    resolveModulesDir: resolveModulesDirFn(),
+    resolveModulesDir: resolveModulesDirFn(context),
     logger,
   });
 
-  watcher.start();
-
   // Initial discovery (best-effort).
-  void loader.discover(resolveModulesDirFn()()).then((handles) => {
+  void loader.discover(resolveModulesDirFn(context)()).then((handles) => {
     logger.appendLine(`[nomeda] discovered ${handles.length} module(s)`);
   });
 
@@ -64,18 +52,11 @@ export function deactivate(): void {
   // No-op; subscriptions handle cleanup.
 }
 
-function resolveStateFile(): string {
-  const cfg = vscode.workspace.getConfiguration('nomeda');
-  const rel = cfg.get<string>('stateFile') ?? '.nomeda/state.json';
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-  return path.isAbsolute(rel) ? rel : path.join(root, rel);
-}
-
-function resolveModulesDirFn(): () => string {
+function resolveModulesDirFn(context: vscode.ExtensionContext): () => string {
   return () => {
     const cfg = vscode.workspace.getConfiguration('nomeda');
-    const rel = cfg.get<string>('modulesDir') ?? '.nomeda/modules';
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    const rel = cfg.get<string>('modulesDir') ?? 'modules';
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? context.extensionPath;
     return path.isAbsolute(rel) ? rel : path.join(root, rel);
   };
 }

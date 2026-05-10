@@ -30,6 +30,10 @@ export class SessionLauncher {
     terminal.show(true);
     // Print the banner via the shell so it shows in the terminal buffer.
     this.printBanner(terminal, banner);
+    const phrase = vscode.workspace.getConfiguration('nomeda').get<string>('sessionCommand', '').trim();
+    if (phrase) {
+      terminal.sendText(phrase, true);
+    }
     this.logger?.appendLine(`[session] launched terminal with shell: ${shellPath ?? '<default>'}`);
   }
 

@@ -4,7 +4,7 @@ Modular multi-agent dev team for VS Code.
 
 ## Status
 
-v0.0.1 — foundation scaffold. Wired surfaces: extension activation, settings webview (General / Modules / Agents / Sessions), module loader with manifest validation, prompt composer, status bar, agent state watcher, session terminal launcher. The reference module `hello-nomeda` exercises every contribution point.
+v0.0.1 — foundation scaffold. Wired surfaces: extension activation, settings webview (General / Modules / Agents / Sessions), module loader with manifest validation, prompt composer, session terminal launcher. The reference module `hello-nomeda` exercises every contribution point.
 
 No agent CLI is invoked yet; `Nomeda: Open Session` opens a PowerShell terminal with a boot banner so the user can launch their CLI manually.
 
@@ -42,6 +42,5 @@ A reference module lives at `modules/hello-nomeda/` in this repo. To exercise it
 - `src/manifest/` — module manifest types, JSON Schema, Ajv validator.
 - `src/modules/` — discovery, enable/disable state, handles.
 - `src/prompts/composer.ts` — composes the system prompt for an agent target from enabled modules.
-- `src/state/watcher.ts` — read-only file watcher for `.nomeda/state.json` agent heartbeats.
 - `src/settings-panel/` — webview host and webview UI.
 - `src/session/launcher.ts` — opens a terminal in the editor area with a session banner.

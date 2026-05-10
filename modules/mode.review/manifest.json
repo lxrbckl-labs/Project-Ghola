@@ -1,0 +1,17 @@
+{
+  "id": "mode.review",
+  "name": "Review Mode",
+  "version": "0.1.0",
+  "description": "Adds a read-only code review workflow where SWE analyses a branch through an assigned lens and returns structured findings with ratings.",
+  "author": "Nomeda",
+  "contributes": {
+    "promptFragments": [
+      {
+        "target": "swe",
+        "section": "Review Mode",
+        "contentPath": "review.md",
+        "order": 50
+      }
+    ]
+  }
+}

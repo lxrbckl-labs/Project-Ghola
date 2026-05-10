@@ -12,13 +12,6 @@ export interface ModuleSummary {
   contributes: ModuleManifest['contributes'];
 }
 
-export interface AgentStatusSummary {
-  id: string;
-  status: 'active' | 'idle' | 'stalled' | 'error';
-  instance: number | null;
-  lastHeartbeat: number | null;
-}
-
 // Webview → host
 export type WebviewToHostMessage =
   | { type: 'ready' }
@@ -28,12 +21,12 @@ export type WebviewToHostMessage =
   | { type: 'saveSettings'; values: Record<string, unknown> }
   | { type: 'getComposedPrompt'; agent: string }
   | { type: 'reloadModules' }
-  | { type: 'openSession' };
+  | { type: 'openSession' }
+  | { type: 'updateConfiguration'; section: string; key: string; value: unknown };
 
 // Host → webview
 export type HostToWebviewMessage =
   | { type: 'modulesChanged'; modules: ModuleSummary[] }
-  | { type: 'settingsLoaded'; values: Record<string, unknown> }
+  | { type: 'settingsLoaded'; values: Record<string, unknown>; sessionCommand: string }
   | { type: 'settingsSaved'; ok: boolean; error?: string }
-  | { type: 'composedPromptUpdated'; agent: string; prompt: string }
-  | { type: 'agentStateUpdated'; agents: AgentStatusSummary[] };
+  | { type: 'composedPromptUpdated'; agent: string; prompt: string };

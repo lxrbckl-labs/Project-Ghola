@@ -1,0 +1,17 @@
+{
+  "id": "tool.wsl-migrate",
+  "name": "WSL2 Migration",
+  "version": "0.1.0",
+  "description": "Teaches TPM how to migrate a project from the Windows filesystem (/mnt/c/...) into the WSL2 Linux filesystem (~/projects/...) for faster file I/O.",
+  "author": "Nomeda",
+  "contributes": {
+    "promptFragments": [
+      {
+        "target": "tpm",
+        "section": "WSL2 Migration",
+        "contentPath": "migrate.md",
+        "order": 200
+      }
+    ]
+  }
+}

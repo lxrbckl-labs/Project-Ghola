@@ -1,0 +1,29 @@
+{
+  "id": "core.preamble",
+  "name": "Composed-Prompt Preamble",
+  "version": "0.1.0",
+  "description": "Meta-prompt prepended to every agent (TPM, SWE, QA) explaining that the live system prompt is dynamically assembled from enabled modules.",
+  "author": "Nomeda",
+  "contributes": {
+    "promptFragments": [
+      {
+        "target": "tpm",
+        "section": "Module-Driven Architecture",
+        "contentPath": "preamble.md",
+        "order": 0
+      },
+      {
+        "target": "swe",
+        "section": "Module-Driven Architecture",
+        "contentPath": "preamble.md",
+        "order": 0
+      },
+      {
+        "target": "qa",
+        "section": "Module-Driven Architecture",
+        "contentPath": "preamble.md",
+        "order": 0
+      }
+    ]
+  }
+}
