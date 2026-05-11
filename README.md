@@ -4,9 +4,9 @@ Modular multi-agent dev team for VS Code.
 
 ## Status
 
-v0.0.1 — foundation scaffold. Wired surfaces: extension activation, settings webview (General / Modules / Agents / Sessions), module loader with manifest validation, prompt composer, session terminal launcher. The reference module `hello-nomeda` exercises every contribution point.
+v0.2.x — modular architecture. Wired surfaces: extension activation, settings webview (General / Modules / Agents: TPM / SWE / QA), module loader with manifest validation, prompt composer (Session Manifest shape), session terminal launcher.
 
-No agent CLI is invoked yet; `Nomeda: Open Session` opens a PowerShell terminal with a boot banner so the user can launch their CLI manually.
+`Nomeda: Open Session` opens a PowerShell terminal and sends the configured `nomeda.sessionCommand` automatically on launch.
 
 ## Build
 
@@ -33,9 +33,9 @@ Open this folder in VS Code and press F5 to launch the Extension Development Hos
 
 ## Modules
 
-By default Nomeda looks for modules under `<workspaceFolder>/.nomeda/modules/`. The path is configurable via `nomeda.modulesDir`.
+By default Nomeda looks for modules under `<workspaceFolder>/modules/`. The path is configurable via `nomeda.modulesDir`.
 
-A reference module lives at `modules/hello-nomeda/` in this repo. To exercise it inside the dev host, copy or symlink that folder into your test workspace's `.nomeda/modules/` directory and reload.
+Five modules ship in this repo: `core.preamble`, `core.tpm`, `core.swe`, `core.qa` (all enabled by default), and `tool.fastpath-check` (opt-in). Cores are enabled out of the box; `tool.fastpath-check` can be toggled on in the Modules tab.
 
 ## Architecture
 
