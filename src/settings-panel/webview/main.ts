@@ -361,7 +361,7 @@ function renderModuleDetails(m: ModuleSummary): HTMLElement {
 
   if (fragCount > 0) {
     const targets = (c?.promptFragments ?? []).map((f) => f.target).join(', ');
-    appendDef(dl, 'Prompt fragments', `${fragCount} (targets: ${targets})`);
+    appendDef(dl, 'Module content files', `${fragCount} (read on demand by: ${targets})`);
   }
   if (agentCount > 0) {
     const ids = (c?.agents ?? []).map((a) => a.id).join(', ');
@@ -540,7 +540,7 @@ function renderContribBadges(m: ModuleSummary): HTMLElement {
 
 function renderAgent(wrapper: HTMLElement, agentId: string): void {
   wrapper.appendChild(textEl('h1', `Agent: ${agentId.toUpperCase()}`));
-  wrapper.appendChild(textEl('p', 'Live composed system prompt from currently enabled modules.', 'subtitle'));
+  wrapper.appendChild(textEl('p', 'Composed agent prompt: core definition, preamble, and Session Manifest. Module content is read on demand.', 'subtitle'));
 
   const prompt = state.composedPrompts[agentId];
   if (prompt === undefined) {
