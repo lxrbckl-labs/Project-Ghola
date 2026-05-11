@@ -1,7 +1,7 @@
 import type * as vscode from 'vscode';
 
 const ENABLED_KEY = 'nomeda.enabledModules';
-const INITIALIZED_KEY = 'nomeda.enabledModules.initialized';
+const FIRST_RUN_DONE_KEY = 'nomeda.enabledModules.initialized';
 
 export class ModuleState {
   constructor(private readonly memento: vscode.Memento) {}
@@ -14,7 +14,7 @@ export class ModuleState {
   async setEnabledIds(ids: string[]): Promise<void> {
     const unique = Array.from(new Set(ids));
     await this.memento.update(ENABLED_KEY, unique);
-    await this.memento.update(INITIALIZED_KEY, true);
+    await this.memento.update(FIRST_RUN_DONE_KEY, true);
   }
 
   async enable(id: string): Promise<void> {
@@ -35,6 +35,6 @@ export class ModuleState {
 
   /** True the first time the loader runs in a workspace (defaults can be applied). */
   isFirstRun(): boolean {
-    return this.memento.get<boolean>(INITIALIZED_KEY, false) === false;
+    return this.memento.get<boolean>(FIRST_RUN_DONE_KEY, false) === false;
   }
 }

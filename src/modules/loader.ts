@@ -17,10 +17,56 @@ export class ModuleLoader {
   private readonly emitter = new vscode.EventEmitter<ModuleHandle[]>();
   readonly onDidChange = this.emitter.event;
 
+  /** Active file-system watcher, if one has been attached via watchManifests(). */
+  private watcher: vscode.FileSystemWatcher | undefined;
+  /** Pending debounce timer handle. */
+  private debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
   constructor(
     private readonly state: ModuleState,
     private readonly options: ModuleLoaderOptions = {},
   ) {}
+
+  /**
+   * Create a file-system watcher on a recursive manifest.json glob relative to
+   * the workspace root and wire a 250 ms debounced re-discover + re-broadcast
+   * on add / change / delete events.  Call once at activation; the returned
+   * disposable (or the loader's own dispose()) tears it down.
+   *
+   * @param resolveModulesDir  Callback that returns the current modules dir at
+   *   call time (matches the `resolveModulesDirFn` closure used in extension.ts).
+   * @param onRefresh  Called after each debounced discover so the host can
+   *   re-broadcast composed prompts to the webview.
+   */
+  watchManifests(
+    resolveModulesDir: () => string,
+    onRefresh?: () => void,
+  ): vscode.Disposable {
+    const pattern = new vscode.RelativePattern(
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
+        vscode.env.appRoot, // safe fallback — watcher just won't fire
+      '**/manifest.json',
+    );
+    this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
+
+    const schedule = () => {
+      if (this.debounceTimer !== undefined) {
+        clearTimeout(this.debounceTimer);
+      }
+      this.debounceTimer = setTimeout(() => {
+        this.debounceTimer = undefined;
+        void this.discover(resolveModulesDir()).then(() => {
+          onRefresh?.();
+        });
+      }, 250);
+    };
+
+    this.watcher.onDidCreate(schedule);
+    this.watcher.onDidChange(schedule);
+    this.watcher.onDidDelete(schedule);
+
+    return { dispose: () => this.disposeWatcher() };
+  }
 
   async discover(modulesDir: string): Promise<ModuleHandle[]> {
     this.handles = [];
@@ -69,6 +115,16 @@ export class ModuleLoader {
       this.handles.push({ manifest, rootPath: moduleRoot, isEnabled });
     }
 
+    // Prune stale enabled IDs: any ID in workspaceState that no longer exists
+    // on disk is removed.  Runs on every discover() to prevent unbounded
+    // accumulation of orphaned IDs when modules are deleted or renamed.
+    const liveIds = new Set(this.handles.map((h) => h.manifest.id));
+    const currentEnabled = this.state.getEnabledIds();
+    const prunedEnabled = currentEnabled.filter((id) => liveIds.has(id));
+    if (prunedEnabled.length !== currentEnabled.length) {
+      await this.state.setEnabledIds(prunedEnabled);
+    }
+
     // Persist first-run state (even if empty) so toggling-all-off is honored on next reload.
     if (seenFirstRun) {
       const initial = this.handles.filter((h) => h.isEnabled).map((h) => h.manifest.id);
@@ -106,7 +162,17 @@ export class ModuleLoader {
   }
 
   dispose(): void {
+    this.disposeWatcher();
     this.emitter.dispose();
+  }
+
+  private disposeWatcher(): void {
+    if (this.debounceTimer !== undefined) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = undefined;
+    }
+    this.watcher?.dispose();
+    this.watcher = undefined;
   }
 
   private log(msg: string): void {
