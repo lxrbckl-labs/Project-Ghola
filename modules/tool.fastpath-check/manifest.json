@@ -1,0 +1,12 @@
+{
+  "id": "tool.fastpath-check",
+  "name": "Fast Path Check",
+  "version": "0.1.0",
+  "description": "Proactive check at session start — detects whether the current work repo lives on a slow Windows filesystem path (/mnt/c/...) and advises the user to relocate to a WSL-native path (~/projects/...) for ~5-6x I/O speedup.",
+  "proactive": true,
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "fastpath-check.md" }
+    ]
+  }
+}
