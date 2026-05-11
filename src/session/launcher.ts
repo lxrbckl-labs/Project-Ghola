@@ -8,6 +8,7 @@ import { formatBanner } from './banner';
 export class SessionLauncher {
   constructor(
     private readonly loader: ModuleLoader,
+    private readonly extensionPath: string,
     private readonly logger?: vscode.OutputChannel,
   ) {}
 
@@ -19,17 +20,27 @@ export class SessionLauncher {
     const shellPath = this.pickShell();
     const shellArgs = this.pickShellArgs();
 
+    const cfg = vscode.workspace.getConfiguration('nomeda');
     const terminal = vscode.window.createTerminal({
       name: 'Nomeda Session',
       shellPath,
       shellArgs,
       location: { viewColumn: vscode.ViewColumn.Active },
+      env: {
+        NOMEDA_ROOT: this.extensionPath,
+        SWE_PERFORMANCE_CORES: String(cfg.get<number>('swe.performanceCores', 2)),
+        SWE_EFFICIENCY_CORES: String(cfg.get<number>('swe.efficiencyCores', 1)),
+        SWE_AGENT_COUNT: String(
+          cfg.get<number>('swe.performanceCores', 2) + cfg.get<number>('swe.efficiencyCores', 1),
+        ),
+        QA_AGENT_COUNT: String(cfg.get<number>('qa.count', 1)),
+      },
     });
 
     terminal.show(true);
     // Print the banner via the shell so it shows in the terminal buffer.
     this.printBanner(terminal, banner);
-    const phrase = vscode.workspace.getConfiguration('nomeda').get<string>('sessionCommand', '').trim();
+    const phrase = cfg.get<string>('sessionCommand', '').trim();
     if (phrase) {
       terminal.sendText(phrase, true);
     }

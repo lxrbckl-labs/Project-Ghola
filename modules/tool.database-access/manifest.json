@@ -1,0 +1,20 @@
+{
+  "id": "tool.database-access",
+  "name": "Database Access",
+  "version": "0.1.0",
+  "description": "Read-only database access for SWE via an allowlisted set of connections. SELECT statements only.",
+  "contributes": {
+    "promptFragments": [
+      { "target": "swe", "contentPath": "database-swe.md" },
+      { "target": "qa",  "contentPath": "database-qa.md" }
+    ],
+    "settings": {
+      "allowlist": {
+        "type": "string",
+        "label": "Connection allowlist",
+        "description": "Comma-separated list of safe connection names that SWEs may query (read-only). Example: 'localhost.cmms, mcpdevsql.MCP_Dev'.",
+        "default": ""
+      }
+    }
+  }
+}

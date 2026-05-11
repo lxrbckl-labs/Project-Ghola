@@ -5,6 +5,7 @@ import { ModuleLoader } from './modules/loader';
 import { ModuleState } from './modules/state';
 import { PromptComposer } from './prompts/composer';
 import { SessionLauncher } from './session/launcher';
+import { ConfigurationsStore } from './settings-panel/configurations-store';
 import { SettingsPanel } from './settings-panel/host';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -14,15 +15,25 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const moduleState = new ModuleState(context.workspaceState);
   const loader = new ModuleLoader(moduleState, {
-    defaultEnabledIds: ['core.preamble', 'core.tpm', 'core.swe', 'core.qa'],
+    // Cores live in prompts/cores/ and are not modules — no defaults to enable here.
+    defaultEnabledIds: [
+      'tool.dotnet-guardrails',
+      'tool.database-access',
+      'tool.review-lenses',
+      'tool.planning-lenses',
+    ],
     logger,
   });
   context.subscriptions.push({ dispose: () => loader.dispose() });
 
-  const composer = new PromptComposer(loader, logger);
+  // Cores ship with the extension and are read from the extension install path,
+  // never the workspace. Always resolve relative to context.extensionPath.
+  const coresPath = path.join(context.extensionPath, 'prompts', 'cores');
+  const composer = new PromptComposer(loader, coresPath, logger);
 
-  const session = new SessionLauncher(loader, logger);
-  const panel = new SettingsPanel(context, loader, composer, logger);
+  const session = new SessionLauncher(loader, context.extensionPath, logger);
+  const configurationsStore = new ConfigurationsStore(context.workspaceState);
+  const panel = new SettingsPanel(context, loader, composer, configurationsStore, logger);
   context.subscriptions.push(panel);
 
   registerCommands(context, {
@@ -33,9 +44,17 @@ export function activate(context: vscode.ExtensionContext): void {
     logger,
   });
 
-  // Initial discovery (best-effort).
-  void loader.discover(resolveModulesDirFn(context)()).then((handles) => {
+  // Initial discovery (best-effort). After discover() resolves we apply any
+  // user-flagged default configuration so the workspace boots into the same
+  // preset they last marked as default. The dev-mode openSettings call below
+  // intentionally runs after this chain so the panel renders with the applied
+  // configuration in place.
+  void loader.discover(resolveModulesDirFn(context)()).then(async (handles) => {
     logger.appendLine(`[nomeda] discovered ${handles.length} module(s)`);
+    await panel.applyDefaultOnStartup();
+    if (context.extensionMode === vscode.ExtensionMode.Development) {
+      vscode.commands.executeCommand('nomeda.openSettings');
+    }
   });
 
   // File watcher: re-discover and re-broadcast composed prompts whenever a
@@ -53,6 +72,9 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
   );
+
+  // Dev-mode convenience auto-open lives inside the discover().then() block
+  // above so it runs after applyDefaultOnStartup completes.
 }
 
 export function deactivate(): void {

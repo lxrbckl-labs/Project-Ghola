@@ -240,6 +240,7 @@ button.secondary {
   font: inherit;
 }
 
+
 pre.prompt {
   background: var(--vscode-textCodeBlock-background);
   color: var(--vscode-foreground);
@@ -278,32 +279,69 @@ pre.prompt {
   font-style: italic;
 }
 
+/* ─── Session page ─────────────────────────────────────────────────── */
+
+/* Label sits above the flex row on its own line. */
+.session-command-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--vscode-foreground);
+  margin-bottom: 6px;
+}
+
+/* Flex row: [input grows] [play button on far right]. */
+.session-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Input grows to fill available width. */
+.session-command-input {
+  flex: 1 1 auto;
+  height: 28px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 0 8px;
+  font: inherit;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.session-command-input:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
 /* ─── Modules tab ──────────────────────────────────────────────────── */
 
-/* Divider between the subtitle and the search/reload row. */
-hr.modules-divider {
+/* Divider between the subtitle and the content below — used on Overview and Modules tabs. */
+hr.section-divider {
   border: none;
   border-top: 1px solid var(--vscode-panel-border);
   margin: 14px 0;
 }
 
-/* Search row: input on the far left, reload button on the far right. */
+/* Search row: input grows to fill, reload button on the far right. */
 .modules-search {
   display: flex;
   align-items: center;
   gap: 8px;
-  justify-content: space-between;
   margin: 0 0 12px;
 }
 
 .modules-search input {
-  flex: 0 1 480px;
+  flex: 1 1 auto;
+  height: 28px;
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   border: 1px solid var(--vscode-input-border, transparent);
-  padding: 6px 10px;
+  padding: 0 8px;
   font: inherit;
   border-radius: 3px;
+  box-sizing: border-box;
 }
 
 .modules-search input:focus {
@@ -341,28 +379,32 @@ button.icon-button svg {
   display: block;
 }
 
-/* Reload button in the search row: visually paired with the search input —
-   same background, border, and height so the two controls read as siblings.
-   margin-left: auto pushes it to the far right end of the flex row. */
-.modules-search button.icon-button {
-  margin-left: auto;
-  width: auto;
-  height: auto;
+/* Framed icon button — input-material chrome (background, border) shared by
+   the Modules reload button and the Overview play button. */
+button.icon-button.framed {
+  width: 28px;
+  height: 28px;
   padding: 6px 8px;
   background: var(--vscode-input-background);
   border: 1px solid var(--vscode-input-border, transparent);
   border-radius: 3px;
   color: var(--vscode-input-foreground);
+  box-sizing: border-box;
 }
 
-.modules-search button.icon-button:hover {
+button.icon-button.framed:hover {
   background: var(--vscode-input-background);
   border-color: var(--vscode-focusBorder, #007fd4);
 }
 
-.modules-search button.icon-button:focus-visible {
+button.icon-button.framed:focus-visible {
   outline: 1px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: -1px;
+}
+
+/* Reload button in the search row: no extra margin needed; input growth handles placement. */
+.modules-search button.icon-button.framed {
+  flex-shrink: 0;
 }
 
 .modules-list {
@@ -557,17 +599,49 @@ button.module-row-chevron:focus-visible {
 .module-detail .setting-input {
   width: 100%;
   max-width: 360px;
+  height: 28px;
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   border: 1px solid var(--vscode-input-border, transparent);
-  padding: 4px 8px;
+  padding: 0 8px;
   font: inherit;
   border-radius: 3px;
+  box-sizing: border-box;
 }
 
 .module-detail .setting-input:focus {
   outline: 1px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: -1px;
+}
+
+/* Per-field flex row: [input grows up to ~360px] [save icon button on right].
+   Mirrors the Session Command row pattern but constrains the input width so
+   the layout doesn't stretch to the full content column. */
+.module-detail .module-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.module-detail .module-field-row .setting-input {
+  flex: 1 1 auto;
+}
+
+/* Save button next to a setting input. Neutral by default; .dirty signals the
+   input value differs from the last persisted value. */
+.module-detail button.save-field-button {
+  color: var(--vscode-descriptionForeground);
+}
+
+.module-detail button.save-field-button.dirty {
+  color: var(--vscode-button-foreground, var(--vscode-foreground));
+  background: var(--vscode-button-background);
+  border-color: var(--vscode-button-background);
+}
+
+.module-detail button.save-field-button.dirty:hover {
+  background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+  border-color: var(--vscode-button-hoverBackground, var(--vscode-button-background));
 }
 
 .module-detail .setting-desc {
@@ -577,4 +651,243 @@ button.module-row-chevron:focus-visible {
 
 .module-detail .empty {
   font-size: 12px;
+}
+
+/* ─── Configurations row (Modules tab) ─────────────────────────────── */
+
+/* Wrapper holds the row + optional Manage panel beneath it. */
+.configurations-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 12px;
+}
+
+/* Main row: [dropdown][save][save-as-new][kebab]. Items are 28px tall and
+   line up flush; only the dropdown grows up to its declared max width. */
+.configurations-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Inline name editor that replaces the row when create/rename is active. */
+.config-name-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
+/* Dropdown — input-material chrome to match adjacent text inputs. */
+.config-dropdown {
+  height: 28px;
+  padding: 0 8px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  font: inherit;
+  box-sizing: border-box;
+  min-width: 180px;
+}
+
+.config-dropdown:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+/* On the Session command row, the dropdown sits between the input (grows)
+   and the play button. It has a moderate flex basis so it stays visible
+   without dominating the row. */
+.session-command-row .config-dropdown {
+  flex: 0 1 220px;
+}
+
+/* Action buttons in the Configurations row + Manage panel. Inherits the
+   "framed icon-button" look but is declared independently so it can be used
+   without that class chain. */
+.config-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  font: inherit;
+}
+
+.config-action-button:hover {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.config-action-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+.config-action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.config-action-button:disabled:hover {
+  border-color: var(--vscode-input-border, transparent);
+}
+
+.config-action-button.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-background);
+}
+
+.config-action-button svg {
+  display: block;
+}
+
+/* Inline name input — same chrome as the search input. */
+.config-name-input {
+  flex: 1 1 auto;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  font: inherit;
+  box-sizing: border-box;
+  max-width: 320px;
+}
+
+.config-name-input:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+/* Manage panel — collapsible list under the kebab. Each row lists a
+   configuration with rename / default / delete actions. */
+.config-kebab-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+}
+
+.config-manage-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+}
+
+.config-manage-name {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: var(--vscode-foreground);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-default-badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.config-manage-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* ─── Agent subpage configuration block ────────────────────────────── */
+
+/* Small section above the composed prompt on the SWE and QA subpages.
+   Hosts the count fields that drive the SWE_*_COUNT / QA_AGENT_COUNT env vars
+   passed to a launched Nomeda session terminal. */
+.agent-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 14px;
+}
+
+.agent-config-header {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--vscode-foreground);
+}
+
+/* Flex row of compact [label : input] fields — three on the SWE subpage,
+   one on the QA subpage. Wraps on narrow viewports. */
+.agent-config-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Single field: label sits above a compact 28px number input. */
+.agent-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+}
+
+.agent-config-label {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.agent-config-input {
+  width: 80px;
+  height: 28px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 0 8px;
+  font: inherit;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.agent-config-input:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+/* Inline mismatch hint shown when Performance + Efficiency != Total SWE Count.
+   Non-blocking — TPM consumes the raw values; this just warns the user. */
+.agent-config-note {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+/* Faint spelled-out role name rendered inline after the agent abbreviation in
+   the agent subpage h1. Uses the VS Code description foreground token so it
+   respects the active theme without any hardcoded colour. */
+.agent-title-elucidation {
+  margin-left: 8px;
+  font-size: 14px;
+  font-weight: normal;
+  color: var(--vscode-descriptionForeground);
 }

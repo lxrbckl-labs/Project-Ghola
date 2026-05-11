@@ -8,16 +8,22 @@ import type { SettingsSchema } from '../manifest/types';
 /**
  * Stateless composer: pure function from (agentId, settings) → composed prompt string.
  *
- * Emits `[core] + [preamble] + [Session Manifest block]`. The Session Manifest lists
- * every enabled module that contributes a `promptFragments[]` entry targeting this
- * agent. Module content is NOT inlined — agents read `modules/{id}/*.md` on demand.
+ * Emits `[core] + [preamble] + [Session Manifest block]`. The core and preamble
+ * are bundled with the extension and live under `prompts/cores/` — they are NOT
+ * modules and are NOT discovered by the ModuleLoader. The Session Manifest lists
+ * every enabled module that contributes a `promptFragments[]` entry targeting
+ * this agent. Module content is NOT inlined — agents read `modules/{id}/*.md`
+ * on demand.
  *
- * Two file reads per call: the hardcoded preamble + the agent's core. Module
- * manifests are already loaded by the loader (in-memory) and not re-read here.
+ * Two file reads per call: the preamble + the agent's core (both from
+ * `coresPath`). Module manifests are already loaded by the loader (in-memory)
+ * and not re-read here.
  */
 export class PromptComposer {
   constructor(
     private readonly loader: ModuleLoader,
+    /** Absolute path to the directory holding `preamble.md`, `tpm.md`, `swe.md`, `qa.md`. Always rooted in `context.extensionPath`, never workspace-relative. */
+    private readonly coresPath: string,
     private readonly logger?: vscode.OutputChannel,
   ) {}
 
@@ -28,8 +34,8 @@ export class PromptComposer {
   compose(agentId: string, settings: Record<string, Record<string, unknown>>): string {
     const enabled = this.loader.getEnabled();
 
-    const core = this.readCore(agentId, enabled);
-    const preamble = this.readPreamble(enabled);
+    const core = this.readCore(agentId);
+    const preamble = this.readPreamble();
     const manifestBlock = this.renderSessionManifest(agentId, enabled, settings);
 
     const parts: string[] = [];
@@ -41,34 +47,20 @@ export class PromptComposer {
 
   // --- core ----------------------------------------------------------------
 
-  private readCore(agentId: string, enabled: ModuleHandle[]): string {
-    const coreId = `core.${agentId}`;
-    const fileName = `${agentId}.md`;
-    const handle = enabled.find((h) => h.manifest.id === coreId);
-    if (!handle) {
-      return (
-        `# ${agentId.toUpperCase()} (no core module loaded)\n\n` +
-        `No enabled module with id "${coreId}" was found. ` +
-        `Enable the core module for this agent (e.g. core.tpm, core.swe, core.qa).`
-      );
-    }
-    const abs = path.join(handle.rootPath, fileName);
+  private readCore(agentId: string): string {
+    const abs = path.join(this.coresPath, `${agentId}.md`);
     try {
       return fs.readFileSync(abs, 'utf-8').trimEnd();
     } catch (err) {
-      this.log(`core unreadable (${coreId} → ${fileName}): ${(err as Error).message}`);
+      this.log(`core unreadable (${agentId} → ${abs}): ${(err as Error).message}`);
       return `# ${agentId.toUpperCase()} (core unreadable)\n\nCould not read ${abs}.`;
     }
   }
 
   // --- preamble ------------------------------------------------------------
 
-  private readPreamble(enabled: ModuleHandle[]): string {
-    // Hardcoded structural step: read modules/core.preamble/preamble.md directly,
-    // NOT via the manifest's contributes block.
-    const handle = enabled.find((h) => h.manifest.id === 'core.preamble');
-    if (!handle) return '';
-    const abs = path.join(handle.rootPath, 'preamble.md');
+  private readPreamble(): string {
+    const abs = path.join(this.coresPath, 'preamble.md');
     try {
       return fs.readFileSync(abs, 'utf-8').trimEnd();
     } catch (err) {
@@ -88,16 +80,18 @@ export class PromptComposer {
     const entries: string[] = [];
 
     for (const handle of enabled) {
-      // Skip the cores and the preamble: they're already emitted as structural parts.
       const id = handle.manifest.id;
-      if (id === 'core.preamble' || id === `core.${agentId}`) continue;
+      // Defensive skip: cores live in prompts/cores/ and should never be
+      // discovered by the loader. If a stale core.* manifest survives in the
+      // modules dir during transition, swallow it here rather than emit it.
+      if (id.startsWith('core.')) continue;
 
       const fragments = handle.manifest.contributes?.promptFragments ?? [];
       const targeted = fragments.filter((f) => f.target === agentId);
       if (targeted.length === 0) continue;
 
       for (const fragment of targeted) {
-        const contentPath = path.join(handle.rootPath, fragment.contentPath);
+        const contentPath = `\${NOMEDA_ROOT}/modules/${handle.manifest.id}/${fragment.contentPath}`;
         const proactive = handle.manifest.proactive === true;
         const marker = proactive ? ' [proactive — consult at session start]' : '';
         const header = `- **${id}**${marker}`;

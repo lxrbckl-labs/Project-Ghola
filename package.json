@@ -11,7 +11,9 @@
     "Other"
   ],
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
@@ -37,8 +39,29 @@
         },
         "nomeda.sessionCommand": {
           "type": "string",
-          "default": "claude",
-          "description": "Command phrase sent to the Nomeda Session terminal after launch (e.g. 'claude', 'claude --resume'). Leave empty to skip."
+          "default": "initiate",
+          "description": "Command phrase sent to the Nomeda Session terminal after launch (e.g. 'initiate', 'initiate --resume'). Leave empty to skip."
+        },
+        "nomeda.swe.performanceCores": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "SWE performance cores (primary workers for the critical-path task)."
+        },
+        "nomeda.swe.efficiencyCores": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "SWE efficiency cores (lower-priority side workers)."
+        },
+        "nomeda.qa.count": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Maximum concurrent QA subagents."
         }
       }
     }

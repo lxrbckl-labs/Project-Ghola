@@ -91,8 +91,6 @@ export interface ModuleManifest {
    * module's content immediately rather than on-demand.
    */
   proactive?: boolean;
-  /** When true, the module is hidden from the Modules tab. Cores use this — their content is read structurally by the composer regardless of UI presence. */
-  structural?: boolean;
   contributes?: ContributionPoints;
 }
 

@@ -8,21 +8,21 @@ The Session Manifest block is the third layer of every composed prompt (`[core] 
 
 ## Session Manifest
 
-The following modules are enabled for this session. Read content files on demand using your `Read` tool. Paths are repo-relative.
+The following modules are enabled for this session. Read content files on demand using your `Read` tool. Each `contentPath` contains a `${NOMEDA_ROOT}` placeholder — substitute it with the value of the `$NOMEDA_ROOT` environment variable (set in your session terminal) to obtain the absolute path before opening the file.
 
 ### `core.tpm`
 
-- **contentPath:** `modules/core.tpm/tpm.md`
+- **contentPath:** `${NOMEDA_ROOT}/modules/core.tpm/tpm.md`
 - **parameters:** (none)
 
 ### `tool.fastpath-check` `[proactive — consult at session start]`
 
-- **contentPath:** `modules/tool.fastpath-check/fastpath-check.md`
+- **contentPath:** `${NOMEDA_ROOT}/modules/tool.fastpath-check/fastpath-check.md`
 - **parameters:** (none)
 
 ### `integration.bitbucket`
 
-- **contentPath:** `modules/integration.bitbucket/bitbucket.md`
+- **contentPath:** `${NOMEDA_ROOT}/modules/integration.bitbucket/bitbucket.md`
 - **parameters:** (defaults)
   - `workspace`: `acme-eng`
   - `defaultRepo`: `web-app`
@@ -30,7 +30,7 @@ The following modules are enabled for this session. Read content files on demand
 
 ### `integration.jira`
 
-- **contentPath:** `modules/integration.jira/jira.md`
+- **contentPath:** `${NOMEDA_ROOT}/modules/integration.jira/jira.md`
 - **parameters:**
   - `host`: `acme.atlassian.net`
   - `projectKey`: `WEB`
@@ -40,12 +40,12 @@ The following modules are enabled for this session. Read content files on demand
 
 ### `framework.playwright`
 
-- **contentPath:** `modules/framework.playwright/playwright.md`
+- **contentPath:** `${NOMEDA_ROOT}/modules/framework.playwright/playwright.md`
 - **parameters:** (defaults)
 
 ### `mode.support-mode`
 
-- **contentPath:** `modules/mode.support-mode/support-mode.md`
+- **contentPath:** `${NOMEDA_ROOT}/modules/mode.support-mode/support-mode.md`
 - **parameters:**
   - `escalationChannel`: `#oncall-web`
   - `pagerWindowMinutes`: `15`

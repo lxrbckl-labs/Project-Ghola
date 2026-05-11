@@ -29,7 +29,7 @@ The shape of the loop is: user talks to TPM, TPM dispatches to SWE and QA, resul
 Module content is read **on demand**, not at session start. When a user request touches a domain a manifest entry describes:
 
 1. Locate the matching manifest entry by `id`.
-2. Use your `Read` tool to open the file at `modules/{id}/{contentPath}` (paths are repo-relative).
+2. Use your `Read` tool to open the file at the `contentPath` listed for the manifest entry. Paths contain a `${NOMEDA_ROOT}` placeholder that resolves to the absolute path of your Nomeda installation — the value is exported as an environment variable in your session terminal. Substitute it before opening the file (e.g. replace `${NOMEDA_ROOT}` with the value of `$NOMEDA_ROOT` from your environment, or expand it via your shell).
 3. Apply the parameters listed in the manifest entry — they are the values the composer substituted from the user's saved settings. Treat them as authoritative for this session.
 4. Follow the procedure or honor the rule the file describes.
 

@@ -4,6 +4,7 @@
 import type {
   HostToWebviewMessage,
   ModuleSummary,
+  NamedConfiguration,
   PromptFragmentDetail,
   WebviewToHostMessage,
 } from '../protocol';
@@ -35,6 +36,17 @@ type SectionId =
  */
 type ModuleView = { mode: 'list' } | { mode: 'detail'; moduleId: string };
 
+/**
+ * Inline name-input state for the Configurations row. `false` when no inline
+ * editor is active. `{ mode: 'create' }` when entering a name for a new
+ * "Save as new" configuration. `{ mode: 'rename', id }` when editing the
+ * name of an existing entry. Cleared on tab leave and after submit/cancel.
+ */
+type ConfigNameEditMode =
+  | false
+  | { mode: 'create' }
+  | { mode: 'rename'; id: string };
+
 interface UIState {
   activeSection: SectionId;
   modules: ModuleSummary[];
@@ -49,6 +61,20 @@ interface UIState {
   moduleSearch: string;
   /** Value of nomeda.sessionCommand VS Code configuration. */
   sessionCommand: string;
+  /** Current SWE agent counts pulled from `nomeda.swe.*` VS Code configuration. */
+  sweConfig: { performanceCores: number; efficiencyCores: number };
+  /** Current QA agent count pulled from `nomeda.qa.count` VS Code configuration. */
+  qaConfig: { count: number };
+  /** All named configurations known to the host. Updated by 'configurationsChanged'. */
+  configurations: NamedConfiguration[];
+  /** Currently active configuration id, or null when no preset is selected. */
+  activeConfigurationId: string | null;
+  /** True when the live module/settings state has diverged from the active config. */
+  isConfigurationModified: boolean;
+  /** Inline name-input state machine for create / rename UX. */
+  configNameEditMode: ConfigNameEditMode;
+  /** True when the Manage panel under the kebab is expanded (Modules tab only). */
+  configManageOpen: boolean;
 }
 
 const state: UIState = {
@@ -60,7 +86,14 @@ const state: UIState = {
   moduleView: { mode: 'list' },
   moduleDetails: {},
   moduleSearch: '',
-  sessionCommand: 'claude',
+  sessionCommand: 'initiate',
+  sweConfig: { performanceCores: 2, efficiencyCores: 1 },
+  qaConfig: { count: 1 },
+  configurations: [],
+  activeConfigurationId: null,
+  isConfigurationModified: false,
+  configNameEditMode: false,
+  configManageOpen: false,
 };
 
 const root = document.getElementById('app')!;
@@ -73,6 +106,33 @@ const REFRESH_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" hei
 const CHEVRON_RIGHT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5.7 13.7l-.7-.7L9.6 8.4 5 3.8l.7-.7L11.1 8.4l-5.4 5.3z"/></svg>`;
 
 const ARROW_LEFT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.5 7.5h-9.79l3.65-3.65-.71-.7L1.5 8l5.15 5.15.71-.7-3.65-3.65H13.5v-1.3z"/></svg>`;
+
+const PLAY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6,4 6,20 20,12"/></svg>`;
+
+// Floppy-disk save glyph. Sits in the save button next to module setting inputs;
+// fill="currentColor" so it picks up the surrounding text color.
+const SAVE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.353 1.146l1.5 1.5L15 3v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 14V2a1.5 1.5 0 0 1 1.5-1.5H13l.353.146zM2.5 1.5a.5.5 0 0 0-.5.5v12a.5.5 0 0 0 .5.5H3v-5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 .5.5v5h.5a.5.5 0 0 0 .5-.5V3.207L12.793 1.5H11v3.5a.5.5 0 0 1-.5.5h-6a.5.5 0 0 1-.5-.5V1.5H2.5zM5 1.5v3h5v-3H5zM4 14h8V9.5H4V14z"/></svg>`;
+
+// Vertical ellipsis — the kebab "Manage" affordance on the Configurations row.
+const KEBAB_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="8" cy="3" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="8" cy="13" r="1.4"/></svg>`;
+
+// Plus glyph — the "Save as new" affordance.
+const PLUS_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M7.5 1h1v6h6v1h-6v6h-1V8h-6V7h6V1z"/></svg>`;
+
+// Star glyph — marks a configuration as default.
+const STAR_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5l1.96 4.05L14.5 6.2l-3.3 3.18.79 4.55L8 11.8l-3.99 2.13.79-4.55L1.5 6.2l4.54-.65L8 1.5z"/></svg>`;
+
+// Pencil glyph — rename affordance in the Manage panel.
+const PENCIL_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.23 1l1.77 1.77-9.62 9.62L3 13.5l.11-2.39L12.73 1.5l.5-.5zM11.94 3.79L4.18 11.55l-.06 1.32 1.32-.06 7.76-7.76-1.26-1.26z"/></svg>`;
+
+// Trash glyph — delete affordance in the Manage panel.
+const TRASH_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10 1H6L5 2H2v1h1l1 11h8l1-11h1V2h-3l-1-1zm-3 4h1v8H7V5zm2 0h1v8H9V5zm-4 0h1v8H5V5z"/></svg>`;
+
+// Check glyph — confirm action inside the inline name input.
+const CHECK_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.5 7.5a.75.75 0 0 1-1.06 0L1.72 9.28a.75.75 0 1 1 1.06-1.06l3 3 7-7a.75.75 0 0 1 1.06 0z"/></svg>`;
+
+// X glyph — cancel action inside the inline name input.
+const CLOSE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z"/></svg>`;
 
 function init(): void {
   render();
@@ -117,7 +177,9 @@ function handleMessage(msg: HostToWebviewMessage): void {
       break;
     case 'settingsLoaded':
       state.settingsValues = msg.values ?? {};
-      state.sessionCommand = msg.sessionCommand ?? 'claude';
+      state.sessionCommand = msg.sessionCommand ?? 'initiate';
+      if (msg.swe) state.sweConfig = msg.swe;
+      if (msg.qa) state.qaConfig = msg.qa;
       state.dirty = false;
       render();
       break;
@@ -144,6 +206,20 @@ function handleMessage(msg: HostToWebviewMessage): void {
         render();
       }
       break;
+    case 'configurationsChanged':
+      state.configurations = msg.configurations;
+      state.activeConfigurationId = msg.activeId;
+      state.isConfigurationModified = msg.isModified;
+      // If the active config has been deleted, drop any rename-in-progress
+      // pointing at it. Create-mode is tied to user intent, not data — leave alone.
+      if (state.configNameEditMode !== false && state.configNameEditMode.mode === 'rename') {
+        const renameId = state.configNameEditMode.id;
+        if (!state.configurations.some((c) => c.id === renameId)) {
+          state.configNameEditMode = false;
+        }
+      }
+      render();
+      break;
   }
 }
 
@@ -153,6 +229,12 @@ function setSection(id: SectionId): void {
     state.moduleSearch = '';
     state.moduleView = { mode: 'list' };
     state.moduleDetails = {};
+  }
+  // Clear inline configuration name editor and manage panel on any tab leave —
+  // both are tab-scoped ephemeral UI states.
+  if (state.activeSection !== id) {
+    state.configNameEditMode = false;
+    state.configManageOpen = false;
   }
   state.activeSection = id;
   if (id.startsWith('agents:')) {
@@ -173,7 +255,7 @@ function render(): void {
 function renderRail(): HTMLElement {
   const rail = el('aside', { class: 'rail' });
   rail.appendChild(railHeader('General'));
-  rail.appendChild(railItem('general', 'Overview'));
+  rail.appendChild(railItem('general', 'Session'));
   rail.appendChild(railItem('modules', 'Modules'));
   rail.appendChild(railHeader('Agents'));
   rail.appendChild(railItem('agents:tpm', 'TPM', true));
@@ -218,17 +300,18 @@ function renderContent(): HTMLElement {
 }
 
 function renderGeneral(wrapper: HTMLElement): void {
-  wrapper.appendChild(textEl('h1', 'Project Nomeda'));
-  wrapper.appendChild(textEl('p', 'Modular multi-agent dev team for VS Code.', 'subtitle'));
+  wrapper.appendChild(textEl('h1', 'Session'));
+  wrapper.appendChild(textEl('p', 'Configure the command that launches your Nomeda agent team, then start a session.', 'subtitle'));
 
-  // Session command setting — persisted to VS Code workspace configuration.
-  const sessionWrap = el('div', { class: 'setting' });
-  const sessionHead = el('div', { class: 'setting-head' });
-  const sessionLabel = el('label', { class: 'setting-label' });
-  sessionLabel.textContent = 'Session command';
-  sessionHead.appendChild(sessionLabel);
-  sessionWrap.appendChild(sessionHead);
-  const sessionInp = el('input', { class: 'setting-input' }) as HTMLInputElement;
+  // Horizontal divider between the header and the settings content.
+  wrapper.appendChild(el('hr', { class: 'section-divider' }));
+
+  // Initiation Command — label on its own line, then flex row with [input grows] [play button].
+  const sessionLabel = el('label', { class: 'setting-label session-command-label' });
+  sessionLabel.textContent = 'Initiation Command';
+  wrapper.appendChild(sessionLabel);
+  const sessionRow = el('div', { class: 'session-command-row' });
+  const sessionInp = el('input', { class: 'setting-input session-command-input' }) as HTMLInputElement;
   sessionInp.type = 'text';
   sessionInp.value = state.sessionCommand;
   sessionInp.addEventListener('blur', () => {
@@ -240,15 +323,23 @@ function renderGeneral(wrapper: HTMLElement): void {
       value: sessionInp.value,
     });
   });
-  sessionWrap.appendChild(sessionInp);
-  sessionWrap.appendChild(
-    textEl(
-      'div',
-      "Command phrase sent to the Nomeda Session terminal after launch (e.g. 'claude', 'claude --resume'). Leave empty to skip.",
-      'setting-desc',
-    ),
-  );
-  wrapper.appendChild(sessionWrap);
+  sessionRow.appendChild(sessionInp);
+
+  // Configuration dropdown sits between the command input and the play button.
+  // It mirrors the same dropdown used on the Modules tab; selection drives the
+  // active configuration which the host applies immediately.
+  sessionRow.appendChild(renderConfigDropdown());
+
+  const sessionBtn = el('button', {
+    class: 'icon-button framed',
+    type: 'button',
+    'aria-label': 'Open Nomeda session',
+    title: 'Open a new Nomeda session',
+  }) as HTMLButtonElement;
+  sessionBtn.innerHTML = PLAY_ICON_SVG;
+  sessionBtn.addEventListener('click', () => vscode.postMessage({ type: 'openSession' }));
+  sessionRow.appendChild(sessionBtn);
+  wrapper.appendChild(sessionRow);
 
   // Custom settings sections placed in 'general' from any module.
   const customSections = state.modules
@@ -300,8 +391,12 @@ function renderModuleListView(wrapper: HTMLElement): void {
     ),
   );
 
+  // Configurations row — preset selector + save buttons + kebab manage.
+  // Lives between the subtitle and the section divider per the locked design.
+  wrapper.appendChild(renderConfigurationsRow({ context: 'modules' }));
+
   // Horizontal divider between the subtitle and the search/reload row.
-  wrapper.appendChild(el('hr', { class: 'modules-divider' }));
+  wrapper.appendChild(el('hr', { class: 'section-divider' }));
 
   // The list is rendered into its own container so search input keystrokes
   // don't blow away the input element (and its focus/selection).
@@ -323,7 +418,7 @@ function renderModuleListView(wrapper: HTMLElement): void {
   searchWrap.appendChild(searchInput);
 
   const reloadBtn = el('button', {
-    class: 'icon-button',
+    class: 'icon-button framed',
     type: 'button',
     'aria-label': 'Reload modules',
     title: 'Reload modules',
@@ -335,25 +430,11 @@ function renderModuleListView(wrapper: HTMLElement): void {
   searchWrap.appendChild(reloadBtn);
   wrapper.appendChild(searchWrap);
 
-  // Structural modules (cores) are read directly by the composer and are not
-  // user-toggleable; hide them from the list.
-  const visibleModules = state.modules.filter((m) => m.structural !== true);
-
   if (state.modules.length === 0) {
-    // No manifests on disk at all.
     wrapper.appendChild(
       textEl(
         'div',
         'No modules discovered. Place modules under modules/ in your workspace and click Reload.',
-        'empty',
-      ),
-    );
-  } else if (visibleModules.length === 0) {
-    // Manifests exist but all are structural cores — nothing user-toggleable.
-    wrapper.appendChild(
-      textEl(
-        'div',
-        'No user-toggleable modules. Cores are loaded structurally and are not shown here.',
         'empty',
       ),
     );
@@ -366,9 +447,7 @@ function renderModuleListView(wrapper: HTMLElement): void {
 function renderModulesList(container: HTMLElement): void {
   container.innerHTML = '';
   const q = state.moduleSearch.trim().toLowerCase();
-  // Structural modules (cores) are hidden from the Modules tab list.
-  const visibleModules = state.modules.filter((m) => m.structural !== true);
-  const filtered = visibleModules.filter((m) => {
+  const filtered = state.modules.filter((m) => {
     if (!q) return true;
     const hay = [m.id, m.name, m.description ?? ''].join(' ').toLowerCase();
     return hay.includes(q);
@@ -434,6 +513,265 @@ function renderModuleRow(m: ModuleSummary): HTMLElement {
   row.appendChild(chevron);
 
   return row;
+}
+
+// ─── Configurations row helpers ──────────────────────────────────────────
+
+interface ConfigRowOptions {
+  /**
+   * Where the row is being rendered. Currently 'modules' shows the full row
+   * (dropdown + save buttons + kebab); 'session' is reserved if we ever need
+   * a richer row on the Session tab (today the Session tab uses a bare
+   * dropdown via `renderConfigDropdown`).
+   */
+  context: 'modules';
+}
+
+/**
+ * Shared Configurations row: dropdown + Save / Save-as-new buttons + kebab
+ * Manage toggle. When the inline name editor is open (create or rename), the
+ * normal controls are replaced by a focused input + check/close pair.
+ *
+ * Save / Save-as-new live ONLY on the Modules tab per the locked design; the
+ * Session tab embeds a bare dropdown via `renderConfigDropdown` instead.
+ */
+function renderConfigurationsRow(_opts: ConfigRowOptions): HTMLElement {
+  const row = el('div', { class: 'configurations-row' });
+
+  // Inline name editor takes the whole row when active. The state machine
+  // dictates the placeholder + which message gets sent on submit.
+  if (state.configNameEditMode !== false) {
+    row.appendChild(renderConfigNameInput(state.configNameEditMode));
+    return row;
+  }
+
+  // Dropdown — non-stretching, ~220px, occupies the left side.
+  row.appendChild(renderConfigDropdown());
+
+  // Save (commits current state into the active configuration). Disabled when
+  // there is no active config OR the live state matches it already.
+  const saveBtn = el('button', {
+    class: 'config-action-button',
+    type: 'button',
+    'aria-label': 'Save changes to active configuration',
+    title: 'Save changes to active configuration',
+  }) as HTMLButtonElement;
+  saveBtn.innerHTML = SAVE_ICON_SVG;
+  const canSave =
+    state.activeConfigurationId !== null && state.isConfigurationModified;
+  saveBtn.disabled = !canSave;
+  saveBtn.addEventListener('click', () => {
+    if (!canSave) return;
+    vscode.postMessage({ type: 'saveConfigurationCurrent' });
+  });
+  row.appendChild(saveBtn);
+
+  // Save as new — opens the inline name editor in 'create' mode.
+  const saveAsBtn = el('button', {
+    class: 'config-action-button',
+    type: 'button',
+    'aria-label': 'Save current state as new configuration',
+    title: 'Save current state as new configuration',
+  }) as HTMLButtonElement;
+  saveAsBtn.innerHTML = PLUS_ICON_SVG;
+  saveAsBtn.addEventListener('click', () => {
+    state.configNameEditMode = { mode: 'create' };
+    state.configManageOpen = false;
+    render();
+  });
+  row.appendChild(saveAsBtn);
+
+  // Kebab — toggles the inline Manage panel that lists per-config actions.
+  // Disabled when there are no saved configurations to manage.
+  const kebabBtn = el('button', {
+    class: 'config-action-button',
+    type: 'button',
+    'aria-label': 'Manage configurations',
+    title: 'Manage configurations',
+  }) as HTMLButtonElement;
+  kebabBtn.innerHTML = KEBAB_ICON_SVG;
+  kebabBtn.disabled = state.configurations.length === 0;
+  if (state.configManageOpen) kebabBtn.classList.add('active');
+  kebabBtn.addEventListener('click', () => {
+    if (state.configurations.length === 0) return;
+    state.configManageOpen = !state.configManageOpen;
+    render();
+  });
+  row.appendChild(kebabBtn);
+
+  // Manage panel renders directly after the row (still inside this helper so
+  // it stays visually associated with the controls that opened it).
+  const wrapper = el('div', { class: 'configurations-wrapper' });
+  wrapper.appendChild(row);
+  if (state.configManageOpen && state.configurations.length > 0) {
+    wrapper.appendChild(renderConfigManagePanel());
+  }
+  return wrapper;
+}
+
+/** Standalone dropdown — used on its own in the Session tab. */
+function renderConfigDropdown(): HTMLElement {
+  const select = el('select', {
+    class: 'config-dropdown',
+    'aria-label': 'Active configuration',
+  }) as HTMLSelectElement;
+
+  const noneOption = el('option') as HTMLOptionElement;
+  noneOption.value = '';
+  noneOption.textContent = 'No configuration';
+  select.appendChild(noneOption);
+
+  state.configurations.forEach((c) => {
+    const opt = el('option') as HTMLOptionElement;
+    opt.value = c.id;
+    opt.textContent = c.isDefault ? `${c.name}  ★` : c.name;
+    select.appendChild(opt);
+  });
+
+  select.value = state.activeConfigurationId ?? '';
+
+  select.addEventListener('change', () => {
+    const next = select.value === '' ? null : select.value;
+    vscode.postMessage({ type: 'selectConfiguration', id: next });
+  });
+
+  return select;
+}
+
+function renderConfigNameInput(mode: { mode: 'create' } | { mode: 'rename'; id: string }): HTMLElement {
+  const row = el('div', { class: 'config-name-input-row' });
+  const input = el('input', { class: 'config-name-input', type: 'text' }) as HTMLInputElement;
+  input.placeholder = mode.mode === 'create' ? 'New configuration name' : 'Rename configuration';
+  if (mode.mode === 'rename') {
+    const existing = state.configurations.find((c) => c.id === mode.id);
+    if (existing) input.value = existing.name;
+  }
+  input.autofocus = true;
+  // Focus on next tick — the element isn't in the DOM until render() finishes
+  // attaching it, so an immediate input.focus() is a no-op.
+  queueMicrotask(() => {
+    input.focus();
+    input.select();
+  });
+
+  const commit = (): void => {
+    const value = input.value.trim();
+    if (!value) {
+      // Cancel rather than emit empty name.
+      state.configNameEditMode = false;
+      render();
+      return;
+    }
+    if (mode.mode === 'create') {
+      vscode.postMessage({ type: 'saveConfigurationAsNew', name: value });
+    } else {
+      vscode.postMessage({ type: 'renameConfiguration', id: mode.id, name: value });
+    }
+    state.configNameEditMode = false;
+    // Don't re-render synchronously — the host will broadcast configurationsChanged.
+  };
+
+  const cancel = (): void => {
+    state.configNameEditMode = false;
+    render();
+  };
+
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      commit();
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      cancel();
+    }
+  });
+  row.appendChild(input);
+
+  const confirmBtn = el('button', {
+    class: 'config-action-button',
+    type: 'button',
+    'aria-label': 'Confirm',
+    title: 'Confirm',
+  }) as HTMLButtonElement;
+  confirmBtn.innerHTML = CHECK_ICON_SVG;
+  confirmBtn.addEventListener('click', commit);
+  row.appendChild(confirmBtn);
+
+  const cancelBtn = el('button', {
+    class: 'config-action-button',
+    type: 'button',
+    'aria-label': 'Cancel',
+    title: 'Cancel',
+  }) as HTMLButtonElement;
+  cancelBtn.innerHTML = CLOSE_ICON_SVG;
+  cancelBtn.addEventListener('click', cancel);
+  row.appendChild(cancelBtn);
+
+  return row;
+}
+
+function renderConfigManagePanel(): HTMLElement {
+  const panel = el('div', { class: 'config-kebab-menu' });
+  state.configurations.forEach((c) => {
+    const item = el('div', { class: 'config-manage-item' });
+
+    const name = el('span', { class: 'config-manage-name' });
+    name.textContent = c.name;
+    item.appendChild(name);
+
+    if (c.isDefault) {
+      const badge = el('span', { class: 'config-default-badge' });
+      badge.textContent = 'default';
+      item.appendChild(badge);
+    }
+
+    const actions = el('div', { class: 'config-manage-actions' });
+
+    const renameBtn = el('button', {
+      class: 'config-action-button',
+      type: 'button',
+      'aria-label': `Rename ${c.name}`,
+      title: 'Rename',
+    }) as HTMLButtonElement;
+    renameBtn.innerHTML = PENCIL_ICON_SVG;
+    renameBtn.addEventListener('click', () => {
+      state.configNameEditMode = { mode: 'rename', id: c.id };
+      state.configManageOpen = false;
+      render();
+    });
+    actions.appendChild(renameBtn);
+
+    const defaultBtn = el('button', {
+      class: 'config-action-button',
+      type: 'button',
+      'aria-label': c.isDefault ? `${c.name} is the default` : `Set ${c.name} as default`,
+      title: c.isDefault ? 'Default configuration' : 'Set as default',
+    }) as HTMLButtonElement;
+    defaultBtn.innerHTML = STAR_ICON_SVG;
+    if (c.isDefault) defaultBtn.classList.add('active');
+    defaultBtn.disabled = c.isDefault;
+    defaultBtn.addEventListener('click', () => {
+      if (c.isDefault) return;
+      vscode.postMessage({ type: 'setDefaultConfiguration', id: c.id });
+    });
+    actions.appendChild(defaultBtn);
+
+    const delBtn = el('button', {
+      class: 'config-action-button',
+      type: 'button',
+      'aria-label': `Delete ${c.name}`,
+      title: 'Delete',
+    }) as HTMLButtonElement;
+    delBtn.innerHTML = TRASH_ICON_SVG;
+    delBtn.addEventListener('click', () => {
+      vscode.postMessage({ type: 'deleteConfiguration', id: c.id });
+    });
+    actions.appendChild(delBtn);
+
+    item.appendChild(actions);
+    panel.appendChild(item);
+  });
+  return panel;
 }
 
 function openModuleDetail(moduleId: string): void {
@@ -592,12 +930,22 @@ function appendDef(dl: HTMLElement, term: string, value: string): void {
 /**
  * Render a settings field inside a module's expanded panel.
  *
- * Differs from {@link renderField} in two ways:
- *   1. Uses the iOS-style toggle component for booleans (consistent with the
- *      module enable/disable affordance).
- *   2. Persists changes immediately on blur (text/number) or change
- *      (boolean/enum) via the existing `saveSettings` postMessage. No explicit
- *      Save button is needed since these are per-field auto-save semantics.
+ * Layout per field:
+ *   Label                                    ← stays above on its own line
+ *   [ input grows .......... 28px ] [save]   ← input + explicit-save icon button
+ *   Description (optional)                   ← below input
+ *
+ * Persistence model:
+ *   - Booleans: auto-save on toggle (toggling implies commitment; there is no
+ *     ambiguous "draft" state for a switch).
+ *   - String / number / enum: explicit save — the user edits freely; the save
+ *     button glows ".dirty" when the input differs from the persisted value;
+ *     clicking the button commits the change and clears the dirty state. No
+ *     more reactive blur/change persistence.
+ *
+ * Dirty tracking lives in this function's closure: `committed` holds the value
+ * last persisted (initialized from settingsValues / field.default), and the
+ * save button's classList is updated as the user types.
  */
 function renderModuleSettingField(key: string, field: SettingsField): HTMLElement {
   const wrap = el('div', { class: 'setting' });
@@ -611,6 +959,9 @@ function renderModuleSettingField(key: string, field: SettingsField): HTMLElemen
   const current = state.settingsValues[key] ?? field.default;
 
   if (field.type === 'boolean') {
+    // Booleans keep auto-save-on-toggle semantics. A toggle has no intermediate
+    // "edited but not saved" state worth modelling, and a save button next to
+    // it would be redundant chrome.
     head.appendChild(
       renderToggle({
         checked: !!current,
@@ -621,7 +972,29 @@ function renderModuleSettingField(key: string, field: SettingsField): HTMLElemen
         ariaLabel: field.label,
       }),
     );
-  } else if (field.type === 'enum') {
+    if (field.description) {
+      wrap.appendChild(textEl('div', field.description, 'setting-desc'));
+    }
+    return wrap;
+  }
+
+  // For non-boolean fields, build a flex row with the input on the left and an
+  // explicit save icon button on the right. The closure below tracks the last
+  // committed value so the button can show a "dirty" indicator while the
+  // current input value differs.
+  const row = el('div', { class: 'module-field-row' });
+
+  // `committed` is the value last persisted; it is what we compare the live
+  // input against to decide if there are unsaved changes.
+  let committed: unknown = current;
+
+  // Read the latest "input value" coerced to the field type.
+  let readInputValue: () => unknown;
+  // Apply a committed value back into the DOM (used after save to ensure the
+  // displayed value matches what we persisted, especially for number coercion).
+  let writeInputValue: (v: unknown) => void;
+
+  if (field.type === 'enum') {
     const select = el('select', { class: 'setting-input' }) as HTMLSelectElement;
     (field.options ?? []).forEach((opt) => {
       const o = el('option') as HTMLOptionElement;
@@ -630,32 +1003,76 @@ function renderModuleSettingField(key: string, field: SettingsField): HTMLElemen
       if (opt === current) o.selected = true;
       select.appendChild(o);
     });
-    select.addEventListener('change', () => {
-      state.settingsValues[key] = select.value;
-      persistSettings();
-    });
-    wrap.appendChild(select);
+    readInputValue = () => select.value;
+    writeInputValue = (v) => {
+      select.value = v === undefined || v === null ? '' : String(v);
+    };
+    row.appendChild(select);
+    select.addEventListener('change', () => updateDirtyState());
   } else if (field.type === 'number') {
     const inp = el('input', { class: 'setting-input' }) as HTMLInputElement;
     inp.type = 'number';
     if (current !== undefined && current !== null) inp.value = String(current);
-    inp.addEventListener('blur', () => {
-      const next = inp.value === '' ? undefined : Number(inp.value);
-      state.settingsValues[key] = next;
-      persistSettings();
-    });
-    wrap.appendChild(inp);
+    readInputValue = () => (inp.value === '' ? undefined : Number(inp.value));
+    writeInputValue = (v) => {
+      inp.value = v === undefined || v === null ? '' : String(v);
+    };
+    row.appendChild(inp);
+    inp.addEventListener('input', () => updateDirtyState());
   } else {
     // string, path, or unknown — render text input.
     const inp = el('input', { class: 'setting-input' }) as HTMLInputElement;
     inp.type = 'text';
     if (current !== undefined && current !== null) inp.value = String(current);
-    inp.addEventListener('blur', () => {
-      state.settingsValues[key] = inp.value;
-      persistSettings();
-    });
-    wrap.appendChild(inp);
+    readInputValue = () => inp.value;
+    writeInputValue = (v) => {
+      inp.value = v === undefined || v === null ? '' : String(v);
+    };
+    row.appendChild(inp);
+    inp.addEventListener('input', () => updateDirtyState());
   }
+
+  const saveBtn = el('button', {
+    class: 'icon-button framed save-field-button',
+    type: 'button',
+    'aria-label': `Save ${field.label}`,
+    title: 'Save',
+  }) as HTMLButtonElement;
+  saveBtn.innerHTML = SAVE_ICON_SVG;
+
+  function isDirty(): boolean {
+    const next = readInputValue();
+    // Treat undefined / '' / null as equivalent "empty" so an empty optional
+    // number input doesn't flicker dirty against an undefined default.
+    const a = next === '' || next === null ? undefined : next;
+    const b = committed === '' || committed === null ? undefined : committed;
+    return a !== b;
+  }
+
+  function updateDirtyState(): void {
+    if (isDirty()) {
+      saveBtn.classList.add('dirty');
+    } else {
+      saveBtn.classList.remove('dirty');
+    }
+  }
+
+  saveBtn.addEventListener('click', () => {
+    if (!isDirty()) return;
+    const next = readInputValue();
+    state.settingsValues[key] = next;
+    committed = next;
+    // Reflect the canonical persisted value back into the input (e.g. number
+    // coercion may have normalized '3.0' to 3).
+    writeInputValue(next);
+    persistSettings();
+    updateDirtyState();
+  });
+  row.appendChild(saveBtn);
+  wrap.appendChild(row);
+
+  // Initial state — should be clean.
+  updateDirtyState();
 
   if (field.description) {
     wrap.appendChild(textEl('div', field.description, 'setting-desc'));
@@ -703,9 +1120,32 @@ function renderToggle(opts: ToggleOptions): HTMLElement {
   return label;
 }
 
+const AGENT_FULL_NAMES: Record<string, string> = {
+  tpm: 'Technical Program Manager',
+  swe: 'Software Engineer',
+  qa: 'Quality Assurance',
+};
+
 function renderAgent(wrapper: HTMLElement, agentId: string): void {
-  wrapper.appendChild(textEl('h1', `Agent: ${agentId.toUpperCase()}`));
+  const h1 = el('h1');
+  h1.textContent = agentId.toUpperCase();
+  const fullName = AGENT_FULL_NAMES[agentId];
+  if (fullName) {
+    const elucidation = el('span', { class: 'agent-title-elucidation' });
+    elucidation.textContent = fullName;
+    h1.appendChild(elucidation);
+  }
+  wrapper.appendChild(h1);
   wrapper.appendChild(textEl('p', 'Composed agent prompt: core definition, preamble, and Session Manifest. Module content is read on demand.', 'subtitle'));
+
+  // SWE and QA subpages render an agent-config block above the composed prompt
+  // for configuring how many concurrent subagents TPM may spawn. TPM itself is
+  // singular — no count field.
+  if (agentId === 'swe') {
+    wrapper.appendChild(renderSweConfigBlock());
+  } else if (agentId === 'qa') {
+    wrapper.appendChild(renderQaConfigBlock());
+  }
 
   const prompt = state.composedPrompts[agentId];
   if (prompt === undefined) {
@@ -716,15 +1156,102 @@ function renderAgent(wrapper: HTMLElement, agentId: string): void {
   const pre = el('pre', { class: 'prompt' });
   pre.textContent = prompt;
   wrapper.appendChild(pre);
+}
 
-  const refresh = el('button', { class: 'secondary' });
-  refresh.textContent = 'Refresh';
-  refresh.addEventListener('click', () =>
-    vscode.postMessage({ type: 'getComposedPrompt', agent: agentId }),
+/**
+ * SWE subpage config block: two compact number inputs on one row laid out as
+ * [label: input] [label: input]. The total SWE count is the sum of both.
+ * Saves on blur via the existing `updateConfiguration` message.
+ */
+function renderSweConfigBlock(): HTMLElement {
+  const block = el('div', { class: 'agent-config' });
+  const header = el('div', { class: 'agent-config-header' });
+  header.textContent = 'Configuration';
+  block.appendChild(header);
+
+  const row = el('div', { class: 'agent-config-row' });
+
+  row.appendChild(
+    renderAgentConfigField('Performance Cores', state.sweConfig.performanceCores, (next) => {
+      state.sweConfig.performanceCores = next;
+      vscode.postMessage({
+        type: 'updateConfiguration',
+        section: 'nomeda',
+        key: 'swe.performanceCores',
+        value: next,
+      });
+    }),
   );
-  const actions = el('div', { class: 'actions' });
-  actions.appendChild(refresh);
-  wrapper.appendChild(actions);
+
+  row.appendChild(
+    renderAgentConfigField('Efficiency Cores', state.sweConfig.efficiencyCores, (next) => {
+      state.sweConfig.efficiencyCores = next;
+      vscode.postMessage({
+        type: 'updateConfiguration',
+        section: 'nomeda',
+        key: 'swe.efficiencyCores',
+        value: next,
+      });
+    }),
+  );
+
+  block.appendChild(row);
+  return block;
+}
+
+/** QA subpage config block: single "QA Count" input above the composed prompt. */
+function renderQaConfigBlock(): HTMLElement {
+  const block = el('div', { class: 'agent-config' });
+  const header = el('div', { class: 'agent-config-header' });
+  header.textContent = 'Configuration';
+  block.appendChild(header);
+
+  const row = el('div', { class: 'agent-config-row' });
+  row.appendChild(
+    renderAgentConfigField('QA Count', state.qaConfig.count, (next) => {
+      state.qaConfig.count = next;
+      vscode.postMessage({
+        type: 'updateConfiguration',
+        section: 'nomeda',
+        key: 'qa.count',
+        value: next,
+      });
+    }),
+  );
+  block.appendChild(row);
+  return block;
+}
+
+/**
+ * Compact [label : number input] field used inside the agent-config row.
+ * Persists on blur (consistent with the Initiation Command pattern). Coerces
+ * empty input back to the previous value rather than emitting NaN.
+ */
+function renderAgentConfigField(
+  label: string,
+  initial: number,
+  onCommit: (next: number) => void,
+): HTMLElement {
+  const field = el('div', { class: 'agent-config-field' });
+  const lbl = el('label', { class: 'agent-config-label' });
+  lbl.textContent = label;
+  field.appendChild(lbl);
+
+  const input = el('input', { class: 'agent-config-input' }) as HTMLInputElement;
+  input.type = 'number';
+  input.value = String(initial);
+  input.addEventListener('blur', () => {
+    const parsed = Number(input.value);
+    if (input.value === '' || Number.isNaN(parsed)) {
+      // Restore previous value rather than persist garbage.
+      input.value = String(initial);
+      return;
+    }
+    if (parsed === initial) return;
+    onCommit(parsed);
+  });
+  field.appendChild(input);
+  return field;
 }
 
 function renderSessions(wrapper: HTMLElement): void {
