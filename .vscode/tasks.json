@@ -4,7 +4,7 @@
     {
       "type": "shell",
       "label": "npm: build",
-      "command": "wsl npm run build",
+      "command": "npm run build",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -17,7 +17,7 @@
     {
       "type": "shell",
       "label": "npm: watch",
-      "command": "wsl npm run watch",
+      "command": "npm run watch",
       "options": {
         "cwd": "${workspaceFolder}"
       },

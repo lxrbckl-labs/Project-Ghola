@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "description": "Meta-prompt prepended to every agent (TPM, SWE, QA) explaining that the live system prompt is dynamically assembled from enabled modules. Structural: composer reads preamble.md directly, not via this manifest.",
   "author": "Nomeda",
+  "structural": true,
   "contributes": {}
 }

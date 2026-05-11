@@ -6,6 +6,7 @@ import type { PromptComposer } from '../prompts/composer';
 import type {
   HostToWebviewMessage,
   ModuleSummary,
+  PromptFragmentDetail,
   WebviewToHostMessage,
 } from './protocol';
 
@@ -125,6 +126,9 @@ export class SettingsPanel implements vscode.Disposable {
       case 'openSession':
         await vscode.commands.executeCommand('nomeda.openSession');
         break;
+      case 'requestModuleDetail':
+        await this.postModuleDetail(msg.moduleId);
+        break;
       case 'updateConfiguration':
         await vscode.workspace
           .getConfiguration(msg.section)
@@ -143,9 +147,93 @@ export class SettingsPanel implements vscode.Disposable {
       version: h.manifest.version,
       description: h.manifest.description,
       enabled: h.isEnabled,
+      proactive: h.manifest.proactive,
+      structural: h.manifest.structural,
       contributes: h.manifest.contributes,
     }));
     this.post({ type: 'modulesChanged', modules });
+  }
+
+  /**
+   * Read every prompt-fragment file for a module (resolved against its root)
+   * and post their raw contents to the webview. For `core.preamble`, the
+   * structural `preamble.md` (which is not a manifest-declared fragment) is
+   * appended as a fabricated fragment entry so the detail view can render it.
+   */
+  private async postModuleDetail(moduleId: string): Promise<void> {
+    if (!this.panel) return;
+    const handle = this.loader.find(moduleId);
+    if (!handle) return;
+
+    const fragments: PromptFragmentDetail[] = [];
+    const declared = handle.manifest.contributes?.promptFragments ?? [];
+    const rootWithSep = handle.rootPath.endsWith(path.sep)
+      ? handle.rootPath
+      : handle.rootPath + path.sep;
+    for (const frag of declared) {
+      const abs = path.join(handle.rootPath, frag.contentPath);
+      if (!abs.startsWith(rootWithSep) && abs !== handle.rootPath) {
+        fragments.push({
+          target: frag.target,
+          contentPath: frag.contentPath,
+          absolutePath: abs,
+          content: '',
+          error: 'contentPath escapes module root',
+        });
+        continue;
+      }
+      try {
+        const content = await fs.readFile(abs, 'utf-8');
+        fragments.push({
+          target: frag.target,
+          contentPath: frag.contentPath,
+          absolutePath: abs,
+          content,
+        });
+      } catch (e) {
+        fragments.push({
+          target: frag.target,
+          contentPath: frag.contentPath,
+          absolutePath: abs,
+          content: '',
+          error: (e as Error).message,
+        });
+      }
+    }
+
+    // Special case: surface the structural preamble.md for `core.preamble`.
+    if (moduleId === 'core.preamble') {
+      const abs = path.join(handle.rootPath, 'preamble.md');
+      if (!abs.startsWith(rootWithSep) && abs !== handle.rootPath) {
+        fragments.push({
+          target: 'all',
+          contentPath: 'preamble.md',
+          absolutePath: abs,
+          content: '',
+          error: 'contentPath escapes module root',
+        });
+      } else {
+        try {
+          const content = await fs.readFile(abs, 'utf-8');
+          fragments.push({
+            target: 'all',
+            contentPath: 'preamble.md',
+            absolutePath: abs,
+            content,
+          });
+        } catch (e) {
+          fragments.push({
+            target: 'all',
+            contentPath: 'preamble.md',
+            absolutePath: abs,
+            content: '',
+            error: (e as Error).message,
+          });
+        }
+      }
+    }
+
+    this.post({ type: 'moduleDetail', moduleId, fragments });
   }
 
   private postSettings(): void {

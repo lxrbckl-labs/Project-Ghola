@@ -67,6 +67,32 @@ html, body {
   flex: 1 1 auto;
   overflow-y: auto;
   padding: 24px 32px;
+  /* Always-visible thin scrollbar themed to match the VS Code editor.
+     Firefox uses scrollbar-color / scrollbar-width; WebKit/Chromium read the
+     ::-webkit-scrollbar* rules below. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
+}
+
+.content::-webkit-scrollbar {
+  width: 10px;
+}
+
+.content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.content::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background);
+  border-radius: 5px;
+}
+
+.content::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground);
+}
+
+.content::-webkit-scrollbar-thumb:active {
+  background: var(--vscode-scrollbarSlider-activeBackground);
 }
 
 .content h1 {
@@ -83,46 +109,6 @@ html, body {
 .content p.subtitle {
   margin: 0 0 24px;
   color: var(--vscode-descriptionForeground);
-}
-
-.module-card {
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 4px;
-  padding: 12px 16px;
-  margin-bottom: 12px;
-  background: var(--vscode-editorWidget-background);
-}
-
-.module-card .row {
-  display: flex;
-  justify-content: flex-start;
-  align-items: center;
-  gap: 16px;
-}
-
-.module-card .meta {
-  font-size: 12px;
-  color: var(--vscode-descriptionForeground);
-}
-
-.module-card .desc {
-  margin-top: 6px;
-  font-size: 13px;
-}
-
-.module-card .contribs {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--vscode-descriptionForeground);
-}
-
-.module-card .contribs span {
-  display: inline-block;
-  padding: 1px 6px;
-  margin-right: 4px;
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
-  border-radius: 8px;
 }
 
 /* iOS-style toggle switch — pure CSS. The native checkbox is hidden but
@@ -294,13 +280,24 @@ pre.prompt {
 
 /* ─── Modules tab ──────────────────────────────────────────────────── */
 
+/* Divider between the subtitle and the search/reload row. */
+hr.modules-divider {
+  border: none;
+  border-top: 1px solid var(--vscode-panel-border);
+  margin: 14px 0;
+}
+
+/* Search row: input on the far left, reload button on the far right. */
 .modules-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
   margin: 0 0 12px;
 }
 
 .modules-search input {
-  width: 100%;
-  max-width: 480px;
+  flex: 0 1 480px;
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   border: 1px solid var(--vscode-input-border, transparent);
@@ -314,19 +311,94 @@ pre.prompt {
   outline-offset: -1px;
 }
 
-.modules-list {
+/* Compact, square icon-only button. Used by the back affordance in the detail
+   header. 28x28 hit target with a subtle hover. */
+button.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+button.icon-button:hover {
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+button.icon-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 1px;
+}
+
+button.icon-button svg {
   display: block;
 }
 
-.module-card .module-head {
+/* Reload button in the search row: visually paired with the search input —
+   same background, border, and height so the two controls read as siblings.
+   margin-left: auto pushes it to the far right end of the flex row. */
+.modules-search button.icon-button {
+  margin-left: auto;
+  width: auto;
+  height: auto;
+  padding: 6px 8px;
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  color: var(--vscode-input-foreground);
+}
+
+.modules-search button.icon-button:hover {
+  background: var(--vscode-input-background);
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.modules-search button.icon-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+.modules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* List row — compact, clickable name/meta zone in the middle, toggle on the
+   left, chevron hint on the right. */
+.module-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
+}
+
+.module-row:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.module-row-toggle {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.module-row-body {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.module-card .module-title {
+.module-row-body .module-title {
   display: flex;
   align-items: baseline;
   gap: 4px;
@@ -334,52 +406,99 @@ pre.prompt {
   min-width: 0;
 }
 
-.module-card button.caret {
+.module-row-body .meta {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.module-row-body .desc {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Chevron button — sole navigation affordance for each module row. */
+button.module-row-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
   background: transparent;
-  border: none;
-  color: var(--vscode-foreground);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  padding: 2px 4px;
-  line-height: 1;
+  border: 1px solid transparent;
   border-radius: 3px;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
   flex-shrink: 0;
 }
 
-.module-card button.caret:hover {
-  background: var(--vscode-list-hoverBackground);
+button.module-row-chevron:hover {
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+  border-color: var(--vscode-panel-border);
+  color: var(--vscode-foreground);
 }
 
-.module-card button.caret:focus-visible {
+button.module-row-chevron:focus-visible {
   outline: 1px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: 1px;
 }
 
-.module-card .module-details {
-  margin-top: 12px;
-  padding: 12px 14px;
-  background: var(--vscode-editor-background);
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 4px;
+/* Detail view — header row, then stacked sections. */
+.module-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.module-card .details-header {
+.module-detail .detail-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.module-detail .detail-title {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.module-detail .detail-title .meta {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.module-detail .detail-spacer {
+  flex: 1 1 auto;
+}
+
+.module-detail .desc {
+  font-size: 13px;
+}
+
+.module-detail .proactive-pill {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 8px;
+}
+
+.module-detail .details-header {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--vscode-descriptionForeground);
-  margin: 0 0 8px;
+  margin: 8px 0 0;
 }
 
-.module-card .module-details .details-header + .details-header,
-.module-card .module-details .details-list + .details-header,
-.module-card .module-details .module-settings + .details-header {
-  margin-top: 16px;
-}
-
-.module-card .details-list {
+.module-detail .details-list {
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: 4px 16px;
@@ -387,42 +506,55 @@ pre.prompt {
   font-size: 12px;
 }
 
-.module-card .details-list dt {
+.module-detail .details-list dt {
   color: var(--vscode-descriptionForeground);
   font-weight: 500;
 }
 
-.module-card .details-list dd {
+.module-detail .details-list dd {
   margin: 0;
   word-break: break-word;
 }
 
-.module-card .module-settings {
+.module-detail .fragment-head {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--vscode-descriptionForeground);
+  margin-top: 8px;
+}
+
+.module-detail pre.prompt.fragment {
+  margin-top: 4px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.module-detail .module-settings {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.module-card .setting {
+.module-detail .setting {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.module-card .setting-head {
+.module-detail .setting-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.module-card .setting-label {
+.module-detail .setting-label {
   font-size: 13px;
   font-weight: 500;
   color: var(--vscode-foreground);
 }
 
-.module-card .setting-input {
+.module-detail .setting-input {
   width: 100%;
   max-width: 360px;
   background: var(--vscode-input-background);
@@ -433,16 +565,16 @@ pre.prompt {
   border-radius: 3px;
 }
 
-.module-card .setting-input:focus {
+.module-detail .setting-input:focus {
   outline: 1px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: -1px;
 }
 
-.module-card .setting-desc {
+.module-detail .setting-desc {
   font-size: 12px;
   color: var(--vscode-descriptionForeground);
 }
 
-.module-card .module-details .empty {
+.module-detail .empty {
   font-size: 12px;
 }

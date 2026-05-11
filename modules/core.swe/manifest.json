@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Base agent definition for the Software Engineer (SWE) — an ephemeral subagent that performs code work, previews, edge case hunting, review, and planning under TPM's direction.",
   "author": "Nomeda",
+  "structural": true,
   "contributes": {
     "agents": [
       {

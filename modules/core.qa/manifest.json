@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Base agent definition for the Quality Assurance (QA) subagent — verifies SWE work via code review and (when extended by future modules) authors automated tests.",
   "author": "Nomeda",
+  "structural": true,
   "contributes": {
     "agents": [
       {
