@@ -117,7 +117,7 @@ export class SettingsPanel implements vscode.Disposable {
         await this.saveSettings(msg.values);
         break;
       case 'getComposedPrompt':
-        await this.postComposedPrompt(msg.agent);
+        this.postComposedPrompt(msg.agent);
         break;
       case 'reloadModules':
         await vscode.commands.executeCommand('nomeda.reloadModules');
@@ -161,15 +161,40 @@ export class SettingsPanel implements vscode.Disposable {
     try {
       await this.context.workspaceState.update(SETTINGS_KEY, values);
       this.post({ type: 'settingsSaved', ok: true });
+      // Broadcast fresh composed prompts after settings change per architecture spec.
+      this.broadcastComposedPrompts();
     } catch (err) {
       this.post({ type: 'settingsSaved', ok: false, error: (err as Error).message });
     }
   }
 
-  private async postComposedPrompt(agent: string): Promise<void> {
+  /** Re-broadcast composed prompts for all three agents to the webview. */
+  broadcastComposedPrompts(): void {
+    for (const agent of ['tpm', 'swe', 'qa']) {
+      this.postComposedPrompt(agent);
+    }
+  }
+
+  private postComposedPrompt(agent: string): void {
     if (!this.panel) return;
-    const prompt = await this.composer.compose(agent);
+    const prompt = this.composer.compose(agent, this.getCurrentSettings());
     this.post({ type: 'composedPromptUpdated', agent, prompt });
+  }
+
+  /** Returns the current module settings dict, keyed by `moduleId::fieldKey`. */
+  private getCurrentSettings(): Record<string, Record<string, unknown>> {
+    const flat = this.context.workspaceState.get<Record<string, unknown>>(SETTINGS_KEY, {});
+    // Unpack `moduleId::fieldKey` → nested { moduleId: { fieldKey: value } }.
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const [scopedKey, value] of Object.entries(flat)) {
+      const sep = scopedKey.indexOf('::');
+      if (sep === -1) continue;
+      const moduleId = scopedKey.slice(0, sep);
+      const fieldKey = scopedKey.slice(sep + 2);
+      if (!out[moduleId]) out[moduleId] = {};
+      out[moduleId]![fieldKey] = value;
+    }
+    return out;
   }
 
   private post(msg: HostToWebviewMessage): void {

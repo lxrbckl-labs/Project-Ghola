@@ -2,19 +2,18 @@ import * as childProcess from 'child_process';
 import * as os from 'os';
 import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
-import type { PromptComposer } from '../prompts/composer';
+import type { ModuleHandle } from '../modules/handle';
 import { formatBanner } from './banner';
 
 export class SessionLauncher {
   constructor(
     private readonly loader: ModuleLoader,
-    private readonly composer: PromptComposer,
     private readonly logger?: vscode.OutputChannel,
   ) {}
 
   async launch(): Promise<void> {
     const enabled = this.loader.getEnabled();
-    const composedAgentIds = await this.detectComposedAgentIds(enabled);
+    const composedAgentIds = this.detectComposedAgentIds(enabled);
     const banner = formatBanner({ enabledModules: enabled, composedAgentIds });
 
     const shellPath = this.pickShell();
@@ -65,7 +64,11 @@ export class SessionLauncher {
     }
   }
 
-  private async detectComposedAgentIds(enabled: { manifest: { contributes?: { agents?: { id: string }[]; promptFragments?: { target: string }[] } } }[]): Promise<string[]> {
+  /**
+   * Pure, synchronous detection of agent ids represented by enabled modules.
+   * Used for the banner only; does NOT invoke the composer.
+   */
+  private detectComposedAgentIds(enabled: ModuleHandle[]): string[] {
     const set = new Set<string>();
     for (const h of enabled) {
       for (const a of h.manifest.contributes?.agents ?? []) set.add(a.id);
@@ -74,14 +77,6 @@ export class SessionLauncher {
     if (set.size === 0) {
       // Default skeleton — keeps the banner informative even with no modules.
       ['tpm', 'swe', 'qa'].forEach((id) => set.add(id));
-    }
-    // Quietly verify composer doesn't throw for any of these.
-    for (const id of [...set]) {
-      try {
-        await this.composer.compose(id);
-      } catch {
-        // ignore; banner is best-effort.
-      }
     }
     return [...set].sort();
   }

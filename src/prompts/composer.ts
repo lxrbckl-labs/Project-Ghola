@@ -1,12 +1,20 @@
-import * as fs from 'fs/promises';
+import * as fs from 'fs';
 import * as path from 'path';
 import type * as vscode from 'vscode';
-import type { AgentTarget } from '../manifest/types';
 import type { ModuleLoader } from '../modules/loader';
 import type { ModuleHandle } from '../modules/handle';
+import type { SettingsSchema } from '../manifest/types';
 
-const DEFAULT_ORDER = 100;
-
+/**
+ * Stateless composer: pure function from (agentId, settings) → composed prompt string.
+ *
+ * Emits `[core] + [preamble] + [Session Manifest block]`. The Session Manifest lists
+ * every enabled module that contributes a `promptFragments[]` entry targeting this
+ * agent. Module content is NOT inlined — agents read `modules/{id}/*.md` on demand.
+ *
+ * Two file reads per call: the hardcoded preamble + the agent's core. Module
+ * manifests are already loaded by the loader (in-memory) and not re-read here.
+ */
 export class PromptComposer {
   constructor(
     private readonly loader: ModuleLoader,
@@ -14,86 +22,159 @@ export class PromptComposer {
   ) {}
 
   /**
-   * Compose the full system prompt for `target` from the currently enabled modules.
-   * Walks all enabled modules: picks the highest-priority (last-wins-by-order) agent
-   * definition, then appends every matching prompt fragment in `order` ascending.
+   * Compose the full system prompt for `agentId` from the currently enabled modules,
+   * given the host-provided settings dict (keyed by module id → field id → value).
    */
-  async compose(target: AgentTarget): Promise<string> {
+  compose(agentId: string, settings: Record<string, Record<string, unknown>>): string {
     const enabled = this.loader.getEnabled();
-    const baseDef = await this.resolveBaseDefinition(enabled, target);
 
-    const fragments: Array<{
-      handle: ModuleHandle;
-      section?: string;
-      content: string;
-      order: number;
-    }> = [];
-
-    for (const handle of enabled) {
-      const fr = handle.manifest.contributes?.promptFragments ?? [];
-      for (const f of fr) {
-        if (f.target !== target) continue;
-        const abs = path.join(handle.rootPath, f.contentPath);
-        try {
-          const content = await fs.readFile(abs, 'utf-8');
-          fragments.push({
-            handle,
-            section: f.section,
-            content,
-            order: f.order ?? DEFAULT_ORDER,
-          });
-        } catch (err) {
-          this.log(`fragment unreadable (${handle.manifest.id} → ${f.contentPath}): ${(err as Error).message}`);
-        }
-      }
-    }
-
-    fragments.sort((a, b) => a.order - b.order);
+    const core = this.readCore(agentId, enabled);
+    const preamble = this.readPreamble(enabled);
+    const manifestBlock = this.renderSessionManifest(agentId, enabled, settings);
 
     const parts: string[] = [];
-    if (baseDef) {
-      parts.push(baseDef);
-    } else {
-      parts.push(
-        `# ${target.toUpperCase()} (no agent definition module loaded)\n\n` +
-          `No enabled module contributes an agent definition for "${target}". ` +
-          `Enable a core module (e.g. core.tpm, core.swe, core.qa) or write your own.`,
-      );
-    }
-
-    for (const f of fragments) {
-      const header = f.section
-        ? `## ${f.handle.manifest.name}: ${f.section}`
-        : `## ${f.handle.manifest.name}`;
-      parts.push(`${header}\n\n${f.content.trim()}`);
-    }
-
+    if (core) parts.push(core);
+    if (preamble) parts.push(preamble);
+    if (manifestBlock) parts.push(manifestBlock);
     return parts.join('\n\n');
   }
 
-  private async resolveBaseDefinition(
-    enabled: ModuleHandle[],
-    target: AgentTarget,
-  ): Promise<string | undefined> {
-    // Last-declared wins; user can re-order modules later if needed.
-    let chosen: { handle: ModuleHandle; defPath: string } | undefined;
-    for (const handle of enabled) {
-      const agents = handle.manifest.contributes?.agents ?? [];
-      for (const a of agents) {
-        if (a.id === target) {
-          chosen = { handle, defPath: a.definitionPath };
-        }
-      }
+  // --- core ----------------------------------------------------------------
+
+  private readCore(agentId: string, enabled: ModuleHandle[]): string {
+    const coreId = `core.${agentId}`;
+    const fileName = `${agentId}.md`;
+    const handle = enabled.find((h) => h.manifest.id === coreId);
+    if (!handle) {
+      return (
+        `# ${agentId.toUpperCase()} (no core module loaded)\n\n` +
+        `No enabled module with id "${coreId}" was found. ` +
+        `Enable the core module for this agent (e.g. core.tpm, core.swe, core.qa).`
+      );
     }
-    if (!chosen) return undefined;
-    const abs = path.join(chosen.handle.rootPath, chosen.defPath);
+    const abs = path.join(handle.rootPath, fileName);
     try {
-      return await fs.readFile(abs, 'utf-8');
+      return fs.readFileSync(abs, 'utf-8').trimEnd();
     } catch (err) {
-      this.log(`agent definition unreadable (${chosen.handle.manifest.id}): ${(err as Error).message}`);
-      return undefined;
+      this.log(`core unreadable (${coreId} → ${fileName}): ${(err as Error).message}`);
+      return `# ${agentId.toUpperCase()} (core unreadable)\n\nCould not read ${abs}.`;
     }
   }
+
+  // --- preamble ------------------------------------------------------------
+
+  private readPreamble(enabled: ModuleHandle[]): string {
+    // Hardcoded structural step: read modules/core.preamble/preamble.md directly,
+    // NOT via the manifest's contributes block.
+    const handle = enabled.find((h) => h.manifest.id === 'core.preamble');
+    if (!handle) return '';
+    const abs = path.join(handle.rootPath, 'preamble.md');
+    try {
+      return fs.readFileSync(abs, 'utf-8').trimEnd();
+    } catch (err) {
+      this.log(`preamble unreadable (${abs}): ${(err as Error).message}`);
+      return '';
+    }
+  }
+
+  // --- session manifest ----------------------------------------------------
+
+  private renderSessionManifest(
+    agentId: string,
+    enabled: ModuleHandle[],
+    settings: Record<string, Record<string, unknown>>,
+  ): string {
+    const lines: string[] = ['## Session Manifest', ''];
+    const entries: string[] = [];
+
+    for (const handle of enabled) {
+      // Skip the cores and the preamble: they're already emitted as structural parts.
+      const id = handle.manifest.id;
+      if (id === 'core.preamble' || id === `core.${agentId}`) continue;
+
+      const fragments = handle.manifest.contributes?.promptFragments ?? [];
+      const targeted = fragments.filter((f) => f.target === agentId);
+      if (targeted.length === 0) continue;
+
+      for (const fragment of targeted) {
+        const contentPath = path.join(handle.rootPath, fragment.contentPath);
+        const proactive = handle.manifest.proactive === true;
+        const marker = proactive ? ' [proactive — consult at session start]' : '';
+        const header = `- **${id}**${marker}`;
+        const contentLine = `  - contentPath: \`${contentPath}\``;
+        const paramsBlock = this.renderParameters(
+          handle.manifest.contributes?.settings,
+          settings[id],
+        );
+        entries.push([header, contentLine, ...paramsBlock].join('\n'));
+      }
+    }
+
+    if (entries.length === 0) {
+      lines.push('_(no modules contribute prompt fragments to this agent)_');
+      return lines.join('\n');
+    }
+
+    lines.push(...entries.flatMap((e) => [e, '']));
+    // Trim trailing blank line.
+    if (lines[lines.length - 1] === '') lines.pop();
+    return lines.join('\n');
+  }
+
+  // --- parameter rendering -------------------------------------------------
+
+  /**
+   * Three-branch rendering for a module's parameters in the Session Manifest:
+   *   - None:     module declares no settings schema     → render `(none)`
+   *   - Defaults: schema present but no user overrides   → render `(defaults)`
+   *   - Values:   user has overrides                     → render as a sub-list of key: value pairs
+   */
+  private renderParameters(
+    schema: SettingsSchema | undefined,
+    userValues: Record<string, unknown> | undefined,
+  ): string[] {
+    const hasSchema = schema && Object.keys(schema).length > 0;
+    if (!hasSchema) return ['  - parameters: (none)'];
+
+    const overrides = userValues && Object.keys(userValues).length > 0 ? userValues : undefined;
+    if (!overrides) return ['  - parameters: (defaults)'];
+
+    const out: string[] = ['  - parameters:'];
+    for (const key of Object.keys(overrides)) {
+      const rendered = this.renderValue(overrides[key]);
+      out.push(`    - ${key}: ${rendered}`);
+    }
+    return out;
+  }
+
+  private renderValue(value: unknown): string {
+    let str: string;
+    if (typeof value === 'string') {
+      // Strip \r\n from string values per spec.
+      str = value.replace(/\r\n/g, '').replace(/\r/g, '');
+    } else if (value === null || value === undefined) {
+      str = String(value);
+    } else if (typeof value === 'object') {
+      try {
+        str = JSON.stringify(value);
+      } catch {
+        str = String(value);
+      }
+    } else {
+      str = String(value);
+    }
+
+    // Wrap in backticks. If the value contains a backtick, fall back to single-quote
+    // escape (\'). Spec note: this is adequate for an agent reading it; cosmetic
+    // polish deferred.
+    if (str.includes('`')) {
+      const escaped = str.replace(/'/g, "\\'");
+      return `'${escaped}'`;
+    }
+    return `\`${str}\``;
+  }
+
+  // --- logging -------------------------------------------------------------
 
   private log(msg: string): void {
     this.logger?.appendLine(`[composer] ${msg}`);
