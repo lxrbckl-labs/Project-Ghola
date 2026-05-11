@@ -19,6 +19,7 @@
     "description": { "type": "string" },
     "author": { "type": "string" },
     "entry": { "type": "string" },
+    "proactive": { "type": "boolean" },
     "contributes": {
       "type": "object",
       "additionalProperties": false,
@@ -31,9 +32,7 @@
             "additionalProperties": false,
             "properties": {
               "target": { "type": "string", "minLength": 1 },
-              "section": { "type": "string" },
-              "contentPath": { "type": "string", "minLength": 1 },
-              "order": { "type": "number" }
+              "contentPath": { "type": "string", "minLength": 1 }
             }
           }
         },

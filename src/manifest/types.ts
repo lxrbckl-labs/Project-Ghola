@@ -8,12 +8,8 @@ export type AgentTarget = 'tpm' | 'swe' | 'qa' | string;
 export interface PromptFragment {
   /** Which agent's composed prompt this fragment is appended to. */
   target: AgentTarget;
-  /** Optional logical section label rendered as a header during composition. */
-  section?: string;
-  /** Path to a markdown file, relative to the module root. */
+  /** Path to a markdown file, relative to the module root. Read on demand by the agent. */
   contentPath: string;
-  /** Sort order within the target. Lower = earlier. Defaults to 100. */
-  order?: number;
 }
 
 export interface AgentDefinition {
@@ -89,6 +85,12 @@ export interface ModuleManifest {
   author?: string;
   /** Optional path to compiled entry .js exporting LifecycleHooks. */
   entry?: string;
+  /**
+   * When true, the composer marks this module in the Session Manifest with a
+   * `[proactive — consult at session start]` annotation so the agent reads the
+   * module's content immediately rather than on-demand.
+   */
+  proactive?: boolean;
   contributes?: ContributionPoints;
 }
 
