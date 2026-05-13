@@ -22,6 +22,14 @@ export function registerCommands(
     }),
     vscode.commands.registerCommand('nomeda.openSession', async () => {
       try {
+        // Compose + write the TPM, SWE, and QA prompts BEFORE creating the
+        // terminal so all three files are on disk by the time the shell
+        // evaluates `$(cat …)` in the default sessionCommand and by the time
+        // TPM later spawns a subagent and reads $NOMEDA_SWE_PROMPT_FILE /
+        // $NOMEDA_QA_PROMPT_FILE. Paths are the same well-known locations the
+        // launcher exposes via NOMEDA_{TPM,SWE,QA}_PROMPT_FILE. Fail-closed:
+        // if any write throws the terminal is never created.
+        await deps.panel.writeAllAgentPromptFiles();
         await deps.session.launch();
       } catch (err) {
         vscode.window.showErrorMessage(`Nomeda: failed to launch session — ${(err as Error).message}`);

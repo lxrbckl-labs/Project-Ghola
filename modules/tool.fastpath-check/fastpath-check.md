@@ -33,3 +33,7 @@ A full migration is a manual operation with safety implications (uncommitted wor
 ## Why This Is A Module, Not Core
 
 Filesystem-path performance is an environmental concern, not an intrinsic agent rule. Users on macOS, native Linux, or already on a WSL-native path see no value from this check. Keeping it in a module means those users can disable it and stop receiving the advisory, while WSL-on-Windows users get a one-time nudge that's worth the seconds of attention it costs.
+
+## Launcher Side-Effect (Read-Only Awareness)
+
+While this module is enabled, the Nomeda session launcher opens the bash terminal already `cd`'d into the WSL-native fast-path directory rather than the workspace folder. Resolution order: the user's `fastpathDirectory` setting takes priority if non-empty; otherwise the launcher computes the target by translating `/mnt/<letter>/Users/<user>/<rest>` → `~/projects/<basename(rest)>`. If the resolved path does not exist on disk the launcher falls back to the workspace folder silently. This is launcher behavior, not an instruction you act on — it is documented here so you understand why the cwd may differ from `vscode.workspace.workspaceFolders[0]` when this module is in the enabled set.

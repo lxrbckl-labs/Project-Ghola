@@ -1,0 +1,7 @@
+[
+  { "keyword": "security", "purpose": "Auth, injection, secrets handling, crypto, input validation, SSRF, XSS, deserialization. Highest priority for code touching external surfaces." },
+  { "keyword": "logic", "purpose": "Correctness, off-by-one, sign errors, inverted conditions, edge cases, race conditions. Catches bugs the type system misses." },
+  { "keyword": "quality", "purpose": "Structural style, naming, comment density, test coverage, abstraction levels, code-smell indicators. Soft but compounding." },
+  { "keyword": "performance", "purpose": "Algorithmic complexity, N+1 queries, allocation churn, blocking I/O. Use for hot paths or critical services." },
+  { "keyword": "accessibility", "purpose": "ARIA roles, keyboard nav, color contrast, screen-reader semantics. Use for frontend-heavy work." }
+]

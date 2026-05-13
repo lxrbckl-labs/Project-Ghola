@@ -6,6 +6,7 @@ import type {
   ModuleSummary,
   NamedConfiguration,
   PromptFragmentDetail,
+  SettingKeywordEntry,
   WebviewToHostMessage,
 } from '../protocol';
 import type { SettingsField } from '../../manifest/types';
@@ -57,8 +58,18 @@ interface UIState {
   moduleView: ModuleView;
   /** Per-module detail payloads keyed by moduleId. Populated by 'moduleDetail' messages. */
   moduleDetails: Record<string, PromptFragmentDetail[]>;
+  /**
+   * Per-setting keywords payloads keyed by `moduleId::settingKey`. Populated
+   * by 'settingKeywords' messages. `error` strings live in `settingKeywordErrors`
+   * under the same key so a successful payload (possibly empty) is unambiguous.
+   */
+  settingKeywords: Record<string, SettingKeywordEntry[]>;
+  /** Error strings for keyword loads, keyed identically to `settingKeywords`. */
+  settingKeywordErrors: Record<string, string>;
   /** Free-text filter for the Modules tab. Ephemeral; cleared on tab switch. */
   moduleSearch: string;
+  /** Value of nomeda.cliCommand VS Code configuration. */
+  cliCommand: string;
   /** Value of nomeda.sessionCommand VS Code configuration. */
   sessionCommand: string;
   /** Current SWE agent counts pulled from `nomeda.swe.*` VS Code configuration. */
@@ -75,6 +86,36 @@ interface UIState {
   configNameEditMode: ConfigNameEditMode;
   /** True when the Manage panel under the kebab is expanded (Modules tab only). */
   configManageOpen: boolean;
+  /**
+   * LINQPad connection discovery state. Initial 'loading' covers the brief
+   * window between webview boot and the host's first `linqpadConnections`
+   * payload. The webview never reads the filesystem itself — all data comes
+   * from the host. `error` is the host's reported message (only set when
+   * status is 'not-installed' or 'error').
+   */
+  linqpadConnections: {
+    status: 'loading' | 'ok' | 'not-installed' | 'error';
+    list: string[];
+    path?: string;
+    error?: string;
+  };
+  /**
+   * Per-keyValue-field dirty drafts. Keyed by `moduleId::settingKey`. While a
+   * draft is in flight (user has added / removed / edited rows but not yet
+   * clicked Save), the renderer reads from here instead of `settingsValues`.
+   * Cleared on Save (after persistSettings) or when the user navigates away
+   * from the Modules detail page.
+   */
+  /**
+   * Drafts store either `Record<string, string>` (default keyValue shape) or
+   * `Record<string, { value: string; enabled: boolean }>` (when the manifest
+   * sets `optionalEnabled: true` for the field). Shape is determined per
+   * field by `field.optionalEnabled` at render time.
+   */
+  keyValueDrafts: Record<
+    string,
+    Record<string, string> | Record<string, { value: string; enabled: boolean }>
+  >;
 }
 
 const state: UIState = {
@@ -85,7 +126,10 @@ const state: UIState = {
   composedPrompts: {},
   moduleView: { mode: 'list' },
   moduleDetails: {},
+  settingKeywords: {},
+  settingKeywordErrors: {},
   moduleSearch: '',
+  cliCommand: 'claude',
   sessionCommand: 'initiate',
   sweConfig: { performanceCores: 2, efficiencyCores: 1 },
   qaConfig: { count: 1 },
@@ -94,6 +138,8 @@ const state: UIState = {
   isConfigurationModified: false,
   configNameEditMode: false,
   configManageOpen: false,
+  linqpadConnections: { status: 'loading', list: [] },
+  keyValueDrafts: {},
 };
 
 const root = document.getElementById('app')!;
@@ -133,6 +179,14 @@ const CHECK_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" heigh
 
 // X glyph — cancel action inside the inline name input.
 const CLOSE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z"/></svg>`;
+
+// Clipboard glyph — used by the "Copy module-generation prompt" button on the
+// Modules search row.
+const COPY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10 1H6a1 1 0 0 0-1 1v1H3.5A1.5 1.5 0 0 0 2 4.5v10A1.5 1.5 0 0 0 3.5 16h9a1.5 1.5 0 0 0 1.5-1.5v-10A1.5 1.5 0 0 0 12.5 3H11V2a1 1 0 0 0-1-1zM6 2h4v2H6V2zm-2.5 3H5v.5a.5.5 0 0 0 .5.5h5a.5.5 0 0 0 .5-.5V5h1.5a.5.5 0 0 1 .5.5v9a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg>`;
+
+// Upload tray glyph — used by the "Upload module from filesystem" button on
+// the Modules search row. Up-arrow rising out of a tray base.
+const UPLOAD_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5l4 4-.71.71L8.5 3.41V11h-1V3.41L4.71 6.21 4 5.5l4-4zM2.5 11.5h1V14h9v-2.5h1V14a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-2.5z"/></svg>`;
 
 function init(): void {
   render();
@@ -177,6 +231,7 @@ function handleMessage(msg: HostToWebviewMessage): void {
       break;
     case 'settingsLoaded':
       state.settingsValues = msg.values ?? {};
+      state.cliCommand = msg.cliCommand ?? 'claude';
       state.sessionCommand = msg.sessionCommand ?? 'initiate';
       if (msg.swe) state.sweConfig = msg.swe;
       if (msg.qa) state.qaConfig = msg.qa;
@@ -206,6 +261,40 @@ function handleMessage(msg: HostToWebviewMessage): void {
         render();
       }
       break;
+    case 'settingKeywords': {
+      // Cache regardless — a late-arriving payload after the user navigates
+      // away should still populate state for the next visit. Re-render only
+      // if the user is still viewing this module's detail page.
+      const cacheKey = settingKeywordsCacheKey(msg.moduleId, msg.settingKey);
+      if (msg.error) {
+        state.settingKeywordErrors[cacheKey] = msg.error;
+        delete state.settingKeywords[cacheKey];
+      } else {
+        state.settingKeywords[cacheKey] = msg.keywords;
+        delete state.settingKeywordErrors[cacheKey];
+      }
+      if (
+        state.moduleView.mode === 'detail' &&
+        state.moduleView.moduleId === msg.moduleId
+      ) {
+        render();
+      }
+      break;
+    }
+    case 'linqpadConnections':
+      state.linqpadConnections = {
+        status: msg.status === 'ok' ? 'ok' : msg.status,
+        list: msg.connections,
+        path: msg.resolvedPath,
+        error: msg.error,
+      };
+      // Only re-render when the user is on a module detail page that actually
+      // uses LINQPad; otherwise it's wasted work. Cheap and safe to always
+      // re-render though — the dropdown lives behind a navigation gate.
+      if (state.activeSection === 'modules' && state.moduleView.mode === 'detail') {
+        render();
+      }
+      break;
     case 'configurationsChanged':
       state.configurations = msg.configurations;
       state.activeConfigurationId = msg.activeId;
@@ -229,6 +318,11 @@ function setSection(id: SectionId): void {
     state.moduleSearch = '';
     state.moduleView = { mode: 'list' };
     state.moduleDetails = {};
+    state.settingKeywords = {};
+    state.settingKeywordErrors = {};
+    // Discard any in-flight keyValue drafts — they only make sense while the
+    // user is on a module detail page actively editing rows.
+    state.keyValueDrafts = {};
   }
   // Clear inline configuration name editor and manage panel on any tab leave —
   // both are tab-scoped ephemeral UI states.
@@ -306,11 +400,35 @@ function renderGeneral(wrapper: HTMLElement): void {
   // Horizontal divider between the header and the settings content.
   wrapper.appendChild(el('hr', { class: 'section-divider' }));
 
-  // Initiation Command — label on its own line, then flex row with [input grows] [play button].
+  // Three-column launch row: [CLI Command] [Initiation Command] [Configuration] [▶]
+  // Each column is a label-above-input field; the play button sits at the far right.
+  const launchRow = el('div', { class: 'session-launch-row' });
+
+  // Column 1 — CLI Command
+  const cliField = el('div', { class: 'session-launch-field' });
+  const cliLabel = el('label', { class: 'setting-label session-command-label' });
+  cliLabel.textContent = 'CLI Command';
+  cliField.appendChild(cliLabel);
+  const cliInp = el('input', { class: 'setting-input session-command-input' }) as HTMLInputElement;
+  cliInp.type = 'text';
+  cliInp.value = state.cliCommand;
+  cliInp.addEventListener('blur', () => {
+    state.cliCommand = cliInp.value;
+    vscode.postMessage({
+      type: 'updateConfiguration',
+      section: 'nomeda',
+      key: 'cliCommand',
+      value: cliInp.value,
+    });
+  });
+  cliField.appendChild(cliInp);
+  launchRow.appendChild(cliField);
+
+  // Column 2 — Initiation Command
+  const sessionField = el('div', { class: 'session-launch-field' });
   const sessionLabel = el('label', { class: 'setting-label session-command-label' });
   sessionLabel.textContent = 'Initiation Command';
-  wrapper.appendChild(sessionLabel);
-  const sessionRow = el('div', { class: 'session-command-row' });
+  sessionField.appendChild(sessionLabel);
   const sessionInp = el('input', { class: 'setting-input session-command-input' }) as HTMLInputElement;
   sessionInp.type = 'text';
   sessionInp.value = state.sessionCommand;
@@ -323,13 +441,18 @@ function renderGeneral(wrapper: HTMLElement): void {
       value: sessionInp.value,
     });
   });
-  sessionRow.appendChild(sessionInp);
+  sessionField.appendChild(sessionInp);
+  launchRow.appendChild(sessionField);
 
-  // Configuration dropdown sits between the command input and the play button.
-  // It mirrors the same dropdown used on the Modules tab; selection drives the
-  // active configuration which the host applies immediately.
-  sessionRow.appendChild(renderConfigDropdown());
+  // Column 3 — Configuration dropdown
+  const configField = el('div', { class: 'session-launch-field session-launch-field--config' });
+  const configLabel = el('label', { class: 'setting-label session-command-label' });
+  configLabel.textContent = 'Configuration';
+  configField.appendChild(configLabel);
+  configField.appendChild(renderConfigDropdown());
+  launchRow.appendChild(configField);
 
+  // Play button — far right of the row, aligned to the bottom of the columns.
   const sessionBtn = el('button', {
     class: 'icon-button framed',
     type: 'button',
@@ -338,8 +461,8 @@ function renderGeneral(wrapper: HTMLElement): void {
   }) as HTMLButtonElement;
   sessionBtn.innerHTML = PLAY_ICON_SVG;
   sessionBtn.addEventListener('click', () => vscode.postMessage({ type: 'openSession' }));
-  sessionRow.appendChild(sessionBtn);
-  wrapper.appendChild(sessionRow);
+  launchRow.appendChild(sessionBtn);
+  wrapper.appendChild(launchRow);
 
   // Custom settings sections placed in 'general' from any module.
   const customSections = state.modules
@@ -417,6 +540,33 @@ function renderModuleListView(wrapper: HTMLElement): void {
   });
   searchWrap.appendChild(searchInput);
 
+  // Copy module-generation prompt → clipboard. Sits before upload + reload so
+  // the row reads [search] [copy] [upload] [reload] left-to-right.
+  const copyBtn = el('button', {
+    class: 'icon-button framed',
+    type: 'button',
+    'aria-label': 'Copy module-generation prompt',
+    title: 'Copy module-generation prompt',
+  }) as HTMLButtonElement;
+  copyBtn.innerHTML = COPY_ICON_SVG;
+  copyBtn.addEventListener('click', () =>
+    vscode.postMessage({ type: 'copyNewModulePrompt' }),
+  );
+  searchWrap.appendChild(copyBtn);
+
+  // Upload a module folder from the filesystem (default: ~/Downloads).
+  const uploadBtn = el('button', {
+    class: 'icon-button framed',
+    type: 'button',
+    'aria-label': 'Upload module',
+    title: 'Upload module from filesystem',
+  }) as HTMLButtonElement;
+  uploadBtn.innerHTML = UPLOAD_ICON_SVG;
+  uploadBtn.addEventListener('click', () =>
+    vscode.postMessage({ type: 'uploadModule' }),
+  );
+  searchWrap.appendChild(uploadBtn);
+
   const reloadBtn = el('button', {
     class: 'icon-button framed',
     type: 'button',
@@ -449,8 +599,12 @@ function renderModulesList(container: HTMLElement): void {
   const q = state.moduleSearch.trim().toLowerCase();
   const filtered = state.modules.filter((m) => {
     if (!q) return true;
+    // Base haystack: id, name, description.
     const hay = [m.id, m.name, m.description ?? ''].join(' ').toLowerCase();
-    return hay.includes(q);
+    if (hay.includes(q)) return true;
+    // Badge match: check if the query is a substring of any badge label (e.g. "tp" → "tpm").
+    const badgeLabels = resolveAgentBadgeLabels(m.targets ?? []);
+    return badgeLabels.some((label) => label.includes(q));
   });
 
   if (q && filtered.length === 0) {
@@ -486,7 +640,7 @@ function renderModuleRow(m: ModuleSummary): HTMLElement {
   );
   row.appendChild(toggleZone);
 
-  // Text zone — non-interactive; displays name, id, version, description.
+  // Text zone — non-interactive; displays name, id, version, description, badges.
   const textZone = el('div', { class: 'module-row-body' });
   const title = el('div', { class: 'module-title' });
   const nameEl = el('strong');
@@ -498,6 +652,11 @@ function renderModuleRow(m: ModuleSummary): HTMLElement {
   textZone.appendChild(title);
   if (m.description) {
     textZone.appendChild(textEl('div', m.description, 'desc'));
+  }
+  // Agent badges below description — shows which agents this module targets.
+  const rowBadges = renderAgentBadges(m.targets ?? []);
+  if (rowBadges) {
+    textZone.appendChild(rowBadges);
   }
   row.appendChild(textZone);
 
@@ -779,7 +938,40 @@ function openModuleDetail(moduleId: string): void {
   if (!state.moduleDetails[moduleId]) {
     vscode.postMessage({ type: 'requestModuleDetail', moduleId });
   }
+
+  // For every setting on this module that ships a keywordsPath, request the
+  // parsed keywords payload now so the table renders as soon as the user lands
+  // on the detail page. Cached entries (including prior error responses) are
+  // skipped to avoid hammering the host on repeated visits.
+  const module = state.modules.find((m) => m.id === moduleId);
+  const fields = (module?.contributes?.settings ?? {}) as Record<string, SettingsField>;
+  for (const [settingKey, field] of Object.entries(fields)) {
+    if (!field.keywordsPath) continue;
+    const cacheKey = settingKeywordsCacheKey(moduleId, settingKey);
+    if (
+      state.settingKeywords[cacheKey] !== undefined ||
+      state.settingKeywordErrors[cacheKey] !== undefined
+    ) {
+      continue;
+    }
+    vscode.postMessage({ type: 'requestSettingKeywords', moduleId, settingKey });
+  }
+
+  // If this module has a keyValue setting fed by the LINQPad source and we
+  // haven't yet received a payload (or are still loading), request one now.
+  const needsLinqpad = Object.values(fields).some(
+    (f) => f.type === 'keyValue' && f.valueSource === 'linqpad-connections',
+  );
+  if (needsLinqpad && state.linqpadConnections.status === 'loading') {
+    vscode.postMessage({ type: 'requestLinqpadConnections' });
+  }
+
   render();
+}
+
+/** Cache-key helper for the per-setting keywords store. */
+function settingKeywordsCacheKey(moduleId: string, settingKey: string): string {
+  return `${moduleId}::${settingKey}`;
 }
 
 function backToModuleList(): void {
@@ -843,6 +1035,12 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
     container.appendChild(textEl('div', m.description, 'desc'));
   }
 
+  // Agent-target badge row — at-a-glance summary of which agents this module impacts.
+  const agentBadges = renderAgentBadges(m.contributes?.promptFragments ?? []);
+  if (agentBadges) {
+    container.appendChild(agentBadges);
+  }
+
   // Definition list (always rendered, no expander).
   const c = m.contributes;
   const dl = el('dl', { class: 'details-list' });
@@ -871,7 +1069,24 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
   }
   container.appendChild(dl);
 
-  // Prompt Content section — raw module .md text from the host.
+  // Settings editor (inline, no expander wrapping). Rendered ABOVE the prompt
+  // content because the configurable inputs are the actionable surface — prompt
+  // content below is reference material.
+  const fields = (c?.settings ?? {}) as Record<string, SettingsField>;
+  const fieldEntries = Object.entries(fields);
+  if (fieldEntries.length > 0) {
+    container.appendChild(textEl('div', 'Settings', 'details-header'));
+    const settingsWrap = el('div', { class: 'module-settings' });
+    fieldEntries.forEach(([key, field]) => {
+      settingsWrap.appendChild(
+        renderModuleSettingField(m.id, key, field),
+      );
+    });
+    container.appendChild(settingsWrap);
+  }
+
+  // Prompt Content section — raw module .md text from the host. Reference
+  // material; sits below Settings.
   container.appendChild(textEl('div', 'Prompt Content', 'details-header'));
   const fragments = state.moduleDetails[m.id];
   if (fragments === undefined) {
@@ -881,10 +1096,13 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
       textEl('div', 'This module declares no prompt content.', 'empty'),
     );
   } else {
+    const multiFragment = fragments.length > 1;
     fragments.forEach((f) => {
-      const head = el('div', { class: 'fragment-head' });
-      head.textContent = `target: ${f.target} — ${basename(f.contentPath)}`;
-      container.appendChild(head);
+      if (multiFragment) {
+        const head = el('div', { class: 'fragment-head' });
+        head.textContent = fragmentTargetLabel(f.target);
+        container.appendChild(head);
+      }
       const pre = el('pre', { class: 'prompt fragment' });
       if (f.error) {
         pre.textContent = `(read error: ${f.error})`;
@@ -895,27 +1113,75 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
     });
   }
 
-  // Settings editor (inline, no expander wrapping).
-  const fields = (c?.settings ?? {}) as Record<string, SettingsField>;
-  const fieldEntries = Object.entries(fields);
-  if (fieldEntries.length > 0) {
-    container.appendChild(textEl('div', 'Settings', 'details-header'));
-    const settingsWrap = el('div', { class: 'module-settings' });
-    fieldEntries.forEach(([key, field]) => {
-      settingsWrap.appendChild(
-        renderModuleSettingField(scopedKey(m.id, key), field),
-      );
-    });
-    container.appendChild(settingsWrap);
-  }
-
   wrapper.appendChild(container);
 }
 
-/** Strip the directory portion off a relative manifest path. */
-function basename(p: string): string {
-  const idx = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
-  return idx === -1 ? p : p.slice(idx + 1);
+/**
+ * Computes the ordered set of agent badge labels from a pre-expanded targets
+ * array (as stored in `ModuleSummary.targets`). Returns an empty array when
+ * there are no targets. Order is always TPM → SWE → QA → custom (sorted).
+ */
+function resolveAgentBadgeLabels(targets: string[]): string[] {
+  if (targets.length === 0) return [];
+  const CANONICAL_ORDER = ['tpm', 'swe', 'qa'];
+  const agentSet = new Set(targets.map((t) => t.toLowerCase()));
+  return [
+    ...CANONICAL_ORDER.filter((a) => agentSet.has(a)),
+    ...[...agentSet].filter((a) => !CANONICAL_ORDER.includes(a)).sort(),
+  ];
+}
+
+/**
+ * Renders a row of pill badges showing which agents a module impacts.
+ * Accepts either a pre-expanded `targets` array (from `ModuleSummary.targets`)
+ * or a legacy fragments array (detail view still passes promptFragments).
+ * Returns null when there are no badges to show.
+ * Deduplicates: "all" in fragments expands to TPM+SWE+QA. Order: TPM → SWE → QA.
+ */
+function renderAgentBadges(
+  input: string[] | Array<{ target: string }>,
+): HTMLElement | null {
+  // Normalise both call-sites to a flat string[] of raw target values.
+  let rawTargets: string[];
+  if (input.length === 0) return null;
+  if (typeof input[0] === 'string') {
+    // Already a targets array (from ModuleSummary.targets — already expanded).
+    rawTargets = input as string[];
+  } else {
+    // Fragment objects from the detail view — expand "all" here.
+    const frags = input as Array<{ target: string }>;
+    const s = new Set<string>();
+    for (const f of frags) {
+      if (f.target === 'all') {
+        s.add('tpm'); s.add('swe'); s.add('qa');
+      } else {
+        s.add(f.target.toLowerCase());
+      }
+    }
+    rawTargets = [...s];
+  }
+
+  const ordered = resolveAgentBadgeLabels(rawTargets);
+  if (ordered.length === 0) return null;
+
+  const row = el('div', { class: 'agent-badges' });
+  for (const agent of ordered) {
+    const badge = el('span', { class: 'agent-badge' });
+    badge.textContent = agent.toUpperCase();
+    row.appendChild(badge);
+  }
+  return row;
+}
+
+/** Map a fragment target value to a friendly display label for multi-fragment modules. */
+function fragmentTargetLabel(target: string): string {
+  switch (target) {
+    case 'tpm': return 'For TPM';
+    case 'swe': return 'For SWE';
+    case 'qa':  return 'For QA';
+    case 'all': return 'Shared (all agents)';
+    default:    return `For ${target.charAt(0).toUpperCase()}${target.slice(1)}`;
+  }
 }
 
 function appendDef(dl: HTMLElement, term: string, value: string): void {
@@ -947,7 +1213,12 @@ function appendDef(dl: HTMLElement, term: string, value: string): void {
  * last persisted (initialized from settingsValues / field.default), and the
  * save button's classList is updated as the user types.
  */
-function renderModuleSettingField(key: string, field: SettingsField): HTMLElement {
+function renderModuleSettingField(
+  moduleId: string,
+  settingKey: string,
+  field: SettingsField,
+): HTMLElement {
+  const key = scopedKey(moduleId, settingKey);
   const wrap = el('div', { class: 'setting' });
 
   const head = el('div', { class: 'setting-head' });
@@ -957,6 +1228,65 @@ function renderModuleSettingField(key: string, field: SettingsField): HTMLElemen
   wrap.appendChild(head);
 
   const current = state.settingsValues[key] ?? field.default;
+
+  // Multi-select checkbox group: opt-in via `multiSelect: true` on a string
+  // field that ships a `keywordsPath`. The keywords file supplies the
+  // closed-vocabulary option list; the saved value remains a comma-separated
+  // string (agent contract unchanged). Falls back to the standard text input
+  // if the keywords payload failed to load or is empty.
+  if (field.type === 'string' && field.multiSelect && field.keywordsPath) {
+    // Multi-select fields render the keywords table with an additional "Select"
+    // column — one checkbox per row, auto-saving the canonical-ordered
+    // comma-separated string. Loading / error / empty states are handled
+    // internally by appendKeywordsTable, so no separate placeholder DOM here.
+    const cacheKey = settingKeywordsCacheKey(moduleId, settingKey);
+    const keywords = state.settingKeywords[cacheKey];
+
+    // Parse the stored comma-separated value into a Set for membership checks.
+    // Empty / non-string / undefined → empty set (no boxes checked). Reading
+    // from state.settingsValues on each render (not from a closed-over Set)
+    // ensures selection survives re-renders driven by other state changes.
+    const selected = new Set<string>();
+    if (typeof current === 'string' && current.length > 0) {
+      for (const raw of current.split(',')) {
+        const trimmed = raw.trim();
+        if (trimmed.length > 0) selected.add(trimmed);
+      }
+    }
+
+    const onToggle = (keyword: string, next: boolean): void => {
+      if (next) {
+        selected.add(keyword);
+      } else {
+        selected.delete(keyword);
+      }
+      // Rebuild from the keywords-file order so the persisted string is
+      // canonical and stable regardless of click order. `keywords` may be
+      // undefined if a toggle somehow fires before the payload lands — guard.
+      const ordered = keywords ?? [];
+      const nextStr = ordered
+        .map((e) => e.keyword)
+        .filter((kw) => selected.has(kw))
+        .join(', ');
+      state.settingsValues[key] = nextStr;
+      persistSettings();
+    };
+
+    if (field.description) {
+      wrap.appendChild(textEl('div', field.description, 'setting-desc'));
+    }
+    appendKeywordsTable(wrap, moduleId, settingKey, field, { selected, onToggle });
+    return wrap;
+  }
+
+  if (field.type === 'keyValue') {
+    appendKeyValueEditor(wrap, head, moduleId, settingKey, field, current);
+    if (field.description) {
+      wrap.appendChild(textEl('div', field.description, 'setting-desc'));
+    }
+    appendKeywordsTable(wrap, moduleId, settingKey, field);
+    return wrap;
+  }
 
   if (field.type === 'boolean') {
     // Booleans keep auto-save-on-toggle semantics. A toggle has no intermediate
@@ -975,6 +1305,10 @@ function renderModuleSettingField(key: string, field: SettingsField): HTMLElemen
     if (field.description) {
       wrap.appendChild(textEl('div', field.description, 'setting-desc'));
     }
+    // Booleans theoretically could ship a keywordsPath, but the on/off shape
+    // has no vocabulary to document. Still render if present — the agent reads
+    // the same file, so the table keeps host + agent views in sync.
+    appendKeywordsTable(wrap, moduleId, settingKey, field);
     return wrap;
   }
 
@@ -1077,7 +1411,633 @@ function renderModuleSettingField(key: string, field: SettingsField): HTMLElemen
   if (field.description) {
     wrap.appendChild(textEl('div', field.description, 'setting-desc'));
   }
+  appendKeywordsTable(wrap, moduleId, settingKey, field);
   return wrap;
+}
+
+/**
+ * @deprecated Retired on 2026-05-12 — the multi-select checkbox group has been
+ * folded into `appendKeywordsTable` as a new leftmost "Select" column. This
+ * function is no longer called from anywhere; it remains in the file pending
+ * user (TPM) deletion to honor the no-deletions hard rule.
+ *
+ * Render a multi-select checkbox group for a `string + multiSelect + keywordsPath`
+ * field. The keywords payload supplies the closed-vocabulary options; the saved
+ * value is the comma-separated concatenation of the currently-checked keywords
+ * (agent contract unchanged). Auto-saves on every change — mirrors the keyValue
+ * editor pattern, no separate Save button.
+ *
+ * Orphan handling: if the stored value contains keywords that are no longer
+ * present in the keywords file (legacy values), they are silently dropped from
+ * the checked state. The next user interaction commits a clean value without
+ * them.
+ */
+// @ts-expect-error TS6133 — retained as dead code pending user deletion (no-rm rule).
+function appendMultiSelectField(
+  parent: HTMLElement,
+  moduleId: string,
+  settingKey: string,
+  field: SettingsField,
+  keywords: SettingKeywordEntry[],
+  current: unknown,
+): void {
+  const key = scopedKey(moduleId, settingKey);
+
+  // Parse the stored comma-separated value into a Set for membership checks.
+  // Empty / non-string / undefined → empty set (no boxes checked).
+  const selected = new Set<string>();
+  if (typeof current === 'string' && current.length > 0) {
+    for (const raw of current.split(',')) {
+      const trimmed = raw.trim();
+      if (trimmed.length > 0) selected.add(trimmed);
+    }
+  }
+
+  const group = el('div', { class: 'multi-select-group' });
+
+  // Preserve manifest order of options (keywords[]) so the layout is stable.
+  for (const entry of keywords) {
+    const itemLabel = el('label', { class: 'multi-select-item' }) as HTMLLabelElement;
+    const cb = el('input', { class: 'multi-select-checkbox' }) as HTMLInputElement;
+    cb.type = 'checkbox';
+    cb.checked = selected.has(entry.keyword);
+    cb.addEventListener('change', () => {
+      if (cb.checked) {
+        selected.add(entry.keyword);
+      } else {
+        selected.delete(entry.keyword);
+      }
+      // Rebuild the comma-separated value from the keyword file's order so the
+      // persisted string is canonical and stable regardless of click order.
+      const next = keywords
+        .map((e) => e.keyword)
+        .filter((kw) => selected.has(kw))
+        .join(', ');
+      state.settingsValues[key] = next;
+      persistSettings();
+    });
+    const txt = el('span', { class: 'multi-select-label' });
+    txt.textContent = entry.keyword;
+    itemLabel.appendChild(cb);
+    itemLabel.appendChild(txt);
+    group.appendChild(itemLabel);
+  }
+
+  parent.appendChild(group);
+}
+
+/**
+ * Render the editor for a `keyValue` field. The committed value lives in
+ * `state.settingsValues[scopedKey]` as a `Record<string, string>`. The in-
+ * memory draft lives in `state.keyValueDrafts[scopedKey]`; every mutation
+ * auto-saves immediately (no separate Save button).
+ *
+ * Migration: if the committed value is a string (legacy comma-separated
+ * allowlist) or any non-plain-object shape, it is silently treated as empty.
+ *
+ * Value-cell quick-pick: when `field.valueSource === 'linqpad-connections'`,
+ * each value cell renders a `<select>` of detected connections (dropdown only
+ * — no free-form override). If the LINQPad probe failed, the value cell is
+ * left empty and a banner above the table explains the situation.
+ */
+function appendKeyValueEditor(
+  parent: HTMLElement,
+  head: HTMLElement,
+  moduleId: string,
+  settingKey: string,
+  field: SettingsField,
+  current: unknown,
+): void {
+  const key = scopedKey(moduleId, settingKey);
+  const richShape = field.optionalEnabled === true;
+
+  // If the stored value is a string (legacy) or any non-plain-object shape,
+  // silently treat as empty and start fresh. When `optionalEnabled` is true,
+  // the per-key value can be either a `{ value, enabled }` object (current
+  // shape) or a bare string (legacy/migrating); coerce strings into the
+  // richer shape with `enabled: true` so a default-shape manifest still
+  // round-trips cleanly the first time the panel is opened.
+  if (state.keyValueDrafts[key] === undefined) {
+    if (richShape) {
+      const seed: Record<string, { value: string; enabled: boolean }> = {};
+      if (current && typeof current === 'object' && !Array.isArray(current)) {
+        for (const [k, v] of Object.entries(current as Record<string, unknown>)) {
+          if (v && typeof v === 'object' && !Array.isArray(v)) {
+            const obj = v as { value?: unknown; enabled?: unknown };
+            seed[k] = {
+              value: typeof obj.value === 'string' ? obj.value : '',
+              enabled: obj.enabled !== false,
+            };
+          } else if (typeof v === 'string') {
+            seed[k] = { value: v, enabled: true };
+          } else if (v !== undefined && v !== null) {
+            seed[k] = { value: String(v), enabled: true };
+          }
+        }
+      }
+      state.keyValueDrafts[key] = seed;
+    } else {
+      const seed: Record<string, string> = {};
+      if (current && typeof current === 'object' && !Array.isArray(current)) {
+        for (const [k, v] of Object.entries(current as Record<string, unknown>)) {
+          if (typeof v === 'string') seed[k] = v;
+          else if (v !== undefined && v !== null) seed[k] = String(v);
+        }
+      }
+      state.keyValueDrafts[key] = seed;
+    }
+  }
+  const draft = state.keyValueDrafts[key]!;
+
+  // Auto-save: every mutation immediately persists the draft.
+  const persistDraft = (): void => {
+    state.settingsValues[key] = { ...draft };
+    persistSettings();
+  };
+
+  // ── Table of existing entries ──────────────────────────────────────
+  const tableWrap = el('div', { class: 'kv-table-wrap' });
+  const table = el('table', { class: 'kv-table' });
+  const thead = el('thead');
+  const headRow = el('tr');
+  if (richShape) {
+    const enHead = el('th', { class: 'kv-enabled-head' });
+    enHead.textContent = 'Enabled';
+    headRow.appendChild(enHead);
+  }
+  // The `kv-key-head` class anchors a 30% width on the Key column header.
+  // Under `table-layout: fixed`, column widths come from the first row's
+  // cells — putting the width on the `<th>` (not the body `<td>`) is what
+  // actually constrains the column. The Value column header is left
+  // unconstrained so it absorbs whatever the fixed-pixel columns leave behind.
+  const kHead = el('th', { class: 'kv-key-head' });
+  kHead.textContent = field.keyLabel ?? 'Key';
+  const vHead = el('th');
+  vHead.textContent = field.valueLabel ?? 'Value';
+  const actionHead = el('th', { class: 'kv-actions-head' });
+  actionHead.textContent = '';
+  headRow.appendChild(kHead);
+  headRow.appendChild(vHead);
+  headRow.appendChild(actionHead);
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = el('tbody');
+  const entries = Object.entries(draft);
+  const colSpan = richShape ? 4 : 3;
+  if (entries.length === 0) {
+    const emptyRow = el('tr', { class: 'kv-empty-row' });
+    const td = el('td');
+    td.setAttribute('colspan', String(colSpan));
+    td.textContent = 'No entries. Add one below.';
+    emptyRow.appendChild(td);
+    tbody.appendChild(emptyRow);
+  } else {
+    for (const [rowKey, rowVal] of entries) {
+      tbody.appendChild(renderKeyValueRow(field, draft, rowKey, rowVal, persistDraft));
+    }
+  }
+  table.appendChild(tbody);
+
+  // ── Add-new-entry row (lives inside the table as <tfoot>) ──────────
+  // Moving the add row into the table itself means its cells inherit the
+  // exact column widths from `table-layout: fixed`, so the seams between
+  // Command/Description/Action columns line up by construction — no
+  // hand-tuned grid math required (which previously drifted ~28px short
+  // of the table's Description column right edge).
+  table.appendChild(renderKeyValueAddRow(field, draft, persistDraft));
+
+  // ── LINQPad banner (when applicable) ───────────────────────────────
+  // The banner sits ABOVE the table when LINQPad discovery fails so the
+  // user sees the failure mode before encountering the (now-disabled)
+  // value cell in the tfoot add row.
+  const wantsLinqpad = field.valueSource === 'linqpad-connections';
+  const lp = state.linqpadConnections;
+  if (wantsLinqpad && (lp.status === 'not-installed' || lp.status === 'error')) {
+    parent.appendChild(renderLinqpadBanner(lp));
+  }
+
+  tableWrap.appendChild(table);
+  parent.appendChild(tableWrap);
+}
+
+/** Render a single committed-entry row: optional enabled checkbox + key + value + delete. */
+function renderKeyValueRow(
+  field: SettingsField,
+  draft: Record<string, string> | Record<string, { value: string; enabled: boolean }>,
+  rowKey: string,
+  rowVal: string | { value: string; enabled: boolean },
+  persist: () => void,
+): HTMLElement {
+  const tr = el('tr', { class: 'kv-row' });
+  const richShape = field.optionalEnabled === true;
+
+  // Surface the user-facing string (description text) regardless of which
+  // shape the draft is in. When richShape is true, rowVal is always an
+  // object; when not, it's always a string. We coerce defensively.
+  const displayValue: string =
+    richShape && rowVal && typeof rowVal === 'object'
+      ? ((rowVal as { value?: unknown }).value as string) ?? ''
+      : typeof rowVal === 'string'
+        ? rowVal
+        : '';
+  const enabledState: boolean =
+    richShape && rowVal && typeof rowVal === 'object'
+      ? ((rowVal as { enabled?: unknown }).enabled !== false)
+      : true;
+
+  if (richShape) {
+    const enTd = el('td', { class: 'kv-cell kv-cell-enabled' });
+    const cb = el('input', { class: 'kv-enabled-checkbox' }) as HTMLInputElement;
+    cb.type = 'checkbox';
+    cb.checked = enabledState;
+    cb.setAttribute('aria-label', `Enable ${rowKey}`);
+    cb.addEventListener('change', () => {
+      const richDraft = draft as Record<string, { value: string; enabled: boolean }>;
+      const existing = richDraft[rowKey] ?? { value: '', enabled: true };
+      richDraft[rowKey] = { value: existing.value ?? '', enabled: cb.checked };
+      persist();
+    });
+    enTd.appendChild(cb);
+    tr.appendChild(enTd);
+  }
+
+  const kTd = el('td', { class: 'kv-cell kv-cell-key' });
+  const kInp = el('input', { class: 'setting-input kv-input' }) as HTMLInputElement;
+  kInp.type = 'text';
+  kInp.value = rowKey;
+  kInp.addEventListener('change', () => {
+    const newKey = kInp.value.trim();
+    if (newKey === rowKey) return;
+    if (newKey.length === 0) {
+      // Reject empty: roll back the input.
+      kInp.value = rowKey;
+      return;
+    }
+    if (newKey in draft && newKey !== rowKey) {
+      // Collision: rolling back keeps the visible state in sync with draft.
+      kInp.value = rowKey;
+      return;
+    }
+    if (richShape) {
+      const richDraft = draft as Record<string, { value: string; enabled: boolean }>;
+      const existing = richDraft[rowKey] ?? { value: '', enabled: true };
+      delete richDraft[rowKey];
+      richDraft[newKey] = existing;
+    } else {
+      const plainDraft = draft as Record<string, string>;
+      const v = plainDraft[rowKey] ?? '';
+      delete plainDraft[rowKey];
+      plainDraft[newKey] = v;
+    }
+    persist();
+    render();
+  });
+  kTd.appendChild(kInp);
+  tr.appendChild(kTd);
+
+  const vTd = el('td', { class: 'kv-cell kv-cell-value' });
+  vTd.appendChild(renderValueCell(field, displayValue, (next) => {
+    if (richShape) {
+      const richDraft = draft as Record<string, { value: string; enabled: boolean }>;
+      const existing = richDraft[rowKey] ?? { value: '', enabled: true };
+      richDraft[rowKey] = { value: next, enabled: existing.enabled !== false };
+    } else {
+      (draft as Record<string, string>)[rowKey] = next;
+    }
+    persist();
+  }));
+  tr.appendChild(vTd);
+
+  const aTd = el('td', { class: 'kv-cell kv-cell-actions' });
+  const del = el('button', {
+    class: 'icon-button kv-delete-button',
+    type: 'button',
+    'aria-label': `Delete entry ${rowKey}`,
+    title: 'Delete',
+  }) as HTMLButtonElement;
+  del.innerHTML = TRASH_ICON_SVG;
+  del.addEventListener('click', () => {
+    delete (draft as Record<string, unknown>)[rowKey];
+    persist();
+    render();
+  });
+  aTd.appendChild(del);
+  tr.appendChild(aTd);
+
+  return tr;
+}
+
+/**
+ * Render the add-entry row beneath the existing rows. Returns a `<tfoot>`
+ * element appended directly to the table so its cells inherit the table's
+ * fixed column widths — Command/Description/Add cells line up with the
+ * Command/Description/Actions columns of the data rows above by
+ * construction, with no grid math to maintain.
+ *
+ * Cell layout mirrors the data rows:
+ *   [enabled placeholder (rich only)] [key input] [value input] [Add button]
+ */
+function renderKeyValueAddRow(
+  field: SettingsField,
+  draft: Record<string, string> | Record<string, { value: string; enabled: boolean }>,
+  persist: () => void,
+): HTMLElement {
+  const richShape = field.optionalEnabled === true;
+  const tfoot = el('tfoot', { class: 'kv-add-foot' });
+  const tr = el('tr', { class: 'kv-add-row' });
+
+  if (richShape) {
+    // Empty leading cell — new entries default to enabled, so no checkbox.
+    // The `kv-cell-enabled` class keeps the column width aligned with the
+    // table's Enabled column under `table-layout: fixed`.
+    const enTd = el('td', { class: 'kv-cell kv-cell-enabled kv-add-cell kv-add-cell--enabled' });
+    tr.appendChild(enTd);
+  }
+
+  const kTd = el('td', { class: 'kv-cell kv-cell-key kv-add-cell' });
+  const kField = el('div', { class: 'kv-add-field' });
+  const kLabel = el('label', { class: 'kv-add-label' });
+  kLabel.textContent = field.keyLabel ?? 'Key';
+  const kInp = el('input', { class: 'setting-input kv-input' }) as HTMLInputElement;
+  kInp.type = 'text';
+  kInp.placeholder = field.keyLabel ?? 'Key';
+  kField.appendChild(kLabel);
+  kField.appendChild(kInp);
+  kTd.appendChild(kField);
+  tr.appendChild(kTd);
+
+  const vTd = el('td', { class: 'kv-cell kv-cell-value kv-add-cell' });
+  const vField = el('div', { class: 'kv-add-field kv-add-field--value' });
+  const vLabel = el('label', { class: 'kv-add-label' });
+  vLabel.textContent = field.valueLabel ?? 'Value';
+  vField.appendChild(vLabel);
+
+  // Use a draft-internal mutable string for the new value so renderValueCell
+  // can call back into our local state without touching `draft` until Add.
+  let pendingValue = '';
+  vField.appendChild(renderValueCell(field, '', (next) => {
+    pendingValue = next;
+  }));
+  vTd.appendChild(vField);
+  tr.appendChild(vTd);
+
+  const aTd = el('td', { class: 'kv-cell kv-cell-actions kv-add-cell kv-add-cell--actions' });
+  const addBtn = el('button', { class: 'primary kv-add-button', type: 'button' }) as HTMLButtonElement;
+  addBtn.textContent = 'Add';
+  addBtn.addEventListener('click', () => {
+    const k = kInp.value.trim();
+    const v = pendingValue.trim();
+    if (k.length === 0) return;
+    if (!field.optionalValue && v.length === 0) return;
+    // Existing-key behavior: overwrite the value rather than error.
+    if (richShape) {
+      (draft as Record<string, { value: string; enabled: boolean }>)[k] = {
+        value: v,
+        enabled: true,
+      };
+    } else {
+      (draft as Record<string, string>)[k] = v;
+    }
+    persist();
+    render();
+  });
+  aTd.appendChild(addBtn);
+  tr.appendChild(aTd);
+
+  tfoot.appendChild(tr);
+  return tfoot;
+}
+
+/**
+ * Render the value cell of a keyValue row. For LINQPad-sourced fields, this
+ * is a select-of-connections (dropdown only — no free-form override). For
+ * non-LINQPad fields, it's a plain text input.
+ *
+ * `onChange(next)` is called every time the effective value changes — the
+ * caller decides whether to persist into the draft or hold off (the add-row
+ * case holds off until the Add button is clicked).
+ */
+function renderValueCell(
+  field: SettingsField,
+  initial: string,
+  onChange: (next: string) => void,
+): HTMLElement {
+  const wrap = el('div', { class: 'kv-value-cell' });
+
+  if (field.valueSource === 'linqpad-connections') {
+    const lp = state.linqpadConnections;
+    // When the probe failed entirely the banner (above the table) already
+    // explains the situation; render nothing in the value cell.
+    const showDropdown = lp.status === 'ok' || lp.status === 'loading';
+
+    if (showDropdown) {
+      const select = el('select', { class: 'setting-input kv-select' }) as HTMLSelectElement;
+      // Placeholder option keeps the select usable before the user picks.
+      const placeholder = el('option') as HTMLOptionElement;
+      placeholder.value = '';
+      placeholder.textContent = lp.status === 'loading' ? 'Loading…' : 'Connection';
+      select.appendChild(placeholder);
+      for (const conn of lp.list) {
+        const opt = el('option') as HTMLOptionElement;
+        opt.value = conn;
+        opt.textContent = conn;
+        if (conn === initial) opt.selected = true;
+        select.appendChild(opt);
+      }
+      select.addEventListener('change', () => {
+        if (select.value === '') return;
+        onChange(select.value);
+      });
+      wrap.appendChild(select);
+    }
+
+    return wrap;
+  }
+
+  // Generic keyValue: plain text input.
+  const inp = el('input', { class: 'setting-input kv-input' }) as HTMLInputElement;
+  inp.type = 'text';
+  inp.value = initial;
+  inp.addEventListener('input', () => {
+    onChange(inp.value);
+  });
+  wrap.appendChild(inp);
+  return wrap;
+}
+
+/**
+ * Render the LINQPad-not-installed / error banner. Shows the host's reported
+ * error string plus two affordances: copy install prompt, configure path.
+ */
+function renderLinqpadBanner(
+  lp: UIState['linqpadConnections'],
+): HTMLElement {
+  const banner = el('div', { class: 'kv-banner' });
+  const heading = el('div', { class: 'kv-banner-heading' });
+  heading.textContent =
+    lp.status === 'not-installed'
+      ? 'LINQPad connections file not found'
+      : 'LINQPad connections file could not be read';
+  banner.appendChild(heading);
+
+  const detail = el('div', { class: 'kv-banner-detail' });
+  detail.textContent =
+    lp.error ??
+    'Install LINQPad and define at least one connection, then refresh.';
+  banner.appendChild(detail);
+
+  const actions = el('div', { class: 'kv-banner-actions' });
+
+  const copyBtn = el('button', { class: 'primary', type: 'button' }) as HTMLButtonElement;
+  copyBtn.textContent = 'Copy install prompt';
+  copyBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'copyLinqpadInstallPrompt' });
+  });
+  actions.appendChild(copyBtn);
+
+  const configBtn = el('button', { class: 'kv-banner-link', type: 'button' }) as HTMLButtonElement;
+  configBtn.textContent = 'Configure path…';
+  configBtn.addEventListener('click', () => {
+    vscode.postMessage({
+      type: 'openVSCodeSettings',
+      query: 'nomeda.linqpadConnectionsPath',
+    });
+  });
+  actions.appendChild(configBtn);
+
+  banner.appendChild(actions);
+  return banner;
+}
+
+
+/**
+ * Optional selection-mode binding for `appendKeywordsTable`. When provided,
+ * the table renders a leftmost "Select" column with one checkbox per row.
+ * `selected` seeds the initial checked state; `onToggle` fires on each change
+ * with the keyword and its new checked value — the caller is responsible for
+ * rebuilding the canonical persisted value and calling persistSettings().
+ */
+interface KeywordsTableSelection {
+  selected: Set<string>;
+  onToggle: (keyword: string, next: boolean) => void;
+}
+
+/**
+ * Render the Keywords table for a setting that ships a `keywordsPath`. No-op
+ * when the field has no keywordsPath. While the payload is in flight (no cache
+ * entry yet), shows a "Loading…" placeholder. On error, surfaces the error
+ * string inline so the developer can fix the file. On success, renders a
+ * compact 2-column table with monospace keyword cells.
+ *
+ * When `selection` is provided (multi-select fields), the table grows a
+ * leftmost "Select" column and each row becomes a clickable toggle. The saved
+ * value remains a comma-separated string in canonical keyword order — that
+ * rebuild happens in the caller's `onToggle` so this function stays display-
+ * only.
+ */
+function appendKeywordsTable(
+  parent: HTMLElement,
+  moduleId: string,
+  settingKey: string,
+  field: SettingsField,
+  selection?: KeywordsTableSelection,
+): void {
+  if (!field.keywordsPath) return;
+
+  const block = el('div', { class: 'setting-keywords' });
+  const heading = el('div', { class: 'setting-keywords-heading' });
+  heading.textContent = 'Keywords';
+  block.appendChild(heading);
+
+  const cacheKey = settingKeywordsCacheKey(moduleId, settingKey);
+  const error = state.settingKeywordErrors[cacheKey];
+  const keywords = state.settingKeywords[cacheKey];
+
+  if (error) {
+    block.appendChild(
+      textEl('div', `Could not load keywords: ${error}`, 'setting-keywords-error'),
+    );
+    parent.appendChild(block);
+    return;
+  }
+  if (keywords === undefined) {
+    block.appendChild(textEl('div', 'Loading…', 'setting-keywords-empty'));
+    parent.appendChild(block);
+    return;
+  }
+  if (keywords.length === 0) {
+    block.appendChild(
+      textEl('div', 'No keywords defined.', 'setting-keywords-empty'),
+    );
+    parent.appendChild(block);
+    return;
+  }
+
+  const table = el('table', { class: 'setting-keywords-table' });
+  const thead = el('thead');
+  const headRow = el('tr');
+  if (selection) {
+    const selectHead = el('th', { class: 'setting-keywords-select', scope: 'col' });
+    selectHead.textContent = 'Select';
+    headRow.appendChild(selectHead);
+  }
+  const keywordHead = el('th', { scope: 'col' });
+  keywordHead.textContent = 'Keyword';
+  const purposeHead = el('th', { scope: 'col' });
+  purposeHead.textContent = 'Purpose';
+  headRow.appendChild(keywordHead);
+  headRow.appendChild(purposeHead);
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  // Slugify a string into a safe id fragment. Non-`[A-Za-z0-9_-]` characters
+  // collapse to '-'. Combined with moduleId + settingKey + keyword, this gives
+  // a deterministic, document-unique id for ARIA association.
+  const idSafe = (s: string): string => s.replace(/[^A-Za-z0-9_-]/g, '-');
+
+  const tbody = el('tbody');
+  for (const entry of keywords) {
+    const row = el('tr');
+    const kwId = `kwlbl-${idSafe(moduleId)}-${idSafe(settingKey)}-${idSafe(entry.keyword)}`;
+    const purposeId = `kwdesc-${idSafe(moduleId)}-${idSafe(settingKey)}-${idSafe(entry.keyword)}`;
+
+    if (selection) {
+      const selectCell = el('td', { class: 'setting-keywords-select' });
+      const cb = el('input', { class: 'setting-keywords-checkbox' }) as HTMLInputElement;
+      cb.type = 'checkbox';
+      cb.checked = selection.selected.has(entry.keyword);
+      cb.setAttribute('aria-labelledby', kwId);
+      cb.setAttribute('aria-describedby', purposeId);
+      cb.addEventListener('change', () => {
+        selection.onToggle(entry.keyword, cb.checked);
+      });
+      selectCell.appendChild(cb);
+      row.appendChild(selectCell);
+
+      // Row-level click affordance: clicking anywhere outside the checkbox
+      // itself toggles it. We delegate to cb.click() (rather than mutating
+      // .checked directly) so the `change` listener fires through the normal
+      // event flow.
+      row.classList.add('setting-keywords-row-selectable');
+      row.addEventListener('click', (event) => {
+        const target = event.target as HTMLElement | null;
+        if (target === cb) return;
+        cb.click();
+      });
+    }
+
+    const kw = el('td', { class: 'setting-keywords-kw', id: kwId });
+    kw.textContent = entry.keyword;
+    const purpose = el('td', { class: 'setting-keywords-purpose', id: purposeId });
+    purpose.textContent = entry.purpose;
+    row.appendChild(kw);
+    row.appendChild(purpose);
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  block.appendChild(table);
+  parent.appendChild(block);
 }
 
 /** Persist the current settingsValues to the host. */

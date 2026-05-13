@@ -3,7 +3,12 @@
 // Contributions are the surfaces a module can extend: prompts, agents,
 // settings, settings-panel UI sections, and tools the agent can call.
 
-export type AgentTarget = 'tpm' | 'swe' | 'qa' | string;
+// 'tpm' | 'swe' | 'qa' name a specific agent's composed prompt; 'all' is a
+// fan-out target — a fragment with target 'all' is appended to every per-agent
+// prompt. The `(string & {})` fallback preserves room for module-defined custom
+// agents declared via `contributes.agents[]` while keeping IDE autocomplete on
+// the four canonical values.
+export type AgentTarget = 'tpm' | 'swe' | 'qa' | 'all' | (string & {});
 
 export interface PromptFragment {
   /** Which agent's composed prompt this fragment is appended to. */
@@ -24,16 +29,75 @@ export type SettingsFieldType =
   | 'number'
   | 'boolean'
   | 'enum'
-  | 'path';
+  | 'path'
+  | 'keyValue';
+
+/**
+ * Optional source identifier for `keyValue` field value-cell dropdown
+ * populations. The webview consults this to decide whether to request a
+ * host-provided list of candidate values to surface as a quick-pick alongside
+ * the free-form text override input. Currently only `"linqpad-connections"`
+ * is recognized — the host probes the LINQPad ConnectionsV2.xml file and
+ * returns parsed connection names.
+ */
+export type SettingsValueSource = 'linqpad-connections';
 
 export interface SettingsField {
   type: SettingsFieldType;
   label: string;
   description?: string;
+  /**
+   * Default value for the field. For `type === 'keyValue'` the value is a
+   * `Record<string, string>` — user-defined keys mapped to string values
+   * (e.g. project key → connection name). Empty `{}` is the conventional
+   * "no entries" default.
+   */
   default?: unknown;
   required?: boolean;
   /** Options list — only meaningful when type === 'enum'. */
   options?: string[];
+  /**
+   * Optional path (relative to the module root) to a JSON file documenting the
+   * finite vocabulary of canonical keywords this setting accepts. The webview
+   * renders the file's contents as a Keyword/Purpose table under the input;
+   * agents read the same file for full reference understanding. File shape:
+   *   `[{ "keyword": string, "purpose": string }, ...]`
+   * The value present in the user's parameter is still the only authorized
+   * subset — the keywords file is documentation, not policy.
+   */
+  keywordsPath?: string;
+  /**
+   * When true (only meaningful for `type === 'string'` paired with
+   * `keywordsPath`), the webview renders the field as a checkbox group instead
+   * of a text input. Each option in the group corresponds to one entry from
+   * the keywords file. The saved value is still a comma-separated string —
+   * concatenation of the currently-checked keywords — so agents and the
+   * composer see no schema change. Auto-saves on every check/uncheck (no
+   * separate save button). If the keywords file fails to load or is empty,
+   * the webview falls back to the standard text input.
+   */
+  multiSelect?: boolean;
+  /**
+   * For `type === 'keyValue'`: identifies a host-known source of candidate
+   * values shown in the value-cell dropdown. Free-form text override is
+   * always permitted regardless of this setting.
+   */
+  valueSource?: SettingsValueSource;
+  /** Optional UI label for the key column of a `keyValue` table. */
+  keyLabel?: string;
+  /** Optional UI label for the value column of a `keyValue` table. */
+  valueLabel?: string;
+  /**
+   * When the field type is keyValue, allow rows to be added with an empty
+   * value. Default false.
+   */
+  optionalValue?: boolean;
+  /**
+   * When true and the field type is keyValue, each row carries an enabled
+   * flag. Disabled rows persist but are filtered out of the agent-facing
+   * parameter value at compose time. Default false.
+   */
+  optionalEnabled?: boolean;
 }
 
 export type SettingsSchema = Record<string, SettingsField>;

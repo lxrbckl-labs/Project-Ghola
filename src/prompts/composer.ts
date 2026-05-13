@@ -3,7 +3,7 @@ import * as path from 'path';
 import type * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
 import type { ModuleHandle } from '../modules/handle';
-import type { SettingsSchema } from '../manifest/types';
+import type { SettingsField, SettingsSchema } from '../manifest/types';
 
 /**
  * Stateless composer: pure function from (agentId, settings) → composed prompt string.
@@ -87,7 +87,12 @@ export class PromptComposer {
       if (id.startsWith('core.')) continue;
 
       const fragments = handle.manifest.contributes?.promptFragments ?? [];
-      const targeted = fragments.filter((f) => f.target === agentId);
+      // `target: "all"` fans out to every agent — include those alongside the
+      // agent-specific fragments so a shared module (e.g. tool.git) appears
+      // in tpm, swe, and qa manifests from a single declaration.
+      const targeted = fragments.filter(
+        (f) => f.target === agentId || f.target === 'all',
+      );
       if (targeted.length === 0) continue;
 
       for (const fragment of targeted) {
@@ -135,10 +140,60 @@ export class PromptComposer {
 
     const out: string[] = ['  - parameters:'];
     for (const key of Object.keys(overrides)) {
-      const rendered = this.renderValue(overrides[key]);
+      const field = schema ? schema[key] : undefined;
+      const projected = this.projectValueForAgent(field, overrides[key]);
+      const rendered = this.renderValue(projected);
       out.push(`    - ${key}: ${rendered}`);
     }
     return out;
+  }
+
+  /**
+   * Project a stored parameter value into the shape an agent should see.
+   *
+   * Today only `keyValue` fields with `optionalEnabled: true` need projection:
+   * the storage shape is `Record<string, { value: string; enabled: boolean }>`
+   * but the agent should see the same simple `Record<string, string>` it sees
+   * for plain keyValue fields, with disabled entries omitted.
+   *
+   * Falls back to runtime-shape detection when no field definition is
+   * available (e.g. settings stored for an unknown key): if the first value
+   * looks like a `{ value, enabled }` object, treat as the richer shape.
+   */
+  private projectValueForAgent(
+    field: SettingsField | undefined,
+    value: unknown,
+  ): unknown {
+    if (value === null || value === undefined) return value;
+    if (typeof value !== 'object' || Array.isArray(value)) return value;
+
+    const useRichShape = field
+      ? field.type === 'keyValue' && field.optionalEnabled === true
+      : this.looksLikeRichKeyValue(value as Record<string, unknown>);
+
+    if (!useRichShape) return value;
+
+    const entries = Object.entries(value as Record<string, unknown>);
+    const projected: Record<string, string> = {};
+    for (const [k, v] of entries) {
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const obj = v as { value?: unknown; enabled?: unknown };
+        if (obj.enabled === false) continue;
+        projected[k] = typeof obj.value === 'string' ? obj.value : '';
+      }
+    }
+    return projected;
+  }
+
+  /** Heuristic: does this object look like Record<string, {value, enabled}>? */
+  private looksLikeRichKeyValue(obj: Record<string, unknown>): boolean {
+    for (const v of Object.values(obj)) {
+      if (v && typeof v === 'object' && !Array.isArray(v) && 'value' in v) {
+        return true;
+      }
+      return false;
+    }
+    return false;
   }
 
   private renderValue(value: unknown): string {

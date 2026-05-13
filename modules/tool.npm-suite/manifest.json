@@ -1,0 +1,34 @@
+{
+  "id": "tool.npm-suite",
+  "name": "NPM Suite",
+  "version": "0.1.0",
+  "description": "Manage the allowlist of npm and Angular CLI commands that agents may run inside this project.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "npm.md" }
+    ],
+    "settings": {
+      "allowedCommands": {
+        "type": "keyValue",
+        "label": "Allowed commands",
+        "description": "Commands the agent is permitted to run from the project root. Type a command (e.g. npm test, ng lint) plus an optional note about when it should be used, then click Add. Anything not on this list is off-limits. Delete an entry to revoke permission. Use the exact command form you want allowed — agents match on string equality.",
+        "default": {
+          "npm test": { "value": "Run the project's test script.", "enabled": true },
+          "npm run lint": { "value": "Run the lint script if present.", "enabled": true },
+          "npm run typecheck": { "value": "Run the typecheck script if present.", "enabled": true },
+          "npm run build": { "value": "Build the project. Safe — produces artifacts in dist/ or build/ but does not modify source.", "enabled": true },
+          "npm ls": { "value": "List installed dependency tree. Read-only.", "enabled": true },
+          "npm outdated": { "value": "Show packages with newer versions available. Read-only.", "enabled": true },
+          "ng test": { "value": "Run Angular CLI tests.", "enabled": true },
+          "ng lint": { "value": "Run Angular CLI lint.", "enabled": true },
+          "ng build": { "value": "Build the Angular project. Safe — produces artifacts in dist/ but does not modify source.", "enabled": true }
+        },
+        "keyLabel": "Command",
+        "valueLabel": "Description",
+        "optionalValue": true,
+        "optionalEnabled": true
+      }
+    }
+  }
+}

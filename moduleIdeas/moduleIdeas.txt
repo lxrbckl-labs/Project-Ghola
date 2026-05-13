@@ -1,0 +1,3 @@
+- ssh access module
+- schedule to have qa learn from comments in PRs, log all comments from PRs in file
+- docker ability module

@@ -1,0 +1,10 @@
+[
+  { "keyword": "build", "purpose": "Compile the project. Safe and non-mutating to source. Frequent dev-loop operation." },
+  { "keyword": "test", "purpose": "Run the test suite. Read-only against source; may write test results to bin/. Common SWE/QA tool." },
+  { "keyword": "restore", "purpose": "Restore NuGet packages. Writes to obj/ and possibly modifies package lock; usually benign." },
+  { "keyword": "format", "purpose": "Apply code formatting. Modifies source files according to .editorconfig. Reversible." },
+  { "keyword": "run", "purpose": "Build and execute the application. Side-effects depend on the app (DB writes, file I/O). Use cautiously." },
+  { "keyword": "publish", "purpose": "Produce release artifacts. Writes to bin/Release or publish folder; can take time." },
+  { "keyword": "ef", "purpose": "Entity Framework migrations and DB operations. HIGH RISK — can alter database schema. Avoid in production-pointing config." },
+  { "keyword": "nuget", "purpose": "NuGet package management (push, delete, etc.). Affects shared package state. Avoid unless intentional." }
+]

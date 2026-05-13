@@ -2,11 +2,19 @@
   "id": "tool.fastpath-check",
   "name": "Fast Path Check",
   "version": "0.1.0",
-  "description": "Proactive check at session start — detects whether the current work repo lives on a slow Windows filesystem path (/mnt/c/...) and advises the user to relocate to a WSL-native path (~/projects/...) for ~5-6x I/O speedup.",
+  "description": "Advises TPM at session start when the workspace lives on a slow /mnt/c/... path so the user can move to a WSL-native location for faster I/O.",
   "proactive": true,
   "contributes": {
     "promptFragments": [
       { "target": "tpm", "contentPath": "fastpath-check.md" }
-    ]
+    ],
+    "settings": {
+      "fastpathDirectory": {
+        "type": "string",
+        "label": "Fast Path Directory",
+        "description": "Optional override for the WSL-native target directory the session launcher cd's into when this module is enabled. Leave blank to let the launcher compute it from the current workspace path (e.g. /mnt/c/Users/<user>/foo → ~/projects/foo).",
+        "default": ""
+      }
+    }
   }
 }

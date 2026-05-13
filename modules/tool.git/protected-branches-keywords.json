@@ -1,0 +1,6 @@
+[
+  { "keyword": "main", "purpose": "Modern GitHub/GitLab default. Block direct pushes; force PR workflow." },
+  { "keyword": "master", "purpose": "Legacy default branch. Same protection rationale as main." },
+  { "keyword": "develop", "purpose": "Common GitFlow integration branch. Often the merge target for feature branches." },
+  { "keyword": "trunk", "purpose": "SVN convention or trunk-based development branches. Treat as authoritative." }
+]

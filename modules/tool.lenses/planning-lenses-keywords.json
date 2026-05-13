@@ -1,0 +1,7 @@
+[
+  { "keyword": "architecture", "purpose": "Module boundaries, dependency direction, persistence model, API surface decisions. The structural shape of the work." },
+  { "keyword": "implementation", "purpose": "Concrete file/function changes, error handling strategy, integration points, libraries to use." },
+  { "keyword": "test-strategy", "purpose": "Unit, integration, end-to-end coverage plan. What to assert and where the test boundary lives." },
+  { "keyword": "migration", "purpose": "Data migration, state-machine transitions, backwards compatibility, rollback plan. Use when changing persisted shapes." },
+  { "keyword": "rollout", "purpose": "Feature flags, gradual rollout, observability hooks, runbooks. Use for high-risk launches." }
+]

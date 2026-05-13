@@ -1,14 +1,23 @@
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { validateManifest } from '../manifest/validator';
 import type { ModuleLoader } from '../modules/loader';
 import type { PromptComposer } from '../prompts/composer';
+import { resolveAgentPromptFilePath } from '../session/prompt-file';
 import type { ConfigurationsStore } from './configurations-store';
+import {
+  readLinqpadConnections,
+  resolveLinqpadConnectionsPath,
+} from './linqpad-connections';
 import type {
   HostToWebviewMessage,
   ModuleSummary,
   NamedConfiguration,
   PromptFragmentDetail,
+  SettingKeywordEntry,
   WebviewToHostMessage,
 } from './protocol';
 
@@ -29,6 +38,7 @@ export class SettingsPanel implements vscode.Disposable {
     private readonly loader: ModuleLoader,
     private readonly composer: PromptComposer,
     private readonly configurations: ConfigurationsStore,
+    private readonly resolveModulesDir: () => string,
     private readonly logger?: vscode.OutputChannel,
   ) {
     this.disposables.push(
@@ -49,6 +59,12 @@ export class SettingsPanel implements vscode.Disposable {
       vscode.workspace.onDidChangeConfiguration((ev) => {
         if (ev.affectsConfiguration('nomeda')) {
           this.postSettings();
+        }
+        // When the LINQPad connections override path changes, re-probe and
+        // re-broadcast so any open keyValue dropdowns refresh without a manual
+        // refresh click.
+        if (ev.affectsConfiguration('nomeda.linqpadConnectionsPath')) {
+          this.broadcastLinqpadConnections();
         }
       }),
     );
@@ -132,6 +148,12 @@ export class SettingsPanel implements vscode.Disposable {
       case 'ready':
         await this.postModules();
         this.postConfigurations();
+        // If any enabled module declares a keyValue setting that draws from
+        // the LINQPad connections source, eagerly probe + broadcast now so the
+        // dropdown is populated by the time the user navigates to it.
+        if (this.anyEnabledModuleNeedsLinqpad()) {
+          this.broadcastLinqpadConnections();
+        }
         break;
       case 'getModules':
         await this.postModules();
@@ -158,11 +180,20 @@ export class SettingsPanel implements vscode.Disposable {
       case 'reloadModules':
         await vscode.commands.executeCommand('nomeda.reloadModules');
         break;
+      case 'copyNewModulePrompt':
+        await this.copyNewModulePrompt();
+        break;
+      case 'uploadModule':
+        await this.uploadModule();
+        break;
       case 'openSession':
         await vscode.commands.executeCommand('nomeda.openSession');
         break;
       case 'requestModuleDetail':
         await this.postModuleDetail(msg.moduleId);
+        break;
+      case 'requestSettingKeywords':
+        await this.postSettingKeywords(msg.moduleId, msg.settingKey);
         break;
       case 'updateConfiguration':
         await vscode.workspace
@@ -187,6 +218,15 @@ export class SettingsPanel implements vscode.Disposable {
       case 'setDefaultConfiguration':
         await this.setDefaultConfiguration(msg.id);
         break;
+      case 'requestLinqpadConnections':
+        this.broadcastLinqpadConnections();
+        break;
+      case 'copyLinqpadInstallPrompt':
+        await this.copyLinqpadInstallPrompt();
+        break;
+      case 'openVSCodeSettings':
+        await vscode.commands.executeCommand('workbench.action.openSettings', msg.query);
+        break;
       default:
         this.logger?.appendLine(`[panel] unknown message: ${JSON.stringify(msg)}`);
     }
@@ -194,15 +234,29 @@ export class SettingsPanel implements vscode.Disposable {
 
   private async postModules(): Promise<void> {
     if (!this.panel) return;
-    const modules: ModuleSummary[] = this.loader.getAll().map((h) => ({
-      id: h.manifest.id,
-      name: h.manifest.name,
-      version: h.manifest.version,
-      description: h.manifest.description,
-      enabled: h.isEnabled,
-      proactive: h.manifest.proactive,
-      contributes: h.manifest.contributes,
-    }));
+    const modules: ModuleSummary[] = this.loader.getAll().map((h) => {
+      const frags = h.manifest.contributes?.promptFragments ?? [];
+      const targetSet = new Set<string>();
+      for (const f of frags) {
+        if (f.target === 'all') {
+          targetSet.add('tpm');
+          targetSet.add('swe');
+          targetSet.add('qa');
+        } else {
+          targetSet.add(f.target.toLowerCase());
+        }
+      }
+      return {
+        id: h.manifest.id,
+        name: h.manifest.name,
+        version: h.manifest.version,
+        description: h.manifest.description,
+        enabled: h.isEnabled,
+        proactive: h.manifest.proactive,
+        contributes: h.manifest.contributes,
+        targets: [...targetSet],
+      };
+    });
     this.post({ type: 'modulesChanged', modules });
   }
 
@@ -254,10 +308,141 @@ export class SettingsPanel implements vscode.Disposable {
     this.post({ type: 'moduleDetail', moduleId, fragments });
   }
 
+  /**
+   * Read a setting's keywords JSON file (resolved against the module root) and
+   * post the parsed entries to the webview. Mirrors `postModuleDetail`'s
+   * path-traversal guard: the resolved absolute path must sit inside the
+   * module's root. On any failure (missing manifest entry, missing
+   * `keywordsPath`, traversal violation, fs read error, JSON parse error, or
+   * shape validation error) we still emit a `settingKeywords` message with
+   * `keywords: []` and a populated `error` field so the webview can decide
+   * whether to surface it.
+   */
+  private async postSettingKeywords(
+    moduleId: string,
+    settingKey: string,
+  ): Promise<void> {
+    if (!this.panel) return;
+    const handle = this.loader.find(moduleId);
+    if (!handle) {
+      this.post({
+        type: 'settingKeywords',
+        moduleId,
+        settingKey,
+        keywords: [],
+        error: 'module not loaded',
+      });
+      return;
+    }
+    const field = handle.manifest.contributes?.settings?.[settingKey];
+    if (!field) {
+      this.post({
+        type: 'settingKeywords',
+        moduleId,
+        settingKey,
+        keywords: [],
+        error: 'setting not found',
+      });
+      return;
+    }
+    const keywordsPath = field.keywordsPath;
+    if (!keywordsPath) {
+      this.post({
+        type: 'settingKeywords',
+        moduleId,
+        settingKey,
+        keywords: [],
+        error: 'setting has no keywordsPath',
+      });
+      return;
+    }
+
+    const rootWithSep = handle.rootPath.endsWith(path.sep)
+      ? handle.rootPath
+      : handle.rootPath + path.sep;
+    const abs = path.join(handle.rootPath, keywordsPath);
+    if (!abs.startsWith(rootWithSep) && abs !== handle.rootPath) {
+      this.post({
+        type: 'settingKeywords',
+        moduleId,
+        settingKey,
+        keywords: [],
+        error: 'keywordsPath escapes module root',
+      });
+      return;
+    }
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(abs, 'utf-8');
+    } catch (e) {
+      this.post({
+        type: 'settingKeywords',
+        moduleId,
+        settingKey,
+        keywords: [],
+        error: (e as Error).message,
+      });
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      this.post({
+        type: 'settingKeywords',
+        moduleId,
+        settingKey,
+        keywords: [],
+        error: `JSON parse failed: ${(e as Error).message}`,
+      });
+      return;
+    }
+
+    if (!Array.isArray(parsed)) {
+      this.post({
+        type: 'settingKeywords',
+        moduleId,
+        settingKey,
+        keywords: [],
+        error: 'keywords file must contain a JSON array',
+      });
+      return;
+    }
+
+    const keywords: SettingKeywordEntry[] = [];
+    for (let i = 0; i < parsed.length; i++) {
+      const entry = parsed[i] as unknown;
+      if (
+        !entry ||
+        typeof entry !== 'object' ||
+        typeof (entry as { keyword?: unknown }).keyword !== 'string' ||
+        typeof (entry as { purpose?: unknown }).purpose !== 'string'
+      ) {
+        this.post({
+          type: 'settingKeywords',
+          moduleId,
+          settingKey,
+          keywords: [],
+          error: `entry ${i} is not { keyword: string, purpose: string }`,
+        });
+        return;
+      }
+      keywords.push({
+        keyword: (entry as SettingKeywordEntry).keyword,
+        purpose: (entry as SettingKeywordEntry).purpose,
+      });
+    }
+
+    this.post({ type: 'settingKeywords', moduleId, settingKey, keywords });
+  }
+
   private postSettings(): void {
     if (!this.panel) return;
     const values = this.context.workspaceState.get<Record<string, unknown>>(SETTINGS_KEY, {});
     const cfg = vscode.workspace.getConfiguration('nomeda');
+    const cliCommand = cfg.get<string>('cliCommand', 'claude');
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate');
     const swe = {
       performanceCores: cfg.get<number>('swe.performanceCores', 2),
@@ -266,7 +451,7 @@ export class SettingsPanel implements vscode.Disposable {
     const qa = {
       count: cfg.get<number>('qa.count', 1),
     };
-    this.post({ type: 'settingsLoaded', values, sessionCommand, swe, qa });
+    this.post({ type: 'settingsLoaded', values, cliCommand, sessionCommand, swe, qa });
   }
 
   private async saveSettings(values: Record<string, unknown>): Promise<void> {
@@ -288,6 +473,35 @@ export class SettingsPanel implements vscode.Disposable {
     for (const agent of ['tpm', 'swe', 'qa']) {
       this.postComposedPrompt(agent);
     }
+  }
+
+  /**
+   * Compose the TPM, SWE, and QA prompts with the current settings and write
+   * each to a workspace-scoped temp-file location so the launched terminal
+   * can read them via the `$NOMEDA_TPM_PROMPT_FILE`, `$NOMEDA_SWE_PROMPT_FILE`,
+   * and `$NOMEDA_QA_PROMPT_FILE` env vars. Filenames are derived from a hash
+   * of the workspace folder path (see `resolveAgentPromptFilePath`) so
+   * concurrent Nomeda sessions in different VS Code windows cannot collide.
+   * Within a single workspace the paths are stable across launches — repeated
+   * invocations overwrite the previous prompts cleanly.
+   *
+   * Fail-closed: if any write fails the caller should abort the launch so a
+   * terminal never opens against partial state.
+   */
+  async writeAllAgentPromptFiles(): Promise<{ tpm: string; swe: string; qa: string }> {
+    const settings = this.getCurrentSettings();
+    const paths = {
+      tpm: resolveAgentPromptFilePath('tpm'),
+      swe: resolveAgentPromptFilePath('swe'),
+      qa: resolveAgentPromptFilePath('qa'),
+    };
+    await fs.writeFile(paths.tpm, this.composer.compose('tpm', settings), 'utf-8');
+    await fs.writeFile(paths.swe, this.composer.compose('swe', settings), 'utf-8');
+    await fs.writeFile(paths.qa, this.composer.compose('qa', settings), 'utf-8');
+    this.logger?.appendLine(
+      `[panel] wrote composed prompts: tpm=${paths.tpm} swe=${paths.swe} qa=${paths.qa}`,
+    );
+    return paths;
   }
 
   private postComposedPrompt(agent: string): void {
@@ -498,6 +712,192 @@ export class SettingsPanel implements vscode.Disposable {
       return;
     }
     await this.applyConfiguration(def.id);
+  }
+
+  // ─── Module clipboard + upload ────────────────────────────────────────
+
+  /**
+   * Copy the user-configurable `nomeda.newModulePrompt` text to the system
+   * clipboard so the user can paste it into an AI chat to generate a new
+   * Nomeda module. Surfaces a non-modal info toast on success.
+   */
+  private async copyNewModulePrompt(): Promise<void> {
+    const promptText = vscode.workspace
+      .getConfiguration('nomeda')
+      .get<string>('newModulePrompt', '');
+    await vscode.env.clipboard.writeText(promptText);
+    vscode.window.showInformationMessage('Module-generation prompt copied to clipboard');
+  }
+
+  /**
+   * Prompt the user to pick a folder (default: ~/Downloads), validate it
+   * looks like a Nomeda module, then copy it into the workspace modules
+   * directory. If the module already exists, prompts the user via a modal
+   * Overwrite/Cancel confirmation before replacing it.
+   */
+  private async uploadModule(): Promise<void> {
+    const downloadsUri = vscode.Uri.file(path.join(os.homedir(), 'Downloads'));
+    const selection = await vscode.window.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: false,
+      defaultUri: downloadsUri,
+      title: 'Select module folder to upload',
+    });
+    if (!selection || selection.length === 0) return;
+    const sourceFolder = selection[0]!.fsPath;
+
+    const manifestPath = path.join(sourceFolder, 'manifest.json');
+    if (!fsSync.existsSync(manifestPath)) {
+      vscode.window.showErrorMessage(
+        'Selected folder has no manifest.json — not a valid Nomeda module.',
+      );
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      const raw = fsSync.readFileSync(manifestPath, 'utf-8');
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `Could not parse manifest.json: ${(err as Error).message}`,
+      );
+      return;
+    }
+
+    const result = validateManifest(parsed);
+    if (!result.ok) {
+      vscode.window.showErrorMessage(
+        `Manifest validation failed: ${result.errors.join(', ')}`,
+      );
+      return;
+    }
+    const manifest = result.manifest;
+
+    const modulesBase = this.resolveModulesDir();
+    const targetFolder = path.join(modulesBase, manifest.id);
+
+    if (fsSync.existsSync(targetFolder)) {
+      const choice = await vscode.window.showWarningMessage(
+        `Module "${manifest.id}" already exists. Overwrite?`,
+        { modal: true },
+        'Overwrite',
+        'Cancel',
+      );
+      if (choice !== 'Overwrite') return;
+      // User-approved removal: the modal dialog above is the explicit consent
+      // surface, so we are permitted to delete the previous module folder.
+      try {
+        fsSync.rmSync(targetFolder, { recursive: true, force: true });
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          `Failed to remove existing module folder: ${(err as Error).message}`,
+        );
+        return;
+      }
+    } else {
+      // Ensure the parent modules dir exists before cpSync writes into it.
+      try {
+        fsSync.mkdirSync(modulesBase, { recursive: true });
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          `Failed to create modules directory: ${(err as Error).message}`,
+        );
+        return;
+      }
+    }
+
+    try {
+      fsSync.cpSync(sourceFolder, targetFolder, { recursive: true });
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `Failed to copy module folder: ${(err as Error).message}`,
+      );
+      return;
+    }
+
+    // Re-discover so the new module shows up in the Modules tab. Use the
+    // existing command path so any watchers / state stay consistent.
+    await vscode.commands.executeCommand('nomeda.reloadModules');
+
+    vscode.window.showInformationMessage(`Module ${manifest.id} uploaded successfully.`);
+  }
+
+  // ─── LINQPad connection discovery ─────────────────────────────────────
+
+  /**
+   * Returns true when at least one enabled module declares a `keyValue`
+   * setting whose `valueSource` is `"linqpad-connections"`. Used on `ready`
+   * to decide whether to eagerly probe the LINQPad XML for the webview.
+   */
+  private anyEnabledModuleNeedsLinqpad(): boolean {
+    for (const h of this.loader.getAll()) {
+      if (!h.isEnabled) continue;
+      const settings = h.manifest.contributes?.settings;
+      if (!settings) continue;
+      for (const field of Object.values(settings)) {
+        if (field.type === 'keyValue' && field.valueSource === 'linqpad-connections') {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Resolve the LINQPad ConnectionsV2.xml path, parse it, and post a
+   * `linqpadConnections` message to the webview. Reports `not-installed` when
+   * no candidate path exists, `error` when the path exists but the file
+   * cannot be read or parsed, and `ok` (with a possibly empty `connections`
+   * array) when the parse succeeds.
+   */
+  private broadcastLinqpadConnections(): void {
+    if (!this.panel) return;
+    const override = vscode.workspace
+      .getConfiguration('nomeda')
+      .get<string>('linqpadConnectionsPath', '');
+    const resolved = resolveLinqpadConnectionsPath(override);
+    if (resolved.status === 'not-installed') {
+      this.post({
+        type: 'linqpadConnections',
+        status: 'not-installed',
+        connections: [],
+        error: resolved.error,
+      });
+      return;
+    }
+    try {
+      const { connections } = readLinqpadConnections(resolved.path);
+      this.post({
+        type: 'linqpadConnections',
+        status: 'ok',
+        connections,
+        resolvedPath: resolved.path,
+      });
+    } catch (err) {
+      this.post({
+        type: 'linqpadConnections',
+        status: 'error',
+        connections: [],
+        resolvedPath: resolved.path,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  /**
+   * Copy the user-configurable `nomeda.linqpadInstallPrompt` text to the
+   * system clipboard so the user can paste it into an AI chat (or a notes
+   * app) to walk through a LINQPad install / connection-export. Mirrors the
+   * `copyNewModulePrompt` UX exactly.
+   */
+  private async copyLinqpadInstallPrompt(): Promise<void> {
+    const promptText = vscode.workspace
+      .getConfiguration('nomeda')
+      .get<string>('linqpadInstallPrompt', '');
+    await vscode.env.clipboard.writeText(promptText);
+    vscode.window.showInformationMessage('LINQPad install prompt copied to clipboard');
   }
 
   dispose(): void {

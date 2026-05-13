@@ -37,10 +37,15 @@
           "default": "modules",
           "description": "Directory (relative to workspace root) containing Nomeda modules."
         },
+        "nomeda.cliCommand": {
+          "type": "string",
+          "default": "claude",
+          "description": "CLI binary to launch in the Nomeda Session terminal. Sent as a shell command before the Initiation Command. Defaults to 'claude' (Claude Code). The CLI is started first so the Initiation Command can be delivered to it as user input rather than as a shell command. Leave empty to skip launching a CLI and send the Initiation Command directly to the shell instead."
+        },
         "nomeda.sessionCommand": {
           "type": "string",
           "default": "initiate",
-          "description": "Command phrase sent to the Nomeda Session terminal after launch (e.g. 'initiate', 'initiate --resume'). Leave empty to skip."
+          "description": "Initiation Command — the WORD or PHRASE sent as user input to the running CLI after it boots (NOT a shell command). The CLI's own configuration (e.g. Claude's CLAUDE.md or user memory) defines what this trigger word does — typically reading the composed TPM prompt from $NOMEDA_TPM_PROMPT_FILE and adopting the TPM role. Sent ~3s after the CLI launches so the CLI has time to become ready for input. Leave empty to skip auto-sending the trigger word."
         },
         "nomeda.swe.performanceCores": {
           "type": "number",
@@ -62,6 +67,23 @@
           "minimum": 1,
           "maximum": 5,
           "description": "Maximum concurrent QA subagents."
+        },
+        "nomeda.newModulePrompt": {
+          "type": "string",
+          "description": "Prompt text copied to clipboard when 'Copy module-generation prompt' is clicked in the Modules tab. Edit this to customize the instructions given to an AI agent for generating new Nomeda modules.",
+          "default": "Generate a complete Nomeda module ready for upload. Output the full folder contents — one manifest.json and one or more .md content files — saved to my Downloads folder under a folder named tool.<short-id>/.\n\nThe module manifest must follow this schema:\n\n{\n  \"id\": \"tool.<short-id>\",\n  \"name\": \"<Human Readable Name>\",\n  \"version\": \"0.1.0\",\n  \"description\": \"One concise sentence describing what this module does.\",\n  \"proactive\": false,\n  \"contributes\": {\n    \"promptFragments\": [\n      { \"target\": \"all\", \"contentPath\": \"<file>.md\" }\n    ],\n    \"settings\": {\n      \"<setting-key>\": {\n        \"type\": \"string\",\n        \"label\": \"<UI label>\",\n        \"description\": \"<2-4 sentence consequence-focused description of what each value means and what changing it does>\",\n        \"default\": \"<default value>\"\n      }\n    }\n  }\n}\n\nRules:\n- target is one of: \"tpm\", \"swe\", \"qa\", or \"all\". Use \"all\" only when the content applies identically to every agent.\n- Set proactive to true only if the content must be consulted at session start (environment checks, pre-flight advisories).\n- Content .md files contain agent instructions, rules, or capability descriptions.\n- Settings descriptions must explain consequences — what each value means in practice, what changing it does at runtime, default rationale.\n- The module-level description must be ONE sentence.\n- When writing descriptions (both module-level and per-setting), do NOT use backticks anywhere — descriptions are rendered as plain text and backticks appear literally rather than as styled code. Use plain words, double-quotes for ambiguous literals, or rephrase to avoid the need.\n\nI want the module to do the following:\n\n[REPLACE THIS LINE WITH A DESCRIPTION OF WHAT THE MODULE SHOULD DO]\n\nSave the folder to my Downloads directory so I can upload it via Nomeda's settings panel.",
+          "editPresentation": "multilineText"
+        },
+        "nomeda.linqpadConnectionsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to LINQPad's ConnectionsV2.xml file. When set, Nomeda uses this path verbatim instead of probing common Windows/WSL locations. Leave empty for the default discovery order: $APPDATA/LINQPad/ConnectionsV2.xml, then /mnt/c/Users/$USER/AppData/Roaming/LINQPad/ConnectionsV2.xml, then iteration over /mnt/c/Users/* profiles, then a wslvar USERPROFILE fallback. Changing this value re-probes immediately and re-broadcasts the resulting connection list to any open Nomeda settings panel."
+        },
+        "nomeda.linqpadInstallPrompt": {
+          "type": "string",
+          "editPresentation": "multilineText",
+          "description": "Prompt text copied to clipboard when the 'Copy install prompt' button is clicked on the LINQPad-not-installed banner in the Modules tab. Edit this to customize the instructions given to an AI assistant for walking a user through installing LINQPad and exporting their connection metadata so Nomeda's Database Access module can populate its connection allowlist.",
+          "default": "I need to install LINQPad on Windows and create at least one named connection so the Nomeda VS Code extension can detect it.\n\nWalk me through:\n\n1. Where to download LINQPad for my Windows version (free edition is fine).\n2. How to install it without admin rights if my machine is locked down.\n3. After install, how to add a new connection — specifically a SQL Server connection. I need to enter:\n   - Server name (instance form: hostname or hostname\\instance)\n   - Authentication (Windows Integrated vs SQL Login)\n   - Database name (optional — a server-only connection is allowed)\n4. Where LINQPad stores the resulting connection metadata. Confirm it is at %APPDATA%\\LINQPad\\ConnectionsV2.xml and explain how to verify that file exists.\n5. If I am running VS Code under WSL, how to make sure the WSL side can read the Windows-side ConnectionsV2.xml (the default /mnt/c/Users/<me>/AppData/Roaming/LINQPad/ path).\n\nKeep the steps short and actionable. I will paste your reply into a notes app and follow it linearly."
         }
       }
     }

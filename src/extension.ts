@@ -15,12 +15,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const moduleState = new ModuleState(context.workspaceState);
   const loader = new ModuleLoader(moduleState, {
-    // Cores live in prompts/cores/ and are not modules — no defaults to enable here.
+    // Cores live in prompts/cores/ and are not modules. The IDs listed here are
+    // the modules enabled on first run so the session boots with the same
+    // baseline capabilities the cores used to ship inline.
     defaultEnabledIds: [
-      'tool.dotnet-guardrails',
+      'tool.git',
+      'tool.dotnet-suite',
+      'tool.npm-suite',
       'tool.database-access',
-      'tool.review-lenses',
-      'tool.planning-lenses',
+      'tool.lenses',
     ],
     logger,
   });
@@ -31,16 +34,24 @@ export function activate(context: vscode.ExtensionContext): void {
   const coresPath = path.join(context.extensionPath, 'prompts', 'cores');
   const composer = new PromptComposer(loader, coresPath, logger);
 
-  const session = new SessionLauncher(loader, context.extensionPath, logger);
+  const session = new SessionLauncher(loader, context.extensionPath, context.workspaceState, logger);
   const configurationsStore = new ConfigurationsStore(context.workspaceState);
-  const panel = new SettingsPanel(context, loader, composer, configurationsStore, logger);
+  const resolveModulesDir = resolveModulesDirFn(context);
+  const panel = new SettingsPanel(
+    context,
+    loader,
+    composer,
+    configurationsStore,
+    resolveModulesDir,
+    logger,
+  );
   context.subscriptions.push(panel);
 
   registerCommands(context, {
     loader,
     panel,
     session,
-    resolveModulesDir: resolveModulesDirFn(context),
+    resolveModulesDir,
     logger,
   });
 

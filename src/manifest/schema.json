@@ -31,7 +31,13 @@
             "required": ["target", "contentPath"],
             "additionalProperties": false,
             "properties": {
-              "target": { "type": "string", "minLength": 1 },
+              "target": {
+                "anyOf": [
+                  { "enum": ["tpm", "swe", "qa", "all"] },
+                  { "type": "string", "minLength": 1 }
+                ],
+                "description": "Agent target. Canonical values: tpm, swe, qa, all. Modules may also declare custom agent ids via contributes.agents."
+              },
               "contentPath": { "type": "string", "minLength": 1 }
             }
           }
@@ -57,7 +63,7 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["string", "number", "boolean", "enum", "path"]
+                "enum": ["string", "number", "boolean", "enum", "path", "keyValue"]
               },
               "label": { "type": "string" },
               "description": { "type": "string" },
@@ -66,7 +72,17 @@
               "options": {
                 "type": "array",
                 "items": { "type": "string" }
-              }
+              },
+              "keywordsPath": { "type": "string", "minLength": 1 },
+              "multiSelect": { "type": "boolean" },
+              "valueSource": {
+                "type": "string",
+                "enum": ["linqpad-connections"]
+              },
+              "keyLabel": { "type": "string" },
+              "valueLabel": { "type": "string" },
+              "optionalValue": { "type": "boolean" },
+              "optionalEnabled": { "type": "boolean" }
             }
           }
         },

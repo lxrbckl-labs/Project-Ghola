@@ -281,7 +281,7 @@ pre.prompt {
 
 /* ─── Session page ─────────────────────────────────────────────────── */
 
-/* Label sits above the flex row on its own line. */
+/* Label sits above its input on its own line. */
 .session-command-label {
   display: block;
   font-size: 13px;
@@ -290,14 +290,37 @@ pre.prompt {
   margin-bottom: 6px;
 }
 
-/* Flex row: [input grows] [play button on far right]. */
-.session-command-row {
+/* Three-column launch row: [CLI Command] [Initiation Command] [Configuration] [▶].
+   Each column is a flex child that grows equally; the play button is flex-shrink:0
+   at the end. On narrow panels the row wraps so columns stack. */
+.session-launch-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
-/* Input grows to fill available width. */
+/* Each label-above-input column. Grows to fill equal share of the row. */
+.session-launch-field {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+
+/* Configuration column: narrower — the dropdown doesn't need as much width. */
+.session-launch-field--config {
+  flex: 0 1 200px;
+  min-width: 140px;
+}
+
+/* Configuration dropdown inside the launch row fills its column. */
+.session-launch-field--config .config-dropdown {
+  width: 100%;
+  flex: unset;
+}
+
+/* Input grows to fill its column. */
 .session-command-input {
   flex: 1 1 auto;
   height: 28px;
@@ -402,7 +425,9 @@ button.icon-button.framed:focus-visible {
   outline-offset: -1px;
 }
 
-/* Reload button in the search row: no extra margin needed; input growth handles placement. */
+/* Action buttons in the search row (copy, upload, reload): the input grows to
+   fill, and each button keeps its 28x28 footprint with no shrink. The
+   .modules-search flex gap handles spacing between them. */
 .modules-search button.icon-button.framed {
   flex-shrink: 0;
 }
@@ -653,6 +678,355 @@ button.module-row-chevron:focus-visible {
   font-size: 12px;
 }
 
+/* Keyword vocabulary table — rendered under a setting's description when the
+   manifest declares a `keywordsPath`. Heading sits above a compact 2-column
+   table; keyword column is monospace so single-letter tier glyphs read clean.
+   Borders + header background pull from theme tokens so dark/light themes
+   inherit correctly. */
+.module-detail .setting-keywords {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.module-detail .setting-keywords-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.module-detail .setting-keywords-empty,
+.module-detail .setting-keywords-error {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.module-detail .setting-keywords-error {
+  color: var(--vscode-errorForeground, var(--vscode-descriptionForeground));
+}
+
+.module-detail .setting-keywords-table {
+  width: 100%;
+  max-width: 720px;
+  border-collapse: collapse;
+  font-size: 12px;
+  border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #3c3c3c));
+}
+
+.module-detail .setting-keywords-table th,
+.module-detail .setting-keywords-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #3c3c3c));
+  vertical-align: top;
+}
+
+.module-detail .setting-keywords-table thead th {
+  background: var(--vscode-editorWidget-background, var(--vscode-input-background));
+  font-weight: 600;
+}
+
+.module-detail .setting-keywords-table .setting-keywords-kw {
+  font-family: var(--vscode-editor-font-family, monospace);
+  white-space: nowrap;
+  width: 1%;
+}
+
+.module-detail .setting-keywords-table .setting-keywords-purpose {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Select column — only present when the keywords table is rendered in
+   selection mode (multi-select string fields). A narrow centered column
+   carrying one native checkbox per row; the whole row is clickable. */
+.module-detail .setting-keywords-table .setting-keywords-select {
+  width: 1%;
+  text-align: center;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.module-detail .setting-keywords-table tbody tr.setting-keywords-row-selectable {
+  cursor: pointer;
+}
+
+.module-detail .setting-keywords-table .setting-keywords-checkbox {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* Native checkbox focus rings can be clipped inside the table cell's tight
+   padding — scope a visible focus outline to inputs inside the keywords
+   table so keyboard navigation stays legible. */
+.module-detail .setting-keywords-table input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+/* ─── Multi-select checkbox group (RETIRED 2026-05-12) ─────────────────
+   Folded into `.setting-keywords-table` as a leftmost Select column. The
+   rules below are kept (commented) until the dead helper function
+   `appendMultiSelectField` is removed by the user.
+
+.module-detail .multi-select-group {
+  display: flex;
+  flex-flow: row wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.module-detail .multi-select-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.module-detail .multi-select-checkbox {
+  margin: 0;
+  cursor: pointer;
+}
+
+.module-detail .multi-select-label {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  color: var(--vscode-foreground);
+}
+*/
+
+/* ─── keyValue setting editor ──────────────────────────────────────────
+   Renders inside .module-detail .setting alongside the standard label /
+   description / keywords block. The header save button uses the existing
+   .save-field-button look (declared above). The table and add-row mirror
+   the keyword-table border + theme tokens for visual consistency. */
+
+
+.module-detail .kv-table-wrap {
+  margin: 4px 0;
+}
+
+/* `table-layout: fixed` makes the column widths declared on the `<th>` / `<td>`
+   cells (and on the `.kv-cell-*` modifier classes below) actually authoritative
+   — under the default `auto` layout, those `width` declarations are treated as
+   hints and content can push columns wider (e.g., the "Enabled" header label
+   was inflating its 60px column to ~90px). Fixed layout also lets the
+   `<tfoot>` add row inherit the same column widths as the data rows, so the
+   seams between Command/Description/Action cells line up by construction. */
+.module-detail .kv-table {
+  width: 100%;
+  max-width: 720px;
+  border-collapse: collapse;
+  font-size: 12px;
+  border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #3c3c3c));
+  table-layout: fixed;
+}
+
+.module-detail .kv-table th,
+.module-detail .kv-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #3c3c3c));
+  vertical-align: top;
+}
+
+.module-detail .kv-table thead th {
+  background: var(--vscode-editorWidget-background, var(--vscode-input-background));
+  font-weight: 600;
+}
+
+/* The Actions column is widened to host the Add button in the tfoot add
+   row (the button's natural width is ~56px including padding). Data rows
+   centre a 14px trash icon inside the same column — the extra whitespace
+   is harmless. Keeping the value identical on both the `<th>` and the
+   `.kv-cell-actions` `<td>` rules below is what makes `table-layout:
+   fixed` actually freeze this column at 72px. */
+.module-detail .kv-table .kv-actions-head {
+  width: 72px;
+}
+
+/* Key column header — under `table-layout: fixed` the column widths are
+   derived from the first row (the header), so the 30% constraint must live
+   on the `<th>` itself (the `.kv-cell-key` width on body `<td>`s would be
+   ignored under fixed layout). */
+.module-detail .kv-table .kv-key-head {
+  width: 30%;
+}
+
+/* Narrow leading column with one checkbox per row. Present only when the
+   manifest declares `optionalEnabled: true` for the keyValue field. The
+   `.kv-table` prefix on both selectors below is necessary to out-specify
+   the `.kv-table td` base rule (which forces `text-align: left`) — without
+   it the checkbox cell inherits left alignment and the checkbox sits at
+   the cell's left edge. */
+.module-detail .kv-table .kv-enabled-head {
+  width: 60px;
+  white-space: nowrap;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.module-detail .kv-table .kv-cell-enabled {
+  width: 60px;
+  white-space: nowrap;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.module-detail .kv-enabled-checkbox {
+  margin: 0;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.module-detail .kv-enabled-checkbox:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.module-detail .kv-table .kv-empty-row td {
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+.module-detail .kv-row .kv-cell {
+  vertical-align: middle;
+}
+
+/* Under `table-layout: fixed` the percentage widths below are exact, not
+   hints. Key takes 30% of the table; Value gets no explicit width and absorbs
+   whatever remains after the fixed-pixel columns (Enabled 60px when present,
+   Actions 72px) and the 30% Key column have been allocated. The 72px Actions
+   column and the optional 60px Enabled column keep their declared pixel
+   widths regardless of viewport / max-width. */
+.module-detail .kv-cell-key {
+  width: 30%;
+}
+
+.module-detail .kv-cell-actions {
+  width: 72px;
+  text-align: center;
+}
+
+.module-detail .kv-input {
+  width: 100%;
+  max-width: none;
+}
+
+.module-detail .kv-value-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.module-detail .kv-value-cell .kv-select {
+  width: 100%;
+  max-width: none;
+}
+
+.module-detail .kv-delete-button {
+  color: var(--vscode-descriptionForeground);
+}
+
+.module-detail .kv-delete-button:hover {
+  color: var(--vscode-errorForeground, var(--vscode-foreground));
+}
+
+/* Add-entry row — implemented as a `<tfoot><tr>` inside the table itself,
+   so each cell's width is derived directly from the table's column layout
+   (`table-layout: fixed`). This means the Command input, Description
+   input, and Add button cells line up vertically with the corresponding
+   columns of the data rows above by construction — no hand-tuned grid
+   math to keep in sync. */
+.module-detail .kv-table .kv-add-cell {
+  vertical-align: bottom;
+}
+
+/* Inner wrapper renders the small uppercase label above the input. Flex
+   column stacks the label on top of the input. `min-width: 0` overrides
+   the input's intrinsic ~150px minimum so the input can shrink to fill
+   whatever the table column width happens to be. */
+.module-detail .kv-add-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* The Value cell wrapper inside the add row needs to fill its `<td>` so
+   the input/select inside (already `width: 100%`) actually stretches to
+   the cell's full width. */
+.module-detail .kv-add-field .kv-value-cell {
+  width: 100%;
+}
+
+.module-detail .kv-add-label {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Add button fills the (72px-wide minus 16px padding ≈ 56px inner) Actions
+   cell, matching the natural width of the "Add" label plus button padding.
+   `align-self` is irrelevant inside a `<td>` (table cells don't form a flex
+   parent), so we drop it. */
+.module-detail .kv-add-button {
+  height: 28px;
+  width: 100%;
+  border-radius: 3px;
+}
+
+/* LINQPad probe banner — replaces the dropdown context when discovery fails.
+   Sits ABOVE the table so the user sees the failure mode before encountering
+   the (now-empty) value cell in the table's tfoot add row. */
+.module-detail .kv-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  margin: 8px 0;
+  background: var(--vscode-inputValidation-warningBackground, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-panel-border, #3c3c3c));
+  border-radius: 3px;
+  max-width: 720px;
+}
+
+.module-detail .kv-banner-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+}
+
+.module-detail .kv-banner-detail {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.module-detail .kv-banner-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.module-detail .kv-banner-link {
+  background: transparent;
+  border: none;
+  color: var(--vscode-textLink-foreground, var(--vscode-foreground));
+  cursor: pointer;
+  text-decoration: underline;
+  font: inherit;
+  padding: 0;
+}
+
+.module-detail .kv-banner-link:hover {
+  color: var(--vscode-textLink-activeForeground, var(--vscode-foreground));
+}
+
 /* ─── Configurations row (Modules tab) ─────────────────────────────── */
 
 /* Wrapper holds the row + optional Manage panel beneath it. */
@@ -695,13 +1069,6 @@ button.module-row-chevron:focus-visible {
 .config-dropdown:focus {
   outline: 1px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: -1px;
-}
-
-/* On the Session command row, the dropdown sits between the input (grows)
-   and the play button. It has a moderate flex basis so it stays visible
-   without dominating the row. */
-.session-command-row .config-dropdown {
-  flex: 0 1 220px;
 }
 
 /* Action buttons in the Configurations row + Manage panel. Inherits the
@@ -890,4 +1257,29 @@ button.module-row-chevron:focus-visible {
   font-size: 14px;
   font-weight: normal;
   color: var(--vscode-descriptionForeground);
+}
+
+/* ─── Agent-target badge row (module detail view) ───────────────────── */
+
+/* Container for the row of agent-target pills. Sits immediately after the
+   module description, before the definition list. */
+.agent-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-self: flex-start;
+  margin-top: 8px;
+}
+
+/* Individual pill badge — uses VS Code badge tokens for theme-aware colours. */
+.agent-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border-radius: 10px;
+  white-space: nowrap;
 }

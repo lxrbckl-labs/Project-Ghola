@@ -12,6 +12,12 @@ export interface ModuleSummary {
   /** Mirrors `ModuleManifest.proactive`. The detail view renders a pill when true. */
   proactive?: boolean;
   contributes: ModuleManifest['contributes'];
+  /**
+   * Unique set of agent targets this module contributes to, derived from
+   * `contributes.promptFragments[].target`. "all" is expanded to ["tpm","swe","qa"].
+   * Empty array when the module declares no prompt fragments.
+   */
+  targets: string[];
 }
 
 /**
@@ -47,6 +53,16 @@ export interface NamedConfiguration {
   createdAt: number;
 }
 
+/**
+ * A single { keyword, purpose } row from a setting's keywords JSON file.
+ * Shipped to the webview verbatim for table rendering, and used by the agent
+ * for full reference understanding of the setting's vocabulary.
+ */
+export interface SettingKeywordEntry {
+  keyword: string;
+  purpose: string;
+}
+
 // Webview → host
 export type WebviewToHostMessage =
   | { type: 'ready' }
@@ -56,15 +72,21 @@ export type WebviewToHostMessage =
   | { type: 'saveSettings'; values: Record<string, unknown> }
   | { type: 'getComposedPrompt'; agent: string }
   | { type: 'reloadModules' }
+  | { type: 'copyNewModulePrompt' }
+  | { type: 'uploadModule' }
   | { type: 'openSession' }
   | { type: 'requestModuleDetail'; moduleId: string }
+  | { type: 'requestSettingKeywords'; moduleId: string; settingKey: string }
   | { type: 'updateConfiguration'; section: string; key: string; value: unknown }
   | { type: 'saveConfigurationCurrent' }
   | { type: 'saveConfigurationAsNew'; name: string }
   | { type: 'selectConfiguration'; id: string | null }
   | { type: 'deleteConfiguration'; id: string }
   | { type: 'renameConfiguration'; id: string; name: string }
-  | { type: 'setDefaultConfiguration'; id: string };
+  | { type: 'setDefaultConfiguration'; id: string }
+  | { type: 'requestLinqpadConnections' }
+  | { type: 'copyLinqpadInstallPrompt' }
+  | { type: 'openVSCodeSettings'; query: string };
 
 // Host → webview
 export type HostToWebviewMessage =
@@ -72,6 +94,7 @@ export type HostToWebviewMessage =
   | {
       type: 'settingsLoaded';
       values: Record<string, unknown>;
+      cliCommand: string;
       sessionCommand: string;
       swe: { performanceCores: number; efficiencyCores: number };
       qa: { count: number };
@@ -80,8 +103,22 @@ export type HostToWebviewMessage =
   | { type: 'composedPromptUpdated'; agent: string; prompt: string }
   | { type: 'moduleDetail'; moduleId: string; fragments: PromptFragmentDetail[] }
   | {
+      type: 'settingKeywords';
+      moduleId: string;
+      settingKey: string;
+      keywords: SettingKeywordEntry[];
+      error?: string;
+    }
+  | {
       type: 'configurationsChanged';
       configurations: NamedConfiguration[];
       activeId: string | null;
       isModified: boolean;
+    }
+  | {
+      type: 'linqpadConnections';
+      status: 'ok' | 'not-installed' | 'error';
+      connections: string[];
+      resolvedPath?: string;
+      error?: string;
     };

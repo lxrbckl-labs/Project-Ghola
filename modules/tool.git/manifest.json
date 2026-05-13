@@ -1,0 +1,30 @@
+{
+  "id": "tool.git",
+  "name": "Git Permissions",
+  "version": "0.1.0",
+  "description": "Grants tiered git capability (r/w/d) with an orthogonal protected-branches guardrail.",
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "git.md" }
+    ],
+    "settings": {
+      "permissions": {
+        "type": "string",
+        "label": "Git permissions (rwd)",
+        "description": "Comma-separated tier letters. See the keyword table below for what each unlocks. Default 'r' matches the legacy 'read-only only' behavior.",
+        "default": "r",
+        "keywordsPath": "permissions-keywords.json",
+        "multiSelect": true
+      },
+      "protectedBranches": {
+        "type": "keyValue",
+        "label": "Protected branches",
+        "description": "Branches the agent must NOT modify. Type a branch name plus an optional description (e.g. why the branch is protected), then click Add. Delete an entry to remove its protection. An empty list means no branches are protected.",
+        "default": {},
+        "keyLabel": "Branch",
+        "valueLabel": "Description",
+        "optionalValue": true
+      }
+    }
+  }
+}
