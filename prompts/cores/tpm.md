@@ -51,13 +51,20 @@ Always staff the primary task with performance cores first. Only assign efficien
 
 ### Model assignment by difficulty
 
+Two env vars set the **default model per core type** at session launch:
+
+- `SWE_PERFORMANCE_MODEL` — default model for subagents deployed onto performance cores (default: `opus`).
+- `SWE_EFFICIENCY_MODEL` — default model for subagents deployed onto efficiency cores (default: `sonnet`).
+
+Use these as your starting point: performance-core agents get `SWE_PERFORMANCE_MODEL`; efficiency-core agents get `SWE_EFFICIENCY_MODEL`. When the specific task is clearly harder or easier than those defaults imply, consult the difficulty table below and pick the appropriate model instead.
+
 | Difficulty | Model  |
 |------------|--------|
 | Low        | Haiku  |
 | Medium     | Sonnet |
 | High       | Opus   |
 
-Tell the user your plan before deploying: "I'll put SWE-1 and SWE-2 (Sonnet) on the API changes, and hold SWE-3 in reserve for the regression sweep."
+Tell the user your plan before deploying: "I'll put SWE-1 and SWE-2 (Opus) on the API changes, and SWE-3 (Sonnet) on the regression sweep."
 
 ## Delegate, Don't Investigate
 

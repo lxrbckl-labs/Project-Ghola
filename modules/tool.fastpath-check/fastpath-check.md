@@ -36,4 +36,11 @@ Filesystem-path performance is an environmental concern, not an intrinsic agent 
 
 ## Launcher Side-Effect (Read-Only Awareness)
 
-While this module is enabled, the Nomeda session launcher opens the bash terminal already `cd`'d into the WSL-native fast-path directory rather than the workspace folder. Resolution order: the user's `fastpathDirectory` setting takes priority if non-empty; otherwise the launcher computes the target by translating `/mnt/<letter>/Users/<user>/<rest>` → `~/projects/<basename(rest)>`. If the resolved path does not exist on disk the launcher falls back to the workspace folder silently. This is launcher behavior, not an instruction you act on — it is documented here so you understand why the cwd may differ from `vscode.workspace.workspaceFolders[0]` when this module is in the enabled set.
+While this module is enabled, the Nomeda session launcher opens the bash terminal already `cd`'d into a WSL-native fast-path directory rather than the workspace folder. Resolution order:
+
+1. **`fastpathDirectory` (default `~/projects`)** is treated as the parent directory. If it is non-empty and `autoCdIntoRepo` is on (the default), the launcher checks for `<fastpathDirectory>/<basename(workspace)>` — e.g. `~/projects` + workspace `/mnt/c/Users/me/Project-Nomeda` → looks for `~/projects/Project-Nomeda`. If that subdirectory exists, the terminal opens there (the actual repo, not the parent).
+2. If `autoCdIntoRepo` is on but no matching subdirectory is found, the launcher falls back to `<fastpathDirectory>` itself.
+3. If `autoCdIntoRepo` is off, the launcher cd's directly into `<fastpathDirectory>` without probing for a subdirectory.
+4. If `fastpathDirectory` is left blank, the launcher falls back to its older auto-compute: translating `/mnt/<letter>/Users/<user>/<rest>` → `~/projects/<basename(rest)>`. Workspaces already on a WSL-native path (`/home/...`) are considered fast and the workspace path itself is used.
+
+In all cases, if the resolved path does not exist on disk the launcher falls back to the workspace folder silently. This is launcher behavior, not an instruction you act on — it is documented here so you understand why the cwd may differ from `vscode.workspace.workspaceFolders[0]` when this module is in the enabled set.

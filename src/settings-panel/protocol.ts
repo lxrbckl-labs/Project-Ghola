@@ -3,6 +3,19 @@
 
 import type { ModuleManifest } from '../manifest/types';
 
+/**
+ * A single Claude CLI alias registered with Nomeda.
+ *
+ * IMPORTANT: This must stay in sync with `CliAlias` in
+ * `src/session/alias-sync.ts`. We re-declare the shape here (rather than
+ * re-exporting) because `alias-sync.ts` imports `fs/promises`, and this
+ * protocol file is consumed by both the webview (no Node) and the host.
+ */
+export interface CliAlias {
+  alias: string;
+  command: string;
+}
+
 export interface ModuleSummary {
   id: string;
   name: string;
@@ -86,7 +99,9 @@ export type WebviewToHostMessage =
   | { type: 'setDefaultConfiguration'; id: string }
   | { type: 'requestLinqpadConnections' }
   | { type: 'copyLinqpadInstallPrompt' }
-  | { type: 'openVSCodeSettings'; query: string };
+  | { type: 'openVSCodeSettings'; query: string }
+  | { type: 'saveAliases'; aliases: CliAlias[] }
+  | { type: 'getAliases' };
 
 // Host → webview
 export type HostToWebviewMessage =
@@ -96,8 +111,11 @@ export type HostToWebviewMessage =
       values: Record<string, unknown>;
       cliCommand: string;
       sessionCommand: string;
-      swe: { performanceCores: number; efficiencyCores: number };
+      swe: { performanceCores: number; efficiencyCores: number; performanceCoresModel: string; efficiencyCoresModel: string };
       qa: { count: number };
+      aliases: CliAlias[];
+      selectedAlias: string;
+      aliasFile: string;
     }
   | { type: 'settingsSaved'; ok: boolean; error?: string }
   | { type: 'composedPromptUpdated'; agent: string; prompt: string }
@@ -121,4 +139,6 @@ export type HostToWebviewMessage =
       connections: string[];
       resolvedPath?: string;
       error?: string;
-    };
+    }
+  | { type: 'aliasesLoaded'; aliases: CliAlias[]; selectedAlias: string; aliasFile: string }
+  | { type: 'aliasesSaved'; ok: boolean; error?: string };

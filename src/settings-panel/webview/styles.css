@@ -799,13 +799,12 @@ button.module-row-chevron:focus-visible {
 */
 
 /* ─── keyValue setting editor ──────────────────────────────────────────
-   Renders inside .module-detail .setting alongside the standard label /
-   description / keywords block. The header save button uses the existing
-   .save-field-button look (declared above). The table and add-row mirror
-   the keyword-table border + theme tokens for visual consistency. */
+   Generic kv-table pattern used by both the module-detail view (NPM Suite,
+   etc.) and the Sessions-tab CLI Alias editor. Rules are intentionally
+   un-scoped so `.kv-table` renders consistently wherever it appears. */
 
 
-.module-detail .kv-table-wrap {
+.kv-table-wrap {
   margin: 4px 0;
 }
 
@@ -816,7 +815,7 @@ button.module-row-chevron:focus-visible {
    was inflating its 60px column to ~90px). Fixed layout also lets the
    `<tfoot>` add row inherit the same column widths as the data rows, so the
    seams between Command/Description/Action cells line up by construction. */
-.module-detail .kv-table {
+.kv-table {
   width: 100%;
   max-width: 720px;
   border-collapse: collapse;
@@ -825,15 +824,15 @@ button.module-row-chevron:focus-visible {
   table-layout: fixed;
 }
 
-.module-detail .kv-table th,
-.module-detail .kv-table td {
+.kv-table th,
+.kv-table td {
   text-align: left;
   padding: 4px 8px;
   border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #3c3c3c));
   vertical-align: top;
 }
 
-.module-detail .kv-table thead th {
+.kv-table thead th {
   background: var(--vscode-editorWidget-background, var(--vscode-input-background));
   font-weight: 600;
 }
@@ -844,7 +843,7 @@ button.module-row-chevron:focus-visible {
    is harmless. Keeping the value identical on both the `<th>` and the
    `.kv-cell-actions` `<td>` rules below is what makes `table-layout:
    fixed` actually freeze this column at 72px. */
-.module-detail .kv-table .kv-actions-head {
+.kv-table .kv-actions-head {
   width: 72px;
 }
 
@@ -852,7 +851,7 @@ button.module-row-chevron:focus-visible {
    derived from the first row (the header), so the 30% constraint must live
    on the `<th>` itself (the `.kv-cell-key` width on body `<td>`s would be
    ignored under fixed layout). */
-.module-detail .kv-table .kv-key-head {
+.kv-table .kv-key-head {
   width: 30%;
 }
 
@@ -862,37 +861,37 @@ button.module-row-chevron:focus-visible {
    the `.kv-table td` base rule (which forces `text-align: left`) — without
    it the checkbox cell inherits left alignment and the checkbox sits at
    the cell's left edge. */
-.module-detail .kv-table .kv-enabled-head {
+.kv-table .kv-enabled-head {
   width: 60px;
   white-space: nowrap;
   text-align: center;
   vertical-align: middle;
 }
 
-.module-detail .kv-table .kv-cell-enabled {
+.kv-table .kv-cell-enabled {
   width: 60px;
   white-space: nowrap;
   text-align: center;
   vertical-align: middle;
 }
 
-.module-detail .kv-enabled-checkbox {
+.kv-enabled-checkbox {
   margin: 0;
   cursor: pointer;
   vertical-align: middle;
 }
 
-.module-detail .kv-enabled-checkbox:focus-visible {
+.kv-enabled-checkbox:focus-visible {
   outline: 2px solid var(--vscode-focusBorder);
   outline-offset: 2px;
 }
 
-.module-detail .kv-table .kv-empty-row td {
+.kv-table .kv-empty-row td {
   color: var(--vscode-descriptionForeground);
   font-style: italic;
 }
 
-.module-detail .kv-row .kv-cell {
+.kv-row .kv-cell {
   vertical-align: middle;
 }
 
@@ -902,36 +901,49 @@ button.module-row-chevron:focus-visible {
    Actions 72px) and the 30% Key column have been allocated. The 72px Actions
    column and the optional 60px Enabled column keep their declared pixel
    widths regardless of viewport / max-width. */
-.module-detail .kv-cell-key {
+.kv-table .kv-cell-key {
   width: 30%;
 }
 
-.module-detail .kv-cell-actions {
+.kv-table .kv-cell-actions {
   width: 72px;
   text-align: center;
 }
 
-.module-detail .kv-input {
+.kv-input {
   width: 100%;
   max-width: none;
+  height: 28px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 0 8px;
+  font: inherit;
+  border-radius: 3px;
+  box-sizing: border-box;
 }
 
-.module-detail .kv-value-cell {
+.kv-input:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+.kv-value-cell {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.module-detail .kv-value-cell .kv-select {
+.kv-value-cell .kv-select {
   width: 100%;
   max-width: none;
 }
 
-.module-detail .kv-delete-button {
+.kv-delete-button {
   color: var(--vscode-descriptionForeground);
 }
 
-.module-detail .kv-delete-button:hover {
+.kv-delete-button:hover {
   color: var(--vscode-errorForeground, var(--vscode-foreground));
 }
 
@@ -941,7 +953,7 @@ button.module-row-chevron:focus-visible {
    input, and Add button cells line up vertically with the corresponding
    columns of the data rows above by construction — no hand-tuned grid
    math to keep in sync. */
-.module-detail .kv-table .kv-add-cell {
+.kv-table .kv-add-cell {
   vertical-align: bottom;
 }
 
@@ -949,7 +961,7 @@ button.module-row-chevron:focus-visible {
    column stacks the label on top of the input. `min-width: 0` overrides
    the input's intrinsic ~150px minimum so the input can shrink to fill
    whatever the table column width happens to be. */
-.module-detail .kv-add-field {
+.kv-add-field {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -959,11 +971,11 @@ button.module-row-chevron:focus-visible {
 /* The Value cell wrapper inside the add row needs to fill its `<td>` so
    the input/select inside (already `width: 100%`) actually stretches to
    the cell's full width. */
-.module-detail .kv-add-field .kv-value-cell {
+.kv-add-field .kv-value-cell {
   width: 100%;
 }
 
-.module-detail .kv-add-label {
+.kv-add-label {
   font-size: 11px;
   color: var(--vscode-descriptionForeground);
   text-transform: uppercase;
@@ -974,7 +986,7 @@ button.module-row-chevron:focus-visible {
    cell, matching the natural width of the "Add" label plus button padding.
    `align-self` is irrelevant inside a `<td>` (table cells don't form a flex
    parent), so we drop it. */
-.module-detail .kv-add-button {
+.kv-add-button {
   height: 28px;
   width: 100%;
   border-radius: 3px;
@@ -1282,4 +1294,13 @@ button.module-row-chevron:focus-visible {
   color: var(--vscode-badge-foreground);
   border-radius: 10px;
   white-space: nowrap;
+}
+
+/* ─── CLI alias table (Sessions tab) ────────────────────────────────── */
+
+/* Per-row action button group (Register / Probe / Delete). Flex row keeps
+   the buttons from touching each other. */
+.alias-row-actions {
+  display: flex;
+  gap: 4px;
 }

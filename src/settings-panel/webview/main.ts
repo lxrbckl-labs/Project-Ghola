@@ -2,6 +2,7 @@
 // Plain TS + DOM only — no framework, no markdown lib (renders prompts as <pre>).
 
 import type {
+  CliAlias,
   HostToWebviewMessage,
   ModuleSummary,
   NamedConfiguration,
@@ -72,8 +73,13 @@ interface UIState {
   cliCommand: string;
   /** Value of nomeda.sessionCommand VS Code configuration. */
   sessionCommand: string;
-  /** Current SWE agent counts pulled from `nomeda.swe.*` VS Code configuration. */
-  sweConfig: { performanceCores: number; efficiencyCores: number };
+  /** Current SWE agent counts and model preferences pulled from `nomeda.swe.*` VS Code configuration. */
+  sweConfig: {
+    performanceCores: number;
+    efficiencyCores: number;
+    performanceCoresModel: string;
+    efficiencyCoresModel: string;
+  };
   /** Current QA agent count pulled from `nomeda.qa.count` VS Code configuration. */
   qaConfig: { count: number };
   /** All named configurations known to the host. Updated by 'configurationsChanged'. */
@@ -116,6 +122,16 @@ interface UIState {
     string,
     Record<string, string> | Record<string, { value: string; enabled: boolean }>
   >;
+  /** Registered Claude CLI aliases (mirrors `nomeda.cliAliases`). */
+  aliases: CliAlias[];
+  /**
+   * Currently-selected alias from the launch dropdown (mirrors
+   * `nomeda.selectedAlias`). Empty string falls back to the legacy
+   * `cliCommand` text input.
+   */
+  selectedAlias: string;
+  /** Shell rc file the aliases are persisted into (mirrors `nomeda.aliasFile`). */
+  aliasFile: string;
 }
 
 const state: UIState = {
@@ -131,7 +147,7 @@ const state: UIState = {
   moduleSearch: '',
   cliCommand: 'claude',
   sessionCommand: 'initiate',
-  sweConfig: { performanceCores: 2, efficiencyCores: 1 },
+  sweConfig: { performanceCores: 2, efficiencyCores: 1, performanceCoresModel: 'opus', efficiencyCoresModel: 'sonnet' },
   qaConfig: { count: 1 },
   configurations: [],
   activeConfigurationId: null,
@@ -140,6 +156,9 @@ const state: UIState = {
   configManageOpen: false,
   linqpadConnections: { status: 'loading', list: [] },
   keyValueDrafts: {},
+  aliases: [],
+  selectedAlias: '',
+  aliasFile: '~/.bashrc',
 };
 
 const root = document.getElementById('app')!;
@@ -233,10 +252,32 @@ function handleMessage(msg: HostToWebviewMessage): void {
       state.settingsValues = msg.values ?? {};
       state.cliCommand = msg.cliCommand ?? 'claude';
       state.sessionCommand = msg.sessionCommand ?? 'initiate';
-      if (msg.swe) state.sweConfig = msg.swe;
+      if (msg.swe) {
+        state.sweConfig = {
+          performanceCores: msg.swe.performanceCores,
+          efficiencyCores: msg.swe.efficiencyCores,
+          performanceCoresModel: msg.swe.performanceCoresModel ?? 'opus',
+          efficiencyCoresModel: msg.swe.efficiencyCoresModel ?? 'sonnet',
+        };
+      }
       if (msg.qa) state.qaConfig = msg.qa;
+      state.aliases = msg.aliases ?? [];
+      state.selectedAlias = msg.selectedAlias ?? '';
+      state.aliasFile = msg.aliasFile ?? '~/.bashrc';
       state.dirty = false;
       render();
+      break;
+    case 'aliasesLoaded':
+      state.aliases = msg.aliases ?? [];
+      state.selectedAlias = msg.selectedAlias ?? '';
+      state.aliasFile = msg.aliasFile ?? state.aliasFile;
+      render();
+      break;
+    case 'aliasesSaved':
+      if (!msg.ok) {
+        // Best-effort surface; toast UX is future work — match `settingsSaved`.
+        console.error('[nomeda] alias save failed', msg.error);
+      }
       break;
     case 'settingsSaved':
       if (msg.ok) {
@@ -404,25 +445,16 @@ function renderGeneral(wrapper: HTMLElement): void {
   // Each column is a label-above-input field; the play button sits at the far right.
   const launchRow = el('div', { class: 'session-launch-row' });
 
-  // Column 1 — CLI Command
-  const cliField = el('div', { class: 'session-launch-field' });
-  const cliLabel = el('label', { class: 'setting-label session-command-label' });
-  cliLabel.textContent = 'CLI Command';
-  cliField.appendChild(cliLabel);
-  const cliInp = el('input', { class: 'setting-input session-command-input' }) as HTMLInputElement;
-  cliInp.type = 'text';
-  cliInp.value = state.cliCommand;
-  cliInp.addEventListener('blur', () => {
-    state.cliCommand = cliInp.value;
-    vscode.postMessage({
-      type: 'updateConfiguration',
-      section: 'nomeda',
-      key: 'cliCommand',
-      value: cliInp.value,
-    });
-  });
-  cliField.appendChild(cliInp);
-  launchRow.appendChild(cliField);
+  // Column 1 — CLI Alias picker. Replaces the legacy free-text `cliCommand`
+  // input (now relocated below as "Fallback CLI" inside the alias editor).
+  // Selecting an alias names the shell-registered Claude CLI invocation the
+  // launcher should use; the empty option falls back to the legacy command.
+  const aliasField = el('div', { class: 'session-launch-field' });
+  const aliasLabel = el('label', { class: 'setting-label session-command-label' });
+  aliasLabel.textContent = 'CLI Alias';
+  aliasField.appendChild(aliasLabel);
+  aliasField.appendChild(renderAliasPickerDropdown());
+  launchRow.appendChild(aliasField);
 
   // Column 2 — Initiation Command
   const sessionField = el('div', { class: 'session-launch-field' });
@@ -461,6 +493,11 @@ function renderGeneral(wrapper: HTMLElement): void {
   }) as HTMLButtonElement;
   sessionBtn.innerHTML = PLAY_ICON_SVG;
   sessionBtn.addEventListener('click', () => vscode.postMessage({ type: 'openSession' }));
+  // Alias registry editor — lives above the launch row so the user defines
+  // aliases first, then picks one from the dropdown to launch.
+  wrapper.appendChild(renderAliasEditor());
+  wrapper.appendChild(el('hr', { class: 'section-divider' }));
+
   launchRow.appendChild(sessionBtn);
   wrapper.appendChild(launchRow);
 
@@ -647,7 +684,7 @@ function renderModuleRow(m: ModuleSummary): HTMLElement {
   nameEl.textContent = m.name;
   title.appendChild(nameEl);
   const metaEl = el('span', { class: 'meta' });
-  metaEl.textContent = `  v${m.version}`;
+  metaEl.textContent = ` · v${m.version}`;
   title.appendChild(metaEl);
   textZone.appendChild(title);
   if (m.description) {
@@ -795,6 +832,244 @@ function renderConfigDropdown(): HTMLElement {
   });
 
   return select;
+}
+
+// ─── CLI alias registry helpers ──────────────────────────────────────────
+
+/**
+ * Launch-row alias picker. Mirrors the structure of `renderConfigDropdown`
+ * (same `<select>` + `<option>` shape, same `setting-input` class) so the two
+ * dropdowns visually rhyme on the Session row. When no aliases are registered a
+ * single disabled placeholder option is shown; otherwise one option per alias.
+ */
+function renderAliasPickerDropdown(): HTMLElement {
+  const select = el('select', {
+    class: 'setting-input session-command-input',
+    'aria-label': 'Claude CLI alias',
+  }) as HTMLSelectElement;
+
+  if (state.aliases.length === 0) {
+    const placeholderOpt = el('option') as HTMLOptionElement;
+    placeholderOpt.value = '';
+    placeholderOpt.textContent = '(no aliases registered)';
+    placeholderOpt.disabled = true;
+    select.appendChild(placeholderOpt);
+  } else {
+    state.aliases.forEach((a) => {
+      const opt = el('option') as HTMLOptionElement;
+      opt.value = a.alias;
+      opt.textContent = a.alias;
+      select.appendChild(opt);
+    });
+  }
+
+  select.value = state.selectedAlias ?? '';
+
+  select.addEventListener('change', () => {
+    state.selectedAlias = select.value;
+    vscode.postMessage({
+      type: 'updateConfiguration',
+      section: 'nomeda',
+      key: 'selectedAlias',
+      value: select.value,
+    });
+  });
+
+  return select;
+}
+
+/**
+ * Full alias editor block: heading + subhead + table (existing rows + add row).
+ *
+ * Layout mirrors `appendKeyValueEditor` — same `kv-table-wrap` / `kv-table`
+ * scaffolding and `kv-cell-*` classes so the visual density (table-layout:
+ * fixed, tight padding) carries over without new CSS.
+ *
+ * Auto-save semantics: every mutation (add / edit alias name on blur / edit
+ * command on blur / delete) posts a `saveAliases` with the full trimmed list.
+ * The host owns conflict reconciliation and rc-file writeback.
+ */
+function renderAliasEditor(): HTMLElement {
+  const block = el('div', { class: 'alias-editor' });
+
+  // Section heading + subhead. Using plain h3/p — the file's other headings
+  // are h1/h2 with class-based styling; this block is a sub-section so h3
+  // keeps the visual hierarchy below the page title.
+  const heading = el('h3', { class: 'setting-keywords-heading' });
+  heading.textContent = 'Claude CLI Aliases';
+  heading.style.marginBottom = '2px';
+  block.appendChild(heading);
+  const subtitle = textEl(
+    'p',
+    'Manage the aliases written to your shell rc file. Pick one in the dropdown below to launch with that Claude session.',
+    'subtitle',
+  );
+  subtitle.style.marginTop = '0';
+  block.appendChild(subtitle);
+
+  // ── Table of existing aliases ──────────────────────────────────────
+  const tableWrap = el('div', { class: 'kv-table-wrap' });
+  const table = el('table', { class: 'kv-table' });
+
+  const thead = el('thead');
+  const headRow = el('tr');
+  const aliasHead = el('th');
+  aliasHead.textContent = 'Alias';
+  const actionHead = el('th', { class: 'kv-actions-head' });
+  headRow.appendChild(aliasHead);
+  headRow.appendChild(actionHead);
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = el('tbody');
+  if (state.aliases.length === 0) {
+    const emptyRow = el('tr', { class: 'kv-empty-row' });
+    const td = el('td');
+    td.setAttribute('colspan', '2');
+    td.textContent = 'No aliases registered. Add one below.';
+    emptyRow.appendChild(td);
+    tbody.appendChild(emptyRow);
+  } else {
+    state.aliases.forEach((a, index) => {
+      tbody.appendChild(renderAliasRow(a, index));
+    });
+  }
+  table.appendChild(tbody);
+
+  // Add-row at the bottom — same `<tfoot>` pattern as `renderKeyValueAddRow`.
+  table.appendChild(renderAliasAddRow());
+
+  tableWrap.appendChild(table);
+  block.appendChild(tableWrap);
+
+  return block;
+}
+
+/**
+ * Single committed-alias row: alias-name input (blur-committed) + delete button.
+ * The command is auto-built from the template on rename and never displayed.
+ */
+function renderAliasRow(a: CliAlias, index: number): HTMLElement {
+  const tr = el('tr', { class: 'kv-row' });
+
+  // Alias-name input.
+  const aliasTd = el('td', { class: 'kv-cell' });
+  const aliasInp = el('input', { class: 'setting-input kv-input' }) as HTMLInputElement;
+  aliasInp.type = 'text';
+  aliasInp.value = a.alias;
+  aliasInp.addEventListener('change', () => {
+    const next = aliasInp.value.trim();
+    if (next === a.alias) return;
+    if (next.length === 0) {
+      aliasInp.value = a.alias;
+      return;
+    }
+    // Reject names that don't match the allowed character set.
+    if (!/^[A-Za-z0-9_-]+$/.test(next)) {
+      aliasInp.value = a.alias;
+      return;
+    }
+    // Collision with another alias name → roll back the input.
+    if (state.aliases.some((other, i) => i !== index && other.alias === next)) {
+      aliasInp.value = a.alias;
+      return;
+    }
+    // Rebuild the command from the template using the new alias name.
+    const builtCommand = `CLAUDE_CONFIG_DIR=$HOME/.${next} command claude`;
+    state.aliases[index] = { alias: next, command: builtCommand };
+    persistAliases();
+    render();
+  });
+  aliasTd.appendChild(aliasInp);
+  tr.appendChild(aliasTd);
+
+  // Delete button.
+  const actionTd = el('td', { class: 'kv-cell kv-cell-actions' });
+  const delBtn = el('button', {
+    class: 'icon-button kv-delete-button',
+    type: 'button',
+    'aria-label': `Delete ${a.alias}`,
+    title: 'Delete',
+  }) as HTMLButtonElement;
+  delBtn.innerHTML = TRASH_ICON_SVG;
+  delBtn.addEventListener('click', () => {
+    state.aliases = state.aliases.filter((_, i) => i !== index);
+    // If the deleted alias was the active selection, drop it.
+    if (state.selectedAlias === a.alias) {
+      state.selectedAlias = '';
+      vscode.postMessage({
+        type: 'updateConfiguration',
+        section: 'nomeda',
+        key: 'selectedAlias',
+        value: '',
+      });
+    }
+    persistAliases();
+    render();
+  });
+  actionTd.appendChild(delBtn);
+  tr.appendChild(actionTd);
+
+  return tr;
+}
+
+/**
+ * Add-alias `<tfoot>` row. Single alias-name input + Add button. The command
+ * is auto-built from the template `CLAUDE_CONFIG_DIR=$HOME/.<name> command claude`
+ * and never shown to the user.
+ */
+function renderAliasAddRow(): HTMLElement {
+  const tfoot = el('tfoot', { class: 'kv-add-foot' });
+  const tr = el('tr', { class: 'kv-add-row' });
+
+  const aliasTd = el('td', { class: 'kv-cell kv-add-cell' });
+  const aliasField = el('div', { class: 'kv-add-field' });
+  const aliasLabel = el('label', { class: 'kv-add-label' });
+  aliasLabel.textContent = 'Alias name';
+  const aliasInp = el('input', { class: 'setting-input kv-input' }) as HTMLInputElement;
+  aliasInp.type = 'text';
+  aliasInp.placeholder = 'claude-1';
+  aliasField.appendChild(aliasLabel);
+  aliasField.appendChild(aliasInp);
+  aliasTd.appendChild(aliasField);
+  tr.appendChild(aliasTd);
+
+  const actionTd = el('td', { class: 'kv-cell kv-cell-actions kv-add-cell kv-add-cell--actions' });
+  const addBtn = el('button', { class: 'primary kv-add-button', type: 'button' }) as HTMLButtonElement;
+  addBtn.textContent = 'Add';
+  addBtn.addEventListener('click', () => {
+    const aliasName = aliasInp.value.trim();
+    // Validate: non-empty and only allowed characters.
+    if (aliasName.length === 0 || !/^[A-Za-z0-9_-]+$/.test(aliasName)) {
+      aliasInp.style.borderColor = 'var(--vscode-inputValidation-errorBorder)';
+      return;
+    }
+    aliasInp.style.borderColor = '';
+    // Reject duplicates — visually mark the alias input red.
+    if (state.aliases.some((a) => a.alias === aliasName)) {
+      aliasInp.style.borderColor = 'var(--vscode-inputValidation-errorBorder)';
+      return;
+    }
+    // Build the command from the fixed template.
+    const builtCommand = `CLAUDE_CONFIG_DIR=$HOME/.${aliasName} command claude`;
+    state.aliases.push({ alias: aliasName, command: builtCommand });
+    persistAliases();
+    render();
+  });
+  actionTd.appendChild(addBtn);
+  tr.appendChild(actionTd);
+
+  tfoot.appendChild(tr);
+  return tfoot;
+}
+
+/**
+ * Post the full alias list to the host. Optimistic-update semantics: the local
+ * `state.aliases` is already correct by the time we get here — the host write
+ * is best-effort and surfaces errors via `aliasesSaved`.
+ */
+function persistAliases(): void {
+  vscode.postMessage({ type: 'saveAliases', aliases: state.aliases });
 }
 
 function renderConfigNameInput(mode: { mode: 'create' } | { mode: 'rename'; id: string }): HTMLElement {
@@ -1005,7 +1280,7 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
   headName.textContent = m.name;
   headTitle.appendChild(headName);
   const headMeta = el('span', { class: 'meta' });
-  headMeta.textContent = `  ${m.id} · v${m.version}`;
+  headMeta.textContent = ` · v${m.version}`;
   headTitle.appendChild(headMeta);
   header.appendChild(headTitle);
 
@@ -1198,20 +1473,14 @@ function appendDef(dl: HTMLElement, term: string, value: string): void {
  *
  * Layout per field:
  *   Label                                    ← stays above on its own line
- *   [ input grows .......... 28px ] [save]   ← input + explicit-save icon button
+ *   [ input grows .......... ]               ← input only, no save button
  *   Description (optional)                   ← below input
  *
  * Persistence model:
- *   - Booleans: auto-save on toggle (toggling implies commitment; there is no
- *     ambiguous "draft" state for a switch).
- *   - String / number / enum: explicit save — the user edits freely; the save
- *     button glows ".dirty" when the input differs from the persisted value;
- *     clicking the button commits the change and clears the dirty state. No
- *     more reactive blur/change persistence.
- *
- * Dirty tracking lives in this function's closure: `committed` holds the value
- * last persisted (initialized from settingsValues / field.default), and the
- * save button's classList is updated as the user types.
+ *   - Booleans: auto-save on toggle.
+ *   - String / number / enum: auto-save on commit — the input persists when
+ *     it fires `change` (blur for text/number inputs, selection change for
+ *     enum selects). No explicit save button.
  */
 function renderModuleSettingField(
   moduleId: string,
@@ -1312,21 +1581,13 @@ function renderModuleSettingField(
     return wrap;
   }
 
-  // For non-boolean fields, build a flex row with the input on the left and an
-  // explicit save icon button on the right. The closure below tracks the last
-  // committed value so the button can show a "dirty" indicator while the
-  // current input value differs.
+  // For non-boolean fields, build a flex row containing just the input.
+  // Auto-save fires on `change` (blur for text/number, selection commit for
+  // enum) — no explicit save button needed.
   const row = el('div', { class: 'module-field-row' });
-
-  // `committed` is the value last persisted; it is what we compare the live
-  // input against to decide if there are unsaved changes.
-  let committed: unknown = current;
 
   // Read the latest "input value" coerced to the field type.
   let readInputValue: () => unknown;
-  // Apply a committed value back into the DOM (used after save to ensure the
-  // displayed value matches what we persisted, especially for number coercion).
-  let writeInputValue: (v: unknown) => void;
 
   if (field.type === 'enum') {
     const select = el('select', { class: 'setting-input' }) as HTMLSelectElement;
@@ -1338,75 +1599,35 @@ function renderModuleSettingField(
       select.appendChild(o);
     });
     readInputValue = () => select.value;
-    writeInputValue = (v) => {
-      select.value = v === undefined || v === null ? '' : String(v);
-    };
     row.appendChild(select);
-    select.addEventListener('change', () => updateDirtyState());
+    select.addEventListener('change', () => {
+      state.settingsValues[key] = readInputValue();
+      persistSettings();
+    });
   } else if (field.type === 'number') {
     const inp = el('input', { class: 'setting-input' }) as HTMLInputElement;
     inp.type = 'number';
     if (current !== undefined && current !== null) inp.value = String(current);
     readInputValue = () => (inp.value === '' ? undefined : Number(inp.value));
-    writeInputValue = (v) => {
-      inp.value = v === undefined || v === null ? '' : String(v);
-    };
     row.appendChild(inp);
-    inp.addEventListener('input', () => updateDirtyState());
+    inp.addEventListener('change', () => {
+      state.settingsValues[key] = readInputValue();
+      persistSettings();
+    });
   } else {
     // string, path, or unknown — render text input.
     const inp = el('input', { class: 'setting-input' }) as HTMLInputElement;
     inp.type = 'text';
     if (current !== undefined && current !== null) inp.value = String(current);
     readInputValue = () => inp.value;
-    writeInputValue = (v) => {
-      inp.value = v === undefined || v === null ? '' : String(v);
-    };
     row.appendChild(inp);
-    inp.addEventListener('input', () => updateDirtyState());
+    inp.addEventListener('change', () => {
+      state.settingsValues[key] = readInputValue();
+      persistSettings();
+    });
   }
 
-  const saveBtn = el('button', {
-    class: 'icon-button framed save-field-button',
-    type: 'button',
-    'aria-label': `Save ${field.label}`,
-    title: 'Save',
-  }) as HTMLButtonElement;
-  saveBtn.innerHTML = SAVE_ICON_SVG;
-
-  function isDirty(): boolean {
-    const next = readInputValue();
-    // Treat undefined / '' / null as equivalent "empty" so an empty optional
-    // number input doesn't flicker dirty against an undefined default.
-    const a = next === '' || next === null ? undefined : next;
-    const b = committed === '' || committed === null ? undefined : committed;
-    return a !== b;
-  }
-
-  function updateDirtyState(): void {
-    if (isDirty()) {
-      saveBtn.classList.add('dirty');
-    } else {
-      saveBtn.classList.remove('dirty');
-    }
-  }
-
-  saveBtn.addEventListener('click', () => {
-    if (!isDirty()) return;
-    const next = readInputValue();
-    state.settingsValues[key] = next;
-    committed = next;
-    // Reflect the canonical persisted value back into the input (e.g. number
-    // coercion may have normalized '3.0' to 3).
-    writeInputValue(next);
-    persistSettings();
-    updateDirtyState();
-  });
-  row.appendChild(saveBtn);
   wrap.appendChild(row);
-
-  // Initial state — should be clean.
-  updateDirtyState();
 
   if (field.description) {
     wrap.appendChild(textEl('div', field.description, 'setting-desc'));
@@ -2211,6 +2432,39 @@ function renderAgentConfigField(
     onCommit(parsed);
   });
   field.appendChild(input);
+  return field;
+}
+
+/**
+ * Compact [label : model select] field used inside the agent-config row.
+ * Fires onCommit immediately on selection change (no blur needed for a select).
+ * Reuses `agent-config-input` so the <select> inherits VS Code input theming.
+ */
+function renderAgentModelDropdown(
+  label: string,
+  initial: string,
+  onCommit: (next: string) => void,
+): HTMLElement {
+  const field = el('div', { class: 'agent-config-field' });
+  const lbl = el('label', { class: 'agent-config-label' });
+  lbl.textContent = label;
+  field.appendChild(lbl);
+
+  const select = el('select', { class: 'agent-config-input' }) as HTMLSelectElement;
+  const options = [
+    { value: 'opus', text: 'Opus' },
+    { value: 'sonnet', text: 'Sonnet' },
+    { value: 'haiku', text: 'Haiku' },
+  ];
+  for (const opt of options) {
+    const o = el('option') as HTMLOptionElement;
+    o.value = opt.value;
+    o.textContent = opt.text;
+    if (opt.value === initial) o.selected = true;
+    select.appendChild(o);
+  }
+  select.addEventListener('change', () => onCommit(select.value));
+  field.appendChild(select);
   return field;
 }
 

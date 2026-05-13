@@ -12,8 +12,14 @@
       "fastpathDirectory": {
         "type": "string",
         "label": "Fast Path Directory",
-        "description": "Optional override for the WSL-native target directory the session launcher cd's into when this module is enabled. Leave blank to let the launcher compute it from the current workspace path (e.g. /mnt/c/Users/<user>/foo → ~/projects/foo).",
-        "default": ""
+        "description": "Parent directory under which the launcher looks for a subdirectory matching your workspace basename when Auto-cd is on (e.g. ~/projects + workspace Foo → ~/projects/Foo). When Auto-cd is off, the launcher cd's directly into this directory. Leave blank to let the launcher compute a target from the workspace path (e.g. /mnt/c/Users/<user>/Foo → ~/projects/Foo).",
+        "default": "~/projects"
+      },
+      "autoCdIntoRepo": {
+        "type": "boolean",
+        "label": "Auto-cd into matching repo",
+        "description": "Opens the terminal in your repo's matching subdirectory under Fast Path Directory when it exists. Falls back to the Fast Path Directory itself when there's no match or this is off.",
+        "default": true
       }
     }
   }

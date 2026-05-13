@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { validateManifest } from '../manifest/validator';
 import type { ModuleLoader } from '../modules/loader';
 import type { PromptComposer } from '../prompts/composer';
+import { syncAliasFile, validateAlias, type CliAlias } from '../session/alias-sync';
 import { resolveAgentPromptFilePath } from '../session/prompt-file';
 import type { ConfigurationsStore } from './configurations-store';
 import {
@@ -227,9 +228,58 @@ export class SettingsPanel implements vscode.Disposable {
       case 'openVSCodeSettings':
         await vscode.commands.executeCommand('workbench.action.openSettings', msg.query);
         break;
+      case 'saveAliases':
+        await this.saveAliases(msg.aliases);
+        break;
+      case 'getAliases':
+        this.postAliases();
+        break;
       default:
         this.logger?.appendLine(`[panel] unknown message: ${JSON.stringify(msg)}`);
     }
+  }
+
+  // ─── CLI alias registry ──────────────────────────────────────────────
+
+  /**
+   * Validate every entry, then persist to `nomeda.cliAliases` and rewrite the
+   * managed block in `nomeda.aliasFile`. Surfaces validation and fs errors
+   * back to the webview via `aliasesSaved`.
+   */
+  private async saveAliases(aliases: CliAlias[]): Promise<void> {
+    for (const entry of aliases) {
+      const error = validateAlias(entry);
+      if (error) {
+        this.post({ type: 'aliasesSaved', ok: false, error });
+        return;
+      }
+    }
+    try {
+      await vscode.workspace
+        .getConfiguration('nomeda')
+        .update('cliAliases', aliases, vscode.ConfigurationTarget.Global);
+      const aliasFile = vscode.workspace
+        .getConfiguration('nomeda')
+        .get<string>('aliasFile', '~/.bashrc');
+      await syncAliasFile(aliasFile, aliases);
+      this.post({ type: 'aliasesSaved', ok: true });
+    } catch (err) {
+      this.post({ type: 'aliasesSaved', ok: false, error: (err as Error).message });
+    }
+  }
+
+  /**
+   * Post the current alias registry + selection + rc file path to the
+   * webview. Mirrors the alias-related fields on `settingsLoaded` for explicit
+   * refresh requests.
+   */
+  private postAliases(): void {
+    if (!this.panel) return;
+    const cfg = vscode.workspace.getConfiguration('nomeda');
+    const aliases = cfg.get<CliAlias[]>('cliAliases', []);
+    const selectedAlias = cfg.get<string>('selectedAlias', '');
+    const aliasFile = cfg.get<string>('aliasFile', '~/.bashrc');
+    this.post({ type: 'aliasesLoaded', aliases, selectedAlias, aliasFile });
   }
 
   private async postModules(): Promise<void> {
@@ -447,11 +497,26 @@ export class SettingsPanel implements vscode.Disposable {
     const swe = {
       performanceCores: cfg.get<number>('swe.performanceCores', 2),
       efficiencyCores: cfg.get<number>('swe.efficiencyCores', 1),
+      performanceCoresModel: cfg.get<string>('swe.performanceCoresModel', 'opus'),
+      efficiencyCoresModel: cfg.get<string>('swe.efficiencyCoresModel', 'sonnet'),
     };
     const qa = {
       count: cfg.get<number>('qa.count', 1),
     };
-    this.post({ type: 'settingsLoaded', values, cliCommand, sessionCommand, swe, qa });
+    const aliases = cfg.get<CliAlias[]>('cliAliases', []);
+    const selectedAlias = cfg.get<string>('selectedAlias', '');
+    const aliasFile = cfg.get<string>('aliasFile', '~/.bashrc');
+    this.post({
+      type: 'settingsLoaded',
+      values,
+      cliCommand,
+      sessionCommand,
+      swe,
+      qa,
+      aliases,
+      selectedAlias,
+      aliasFile,
+    });
   }
 
   private async saveSettings(values: Record<string, unknown>): Promise<void> {

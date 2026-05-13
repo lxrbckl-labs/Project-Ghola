@@ -25,6 +25,9 @@ const FASTPATH_MODULE_ID = 'tool.fastpath-check';
 /** Field key on `tool.fastpath-check` for an explicit user-supplied target directory. */
 const FASTPATH_SETTING_KEY = 'fastpathDirectory';
 
+/** Field key on `tool.fastpath-check` for the auto-cd-into-matching-repo toggle. */
+const AUTO_CD_INTO_REPO_KEY = 'autoCdIntoRepo';
+
 export class SessionLauncher {
   constructor(
     private readonly loader: ModuleLoader,
@@ -45,7 +48,13 @@ export class SessionLauncher {
     // Read configuration fresh at every launch so edits made in VS Code
     // Settings between play-button clicks take effect without a reload.
     const cfg = vscode.workspace.getConfiguration('nomeda');
-    const cliCommand = cfg.get<string>('cliCommand', 'claude').trim();
+    // Alias-first resolution: when the user has picked an entry from the
+    // Sessions-tab alias dropdown (`selectedAlias`), launch that alias name
+    // verbatim and rely on bash's alias lookup. Fall back to the raw
+    // `cliCommand` string for back-compat with users who have not migrated
+    // to the alias registry.
+    const selectedAlias = cfg.get<string>('selectedAlias', '').trim();
+    const cliCommand = (selectedAlias !== '' ? selectedAlias : cfg.get<string>('cliCommand', 'claude')).trim();
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate').trim();
 
     const terminal = vscode.window.createTerminal({
@@ -71,6 +80,8 @@ export class SessionLauncher {
         SWE_AGENT_COUNT: String(
           cfg.get<number>('swe.performanceCores', 2) + cfg.get<number>('swe.efficiencyCores', 1),
         ),
+        SWE_PERFORMANCE_MODEL: cfg.get<string>('swe.performanceCoresModel', 'opus'),
+        SWE_EFFICIENCY_MODEL: cfg.get<string>('swe.efficiencyCoresModel', 'sonnet'),
         QA_AGENT_COUNT: String(cfg.get<number>('qa.count', 1)),
       },
     });
@@ -181,10 +192,26 @@ export class SessionLauncher {
    * Returns an absolute path (or undefined). Existence is verified by the caller.
    */
   private resolveFastpathTarget(workspacePath: string): string | undefined {
-    // (1) Explicit user override via module setting.
+    // (1) Explicit user-supplied parent dir.
     const explicit = this.readModuleSetting(FASTPATH_MODULE_ID, FASTPATH_SETTING_KEY);
     if (typeof explicit === 'string' && explicit.trim() !== '') {
-      return this.expandHome(explicit.trim());
+      const expandedExplicit = this.expandHome(explicit.trim());
+
+      // (1a) Auto-cd-into-matching-repo: if the parent contains a subdirectory
+      // matching the workspace basename, prefer that — it's the actual repo, not
+      // the parent.
+      const autoCd = this.readModuleSetting(FASTPATH_MODULE_ID, AUTO_CD_INTO_REPO_KEY);
+      // Default-true semantics: explicit `false` opts out; anything else (true,
+      // undefined, unset) keeps the auto-cd behavior on.
+      if (autoCd !== false) {
+        const basename = path.basename(workspacePath);
+        const candidate = path.join(expandedExplicit, basename);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+
+      return expandedExplicit;
     }
 
     // (2) Workspace already on a WSL-native path → the path itself is fast.
