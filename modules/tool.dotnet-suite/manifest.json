@@ -10,7 +10,7 @@
     "settings": {
       "allowedCommands": {
         "type": "string",
-        "label": "Allowed dotnet subcommands",
+        "label": "Allowed Dotnet Subcommands",
         "description": "Comma-separated list of dotnet subcommands the agents may run. See the keyword table below for each available subcommand. Default empty string means no dotnet commands allowed.",
         "default": "",
         "keywordsPath": "allowed-commands-keywords.json",

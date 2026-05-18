@@ -82,7 +82,9 @@
               "keyLabel": { "type": "string" },
               "valueLabel": { "type": "string" },
               "optionalValue": { "type": "boolean" },
-              "optionalEnabled": { "type": "boolean" }
+              "optionalEnabled": { "type": "boolean" },
+              "optionalDescription": { "type": "boolean" },
+              "descriptionLabel": { "type": "string" }
             }
           }
         },

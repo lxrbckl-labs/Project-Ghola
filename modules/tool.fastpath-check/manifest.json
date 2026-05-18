@@ -17,7 +17,7 @@
       },
       "autoCdIntoRepo": {
         "type": "boolean",
-        "label": "Auto-cd into matching repo",
+        "label": "Workspace Repository Resolution",
         "description": "Opens the terminal in your repo's matching subdirectory under Fast Path Directory when it exists. Falls back to the Fast Path Directory itself when there's no match or this is off.",
         "default": true
       }

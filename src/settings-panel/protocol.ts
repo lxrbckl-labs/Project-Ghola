@@ -76,6 +76,23 @@ export interface SettingKeywordEntry {
   purpose: string;
 }
 
+/**
+ * A single entry in the `tool.feedback-log` module's persistent feedback log.
+ * Both TPM (via Read/Write tools, given the file path as a manifest parameter)
+ * and the Settings panel "Feedback" tab (via host-side Node fs) read and write
+ * the same JSON file. The `id` field is an implementation detail used by the
+ * panel for triage routing and is not surfaced to the user by TPM.
+ */
+export interface FeedbackEntry {
+  id: string;
+  createdAt: string;
+  text: string;
+  status: 'pending' | 'approved';
+  /** Git branch active when the entry was logged. Null when detached HEAD or
+   * not a git repo. Absent on entries logged before this field was introduced. */
+  branch?: string | null;
+}
+
 // Webview → host
 export type WebviewToHostMessage =
   | { type: 'ready' }
@@ -101,7 +118,10 @@ export type WebviewToHostMessage =
   | { type: 'copyLinqpadInstallPrompt' }
   | { type: 'openVSCodeSettings'; query: string }
   | { type: 'saveAliases'; aliases: CliAlias[] }
-  | { type: 'getAliases' };
+  | { type: 'getAliases' }
+  | { type: 'feedbackRequested' }
+  | { type: 'feedbackEntryUpdate'; id: string; status: 'approved' }
+  | { type: 'feedbackEntryDelete'; id: string };
 
 // Host → webview
 export type HostToWebviewMessage =
@@ -112,10 +132,15 @@ export type HostToWebviewMessage =
       cliCommand: string;
       sessionCommand: string;
       swe: { performanceCores: number; efficiencyCores: number; performanceCoresModel: string; efficiencyCoresModel: string };
-      qa: { count: number };
+      qa: { count: number; model: string };
       aliases: CliAlias[];
       selectedAlias: string;
       aliasFile: string;
+      branchWidget: {
+        enabled: boolean;
+        jiraBase: string;
+        bitbucketWorkspace: string;
+      };
     }
   | { type: 'settingsSaved'; ok: boolean; error?: string }
   | { type: 'composedPromptUpdated'; agent: string; prompt: string }
@@ -141,4 +166,5 @@ export type HostToWebviewMessage =
       error?: string;
     }
   | { type: 'aliasesLoaded'; aliases: CliAlias[]; selectedAlias: string; aliasFile: string }
-  | { type: 'aliasesSaved'; ok: boolean; error?: string };
+  | { type: 'aliasesSaved'; ok: boolean; error?: string }
+  | { type: 'feedbackLoaded'; entries: FeedbackEntry[] };

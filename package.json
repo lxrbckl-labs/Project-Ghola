@@ -12,7 +12,8 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onView:nomedaBranchWidget"
   ],
   "contributes": {
     "commands": [
@@ -103,10 +104,16 @@
           "maximum": 5,
           "description": "Maximum concurrent QA subagents."
         },
+        "nomeda.qa.model": {
+          "type": "string",
+          "enum": ["opus", "sonnet", "haiku"],
+          "default": "sonnet",
+          "description": "Claude model used by default when QA subagents are deployed. QA verifies code changes through targeted reviews; defaulting to Sonnet matches medium-difficulty correctness work. TPM may still deviate per task — this is the default, not a hard lock."
+        },
         "nomeda.newModulePrompt": {
           "type": "string",
-          "description": "Prompt text copied to clipboard when 'Copy module-generation prompt' is clicked in the Modules tab. Edit this to customize the instructions given to an AI agent for generating new Nomeda modules.",
-          "default": "Generate a complete Nomeda module ready for upload. Output the full folder contents — one manifest.json and one or more .md content files — saved to my Downloads folder under a folder named tool.<short-id>/.\n\nThe module manifest must follow this schema:\n\n{\n  \"id\": \"tool.<short-id>\",\n  \"name\": \"<Human Readable Name>\",\n  \"version\": \"0.1.0\",\n  \"description\": \"One concise sentence describing what this module does.\",\n  \"proactive\": false,\n  \"contributes\": {\n    \"promptFragments\": [\n      { \"target\": \"all\", \"contentPath\": \"<file>.md\" }\n    ],\n    \"settings\": {\n      \"<setting-key>\": {\n        \"type\": \"string\",\n        \"label\": \"<UI label>\",\n        \"description\": \"<2-4 sentence consequence-focused description of what each value means and what changing it does>\",\n        \"default\": \"<default value>\"\n      }\n    }\n  }\n}\n\nRules:\n- target is one of: \"tpm\", \"swe\", \"qa\", or \"all\". Use \"all\" only when the content applies identically to every agent.\n- Set proactive to true only if the content must be consulted at session start (environment checks, pre-flight advisories).\n- Content .md files contain agent instructions, rules, or capability descriptions.\n- Settings descriptions must explain consequences — what each value means in practice, what changing it does at runtime, default rationale.\n- The module-level description must be ONE sentence.\n- When writing descriptions (both module-level and per-setting), do NOT use backticks anywhere — descriptions are rendered as plain text and backticks appear literally rather than as styled code. Use plain words, double-quotes for ambiguous literals, or rephrase to avoid the need.\n\nUI styling standards (when extending the panel or designing settings):\n\n- Centering action icons in a kv-table cell requires the CSS selector \".kv-table .kv-cell-actions\" with the \".kv-table\" ancestor. A loose \".kv-cell-actions\" selector loses specificity to the base \".kv-table td\" rule and the icon ends up left-aligned.\n- Inputs in a kv-table add-row use class \"kv-input\" and auto-render at 28px height with VS Code input theming. The Add button uses class \"kv-add-button\" which is also 28px. Do not manually tweak heights — these two classes already match.\n- kv-table CSS rules must be globally scoped, never nested under \".module-detail\". The same kv-table pattern is reused in the Sessions tab outside \".module-detail\" context. When adding a new kv-* rule, omit the \".module-detail\" prefix unless the rule is specific to the module-detail view.\n- Editable fields auto-save on commit. String, number, and enum fields listen for the \"change\" event (fires on blur for inputs, on selection for selects) and call persistSettings() directly. Do not add a manual save button.\n- For one-off layout tweaks (tightening the gap between a heading and its description, etc.), use inline styles via element.style or the el() helper's style attribute. Reserve new CSS rules for patterns that will recur.\n- Reuse the existing class kit before inventing new classes. Available: kv-table, kv-table-wrap, kv-row, kv-cell, kv-cell-key, kv-cell-actions, kv-cell-enabled, kv-input, kv-add-cell, kv-add-field, kv-add-label, kv-add-button, kv-delete-button, kv-empty-row, kv-add-foot, kv-add-row, icon-button, icon-button.framed, primary, secondary, setting-input, setting-label, setting-desc, setting-keywords-heading, subtitle, section-divider.\n\nI want the module to do the following:\n\n[REPLACE THIS LINE WITH A DESCRIPTION OF WHAT THE MODULE SHOULD DO]\n\nSave the folder to my Downloads directory so I can upload it via Nomeda's settings panel.",
+          "description": "Instruction text copied to clipboard when 'Copy Module Generation Instruction' is clicked in the Modules tab. Edit this to customize the instructions given to an AI agent for generating new Nomeda modules.",
+          "default": "Generate a complete Nomeda module ready for upload. Output the full folder contents — one manifest.json and one or more .md content files — saved to my Downloads folder under a folder named tool.<short-id>/.\n\nThe module manifest must follow this schema:\n\n{\n  \"id\": \"tool.<short-id>\",\n  \"name\": \"<Human Readable Name>\",\n  \"version\": \"0.1.0\",\n  \"description\": \"One concise sentence describing what this module does.\",\n  \"proactive\": false,\n  \"contributes\": {\n    \"promptFragments\": [\n      { \"target\": \"all\", \"contentPath\": \"<file>.md\" }\n    ],\n    \"settings\": {\n      \"<setting-key>\": {\n        \"type\": \"string\",\n        \"label\": \"<UI label>\",\n        \"description\": \"<2-4 sentence consequence-focused description of what each value means and what changing it does>\",\n        \"default\": \"<default value>\"\n      }\n    }\n  }\n}\n\nRules:\n- target is one of: \"tpm\", \"swe\", \"qa\", or \"all\". Use \"all\" only when the content applies identically to every agent.\n- Set proactive to true only if the content must be consulted at session start (environment checks, pre-flight advisories).\n- Content .md files contain agent instructions, rules, or capability descriptions.\n- Settings descriptions must explain consequences — what each value means in practice, what changing it does at runtime, default rationale.\n- The module-level description must be ONE sentence.\n- When writing descriptions (both module-level and per-setting), do NOT use backticks anywhere — descriptions are rendered as plain text and backticks appear literally rather than as styled code. Use plain words, double-quotes for ambiguous literals, or rephrase to avoid the need.\n- Setting label fields must use Title Case — capitalize every word's first letter (e.g. \"Fast Path Directory\", \"Workspace Repository Resolution\"). This matches the panel's house style.\n\nUI styling standards (when extending the panel or designing settings):\n\n- Centering action icons in a kv-table cell requires the CSS selector \".kv-table .kv-cell-actions\" with the \".kv-table\" ancestor. A loose \".kv-cell-actions\" selector loses specificity to the base \".kv-table td\" rule and the icon ends up left-aligned.\n- Inputs in a kv-table add-row use class \"kv-input\" and auto-render at 28px height with VS Code input theming. The Add button uses class \"kv-add-button\" which is also 28px. Do not manually tweak heights — these two classes already match.\n- kv-table CSS rules must be globally scoped, never nested under \".module-detail\". The same kv-table pattern is reused in the Sessions tab outside \".module-detail\" context. When adding a new kv-* rule, omit the \".module-detail\" prefix unless the rule is specific to the module-detail view.\n- Editable fields auto-save on commit. String, number, and enum fields listen for the \"change\" event (fires on blur for inputs, on selection for selects) and call persistSettings() directly. Do not add a manual save button.\n- For one-off layout tweaks (tightening the gap between a heading and its description, etc.), use inline styles via element.style or the el() helper's style attribute. Reserve new CSS rules for patterns that will recur.\n- Reuse the existing class kit before inventing new classes. Available: kv-table, kv-table-wrap, kv-row, kv-cell, kv-cell-key, kv-cell-actions, kv-cell-enabled, kv-input, kv-add-cell, kv-add-field, kv-add-label, kv-add-button, kv-delete-button, kv-empty-row, kv-add-foot, kv-add-row, icon-button, icon-button.framed, primary, secondary, setting-input, setting-label, setting-desc, setting-keywords-heading, subtitle, section-divider.\n\nI want the module to do the following:\n\n[REPLACE THIS LINE WITH A DESCRIPTION OF WHAT THE MODULE SHOULD DO]\n\nSave the folder to my Downloads directory so I can upload it via Nomeda's settings panel.",
           "editPresentation": "multilineText"
         },
         "nomeda.linqpadConnectionsPath": {
@@ -117,10 +124,35 @@
         "nomeda.linqpadInstallPrompt": {
           "type": "string",
           "editPresentation": "multilineText",
-          "description": "Prompt text copied to clipboard when the 'Copy install prompt' button is clicked on the LINQPad-not-installed banner in the Modules tab. Edit this to customize the instructions given to an AI assistant for walking a user through installing LINQPad and exporting their connection metadata so Nomeda's Database Access module can populate its connection allowlist.",
+          "description": "Instruction text copied to clipboard when the 'Copy install instructions' button is clicked on the LINQPad-not-installed banner in the Modules tab. Edit this to customize the instructions given to an AI assistant for walking a user through installing LINQPad and exporting their connection metadata so Nomeda's Database Access module can populate its connection allowlist.",
           "default": "I need to install LINQPad on Windows and create at least one named connection so the Nomeda VS Code extension can detect it.\n\nWalk me through:\n\n1. Where to download LINQPad for my Windows version (free edition is fine).\n2. How to install it without admin rights if my machine is locked down.\n3. After install, how to add a new connection — specifically a SQL Server connection. I need to enter:\n   - Server name (instance form: hostname or hostname\\instance)\n   - Authentication (Windows Integrated vs SQL Login)\n   - Database name (optional — a server-only connection is allowed)\n4. Where LINQPad stores the resulting connection metadata. Confirm it is at %APPDATA%\\LINQPad\\ConnectionsV2.xml and explain how to verify that file exists.\n5. If I am running VS Code under WSL, how to make sure the WSL side can read the Windows-side ConnectionsV2.xml (the default /mnt/c/Users/<me>/AppData/Roaming/LINQPad/ path).\n\nKeep the steps short and actionable. I will paste your reply into a notes app and follow it linearly."
+        },
+        "nomeda.branchWidget.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show a Source Control sidebar widget that extracts the ticket key (e.g. CMMS-2650, MCP-2123) from the current branch name and offers one-click links to the Jira ticket and Bitbucket branch/PR. Disabled by default; enable in the Nomeda Settings panel's Session view or directly here."
+        },
+        "nomeda.branchWidget.jiraBase": {
+          "type": "string",
+          "default": "https://herzog.atlassian.net",
+          "description": "Base URL for Jira ticket links. Combined with the extracted ticket key to form the full ticket URL: <jiraBase>/browse/<KEY>. Example: https://herzog.atlassian.net. Trailing slashes are stripped automatically."
+        },
+        "nomeda.branchWidget.bitbucketWorkspace": {
+          "type": "string",
+          "default": "herzog-technologies",
+          "description": "Bitbucket Cloud workspace used as a fallback when the local repo's git remote URL cannot be parsed. Typically auto-detected from 'git remote get-url origin' — leave empty to rely on auto-detection."
         }
       }
+    },
+    "views": {
+      "scm": [
+        {
+          "type": "webview",
+          "id": "nomedaBranchWidget",
+          "name": "Nomeda Branch Widget",
+          "icon": "$(git-branch)"
+        }
+      ]
     }
   },
   "scripts": {

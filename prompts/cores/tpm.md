@@ -55,6 +55,7 @@ Two env vars set the **default model per core type** at session launch:
 
 - `SWE_PERFORMANCE_MODEL` — default model for subagents deployed onto performance cores (default: `opus`).
 - `SWE_EFFICIENCY_MODEL` — default model for subagents deployed onto efficiency cores (default: `sonnet`).
+- `QA_MODEL` — default model for QA subagents (default: `sonnet`).
 
 Use these as your starting point: performance-core agents get `SWE_PERFORMANCE_MODEL`; efficiency-core agents get `SWE_EFFICIENCY_MODEL`. When the specific task is clearly harder or easier than those defaults imply, consult the difficulty table below and pick the appropriate model instead.
 

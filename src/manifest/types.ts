@@ -98,6 +98,15 @@ export interface SettingsField {
    * parameter value at compose time. Default false.
    */
   optionalEnabled?: boolean;
+  /**
+   * When true and the field type is keyValue, each row gains a free-text
+   * Description column rendered between Value and Delete. The description
+   * is panel-only metadata — the composer does NOT pass it to the agent
+   * prompt. Default false.
+   */
+  optionalDescription?: boolean;
+  /** Optional UI label for the description column of a `keyValue` table. Default "Description". */
+  descriptionLabel?: string;
 }
 
 export type SettingsSchema = Record<string, SettingsField>;

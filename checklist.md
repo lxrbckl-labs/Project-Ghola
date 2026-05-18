@@ -18,6 +18,7 @@ Sources: Project SWT feature extraction (95 features across 3 slice files), pre-
 - [x] **tool.npm-suite** — Per-row enable/disable allowlist of npm + Angular CLI commands.
 - [x] **tool.fastpath-check** — Detects WSL fast-path; launcher cd's bash terminal into it on session start.
 - [~] **tool.lenses** — Three-lens deployment scaffolding for review/planning modes (in-flight, untracked).
+- [x] **tool.feedback-log** — Cross-session feedback log; TPM appends entries to a JSON file in extension global storage, Feedback tab in the settings panel exposes Yes/No/Delete triage on cards.
 
 ---
 
@@ -25,7 +26,6 @@ Sources: Project SWT feature extraction (95 features across 3 slice files), pre-
 
 - [ ] **tool.obsidian-notes** — Obsidian vault as agent knowledge base; parent knowledge files, ticket notes, project notes with TPM-only write discipline.
 - [ ] **tool.session-handoff** — Wrap-up summary (done/in-progress/pending/decisions/blockers) + parse latest handoff on resume for multi-session continuity.
-- [ ] **tool.feedback-log** — Persistent cross-session backlog of feature ideas; appendable mid-session, top-N surfaced at startup.
 - [ ] **tool.cross-ticket-isolation** — Cross-ticket/sprint-planning discussions stay in session context only, never written to active ticket notes.
 
 ## External integrations

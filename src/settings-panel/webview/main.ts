@@ -12,6 +12,29 @@ import type {
 } from '../protocol';
 import type { SettingsField } from '../../manifest/types';
 
+// ─── Feedback tab protocol types ──────────────────────────────────────────
+// kept in sync with src/settings-panel/protocol.ts (SWE-1 owns the canonical
+// declarations there; these local re-declarations are removed once the host
+// adds them to the union types above).
+
+interface FeedbackEntry {
+  id: string;
+  createdAt: string; // ISO 8601 date string
+  text: string;
+  status: 'pending' | 'approved';
+  branch?: string | null; // git branch at log time; null = detached HEAD; absent on legacy entries
+}
+
+interface FeedbackLoadedMessage {
+  type: 'feedbackLoaded';
+  entries: FeedbackEntry[];
+}
+
+// These are referenced in message-send sites; kept here for documentation.
+// interface FeedbackRequestedMessage { type: 'feedbackRequested'; }
+// interface FeedbackEntryUpdateMessage { type: 'feedbackEntryUpdate'; id: string; status: 'approved'; }
+// interface FeedbackEntryDeleteMessage { type: 'feedbackEntryDelete'; id: string; }
+
 interface VsCodeApi {
   postMessage(msg: WebviewToHostMessage): void;
   setState(state: unknown): void;
@@ -80,8 +103,8 @@ interface UIState {
     performanceCoresModel: string;
     efficiencyCoresModel: string;
   };
-  /** Current QA agent count pulled from `nomeda.qa.count` VS Code configuration. */
-  qaConfig: { count: number };
+  /** Current QA agent count and model preference pulled from `nomeda.qa.*` VS Code configuration. */
+  qaConfig: { count: number; model: string };
   /** All named configurations known to the host. Updated by 'configurationsChanged'. */
   configurations: NamedConfiguration[];
   /** Currently active configuration id, or null when no preset is selected. */
@@ -114,13 +137,17 @@ interface UIState {
    */
   /**
    * Drafts store either `Record<string, string>` (default keyValue shape) or
-   * `Record<string, { value: string; enabled: boolean }>` (when the manifest
-   * sets `optionalEnabled: true` for the field). Shape is determined per
-   * field by `field.optionalEnabled` at render time.
+   * `Record<string, { value: string; enabled: boolean; description?: string }>`
+   * (when the manifest sets `optionalEnabled: true` for the field; the
+   * optional `description` is populated when the same field also sets
+   * `optionalDescription: true`). Shape is determined per field by
+   * `field.optionalEnabled` / `field.optionalDescription` at render time.
+   * Note: `description` is panel-only metadata and is stripped from the
+   * agent-facing value at compose time.
    */
   keyValueDrafts: Record<
     string,
-    Record<string, string> | Record<string, { value: string; enabled: boolean }>
+    Record<string, string> | Record<string, { value: string; enabled: boolean; description?: string }>
   >;
   /** Registered Claude CLI aliases (mirrors `nomeda.cliAliases`). */
   aliases: CliAlias[];
@@ -132,6 +159,20 @@ interface UIState {
   selectedAlias: string;
   /** Shell rc file the aliases are persisted into (mirrors `nomeda.aliasFile`). */
   aliasFile: string;
+  /** Branch Widget configuration pulled from `nomeda.branchWidget.*` VS Code configuration. */
+  branchWidget: {
+    enabled: boolean;
+    jiraBase: string;
+    bitbucketWorkspace: string;
+  };
+  /** Feedback entries last received from the host via 'feedbackLoaded'. */
+  feedbackEntries: FeedbackEntry[];
+  /**
+   * Set of entry ids whose "No" button is in the two-step confirm state.
+   * When an id is in this set the button renders as "Confirm?" and the next
+   * click posts the delete message. A timeout clears the state automatically.
+   */
+  feedbackPendingNoConfirm: Set<string>;
 }
 
 const state: UIState = {
@@ -148,7 +189,7 @@ const state: UIState = {
   cliCommand: 'claude',
   sessionCommand: 'initiate',
   sweConfig: { performanceCores: 2, efficiencyCores: 1, performanceCoresModel: 'opus', efficiencyCoresModel: 'sonnet' },
-  qaConfig: { count: 1 },
+  qaConfig: { count: 1, model: 'sonnet' },
   configurations: [],
   activeConfigurationId: null,
   isConfigurationModified: false,
@@ -159,6 +200,9 @@ const state: UIState = {
   aliases: [],
   selectedAlias: '',
   aliasFile: '~/.bashrc',
+  branchWidget: { enabled: false, jiraBase: 'https://herzog.atlassian.net', bitbucketWorkspace: '' },
+  feedbackEntries: [],
+  feedbackPendingNoConfirm: new Set(),
 };
 
 const root = document.getElementById('app')!;
@@ -212,6 +256,13 @@ function init(): void {
   vscode.postMessage({ type: 'ready' });
   vscode.postMessage({ type: 'getSettings' });
   window.addEventListener('message', (ev) => {
+    // Route protocol-extension messages (feedbackLoaded) before the typed
+    // switch so the compiler doesn't complain about unknown discriminants.
+    const raw = ev.data as { type?: string };
+    if (raw.type === 'feedbackLoaded') {
+      handleFeedbackLoaded(raw as unknown as FeedbackLoadedMessage);
+      return;
+    }
     handleMessage(ev.data as HostToWebviewMessage);
   });
   // Escape pops the detail view back to the list (Modules tab only).
@@ -260,10 +311,22 @@ function handleMessage(msg: HostToWebviewMessage): void {
           efficiencyCoresModel: msg.swe.efficiencyCoresModel ?? 'sonnet',
         };
       }
-      if (msg.qa) state.qaConfig = msg.qa;
+      if (msg.qa) {
+        state.qaConfig = {
+          count: msg.qa.count,
+          model: msg.qa.model ?? 'sonnet',
+        };
+      }
       state.aliases = msg.aliases ?? [];
       state.selectedAlias = msg.selectedAlias ?? '';
       state.aliasFile = msg.aliasFile ?? '~/.bashrc';
+      if (msg.branchWidget) {
+        state.branchWidget = {
+          enabled: msg.branchWidget.enabled ?? false,
+          jiraBase: msg.branchWidget.jiraBase ?? 'https://herzog.atlassian.net',
+          bitbucketWorkspace: msg.branchWidget.bitbucketWorkspace ?? '',
+        };
+      }
       state.dirty = false;
       render();
       break;
@@ -350,6 +413,31 @@ function handleMessage(msg: HostToWebviewMessage): void {
       }
       render();
       break;
+  }
+}
+
+/**
+ * Handle the feedbackLoaded message from the host. Updates the entries list
+ * and re-renders only the feedback card lists (not the whole tab) to preserve
+ * scroll position. Full render is the fallback when the detail view is not active.
+ */
+function handleFeedbackLoaded(msg: FeedbackLoadedMessage): void {
+  state.feedbackEntries = msg.entries;
+  const isFeedbackDetailOpen =
+    state.activeSection === 'modules' &&
+    state.moduleView.mode === 'detail' &&
+    state.moduleView.moduleId === 'tool.feedback-log';
+  if (isFeedbackDetailOpen) {
+    // Re-render only the two card lists in place so scroll position is kept.
+    const pendingList = document.getElementById('feedback-pending-list');
+    const approvedList = document.getElementById('feedback-approved-list');
+    if (pendingList && approvedList) {
+      renderFeedbackList(pendingList, 'pending');
+      renderFeedbackList(approvedList, 'approved');
+      return;
+    }
+    // Fallback — full render if the lists don't exist yet (first paint).
+    render();
   }
 }
 
@@ -498,6 +586,10 @@ function renderGeneral(wrapper: HTMLElement): void {
   wrapper.appendChild(renderAliasEditor());
   wrapper.appendChild(el('hr', { class: 'section-divider' }));
 
+  // Branch Widget configuration — sits between the alias editor and the launch row.
+  wrapper.appendChild(renderBranchWidgetConfigBlock());
+  wrapper.appendChild(el('hr', { class: 'section-divider' }));
+
   launchRow.appendChild(sessionBtn);
   wrapper.appendChild(launchRow);
 
@@ -546,7 +638,7 @@ function renderModuleListView(wrapper: HTMLElement): void {
   wrapper.appendChild(
     textEl(
       'p',
-      'Toggle modules on or off. Click the chevron (›) to view a module\'s details and prompt content.',
+      'Toggle modules on or off. Click the chevron (›) to view a module\'s details and instructions.',
       'subtitle',
     ),
   );
@@ -582,8 +674,8 @@ function renderModuleListView(wrapper: HTMLElement): void {
   const copyBtn = el('button', {
     class: 'icon-button framed',
     type: 'button',
-    'aria-label': 'Copy module-generation prompt',
-    title: 'Copy module-generation prompt',
+    'aria-label': 'Copy Module Generation Instruction',
+    title: 'Copy Module Generation Instruction',
   }) as HTMLButtonElement;
   copyBtn.innerHTML = COPY_ICON_SVG;
   copyBtn.addEventListener('click', () =>
@@ -1214,6 +1306,13 @@ function openModuleDetail(moduleId: string): void {
     vscode.postMessage({ type: 'requestModuleDetail', moduleId });
   }
 
+  // Feedback Logging module: trigger the initial feedback load and clear stale
+  // confirm state so No-button two-step doesn't persist across navigation.
+  if (moduleId === 'tool.feedback-log') {
+    state.feedbackPendingNoConfirm = new Set();
+    vscode.postMessage({ type: 'feedbackRequested' } as unknown as WebviewToHostMessage);
+  }
+
   // For every setting on this module that ships a keywordsPath, request the
   // parsed keywords payload now so the table renders as soon as the user lands
   // on the detail page. Cached entries (including prior error responses) are
@@ -1362,13 +1461,13 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
 
   // Prompt Content section — raw module .md text from the host. Reference
   // material; sits below Settings.
-  container.appendChild(textEl('div', 'Prompt Content', 'details-header'));
+  container.appendChild(textEl('div', 'Instructions', 'details-header'));
   const fragments = state.moduleDetails[m.id];
   if (fragments === undefined) {
     container.appendChild(textEl('div', 'Loading…', 'empty'));
   } else if (fragments.length === 0) {
     container.appendChild(
-      textEl('div', 'This module declares no prompt content.', 'empty'),
+      textEl('div', 'This module declares no instructions.', 'empty'),
     );
   } else {
     const multiFragment = fragments.length > 1;
@@ -1386,6 +1485,42 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
       }
       container.appendChild(pre);
     });
+  }
+
+  // Feedback Logging module: render the feedback entry card UI below the
+  // instructions. Scoped exclusively to this module's detail view.
+  if (m.id === 'tool.feedback-log') {
+    container.appendChild(textEl('div', 'Feedback Entries', 'details-header'));
+
+    const pending = state.feedbackEntries.filter((e) => e.status === 'pending');
+    const approved = state.feedbackEntries.filter((e) => e.status === 'approved');
+    const bothEmpty = pending.length === 0 && approved.length === 0;
+
+    if (bothEmpty) {
+      container.appendChild(
+        textEl(
+          'div',
+          "No feedback entries yet. When you're working with the TPM and you spot an idea, say 'add this to feedback' and it'll show up here.",
+          'empty feedback-empty-all',
+        ),
+      );
+    } else {
+      const pendingHeader = el('div', { class: 'feedback-section-header' });
+      pendingHeader.textContent = 'Pending';
+      container.appendChild(pendingHeader);
+
+      const pendingList = el('div', { class: 'feedback-list', id: 'feedback-pending-list' });
+      container.appendChild(pendingList);
+      renderFeedbackList(pendingList, 'pending');
+
+      const approvedHeader = el('div', { class: 'feedback-section-header' });
+      approvedHeader.textContent = 'Approved';
+      container.appendChild(approvedHeader);
+
+      const approvedList = el('div', { class: 'feedback-list', id: 'feedback-approved-list' });
+      container.appendChild(approvedList);
+      renderFeedbackList(approvedList, 'approved');
+    }
   }
 
   wrapper.appendChild(container);
@@ -1731,6 +1866,11 @@ function appendKeyValueEditor(
 ): void {
   const key = scopedKey(moduleId, settingKey);
   const richShape = field.optionalEnabled === true;
+  // Description column requires the rich shape (it carries the `description`
+  // string alongside `value` + `enabled`). If a manifest sets
+  // `optionalDescription: true` without `optionalEnabled`, we silently treat
+  // it as false rather than introduce a description-only-no-enabled variant.
+  const withDescription = richShape && field.optionalDescription === true;
 
   // If the stored value is a string (legacy) or any non-plain-object shape,
   // silently treat as empty and start fresh. When `optionalEnabled` is true,
@@ -1740,19 +1880,27 @@ function appendKeyValueEditor(
   // round-trips cleanly the first time the panel is opened.
   if (state.keyValueDrafts[key] === undefined) {
     if (richShape) {
-      const seed: Record<string, { value: string; enabled: boolean }> = {};
+      const seed: Record<string, { value: string; enabled: boolean; description?: string }> = {};
       if (current && typeof current === 'object' && !Array.isArray(current)) {
         for (const [k, v] of Object.entries(current as Record<string, unknown>)) {
           if (v && typeof v === 'object' && !Array.isArray(v)) {
-            const obj = v as { value?: unknown; enabled?: unknown };
-            seed[k] = {
+            const obj = v as { value?: unknown; enabled?: unknown; description?: unknown };
+            const entry: { value: string; enabled: boolean; description?: string } = {
               value: typeof obj.value === 'string' ? obj.value : '',
               enabled: obj.enabled !== false,
             };
+            if (withDescription) {
+              entry.description = typeof obj.description === 'string' ? obj.description : '';
+            }
+            seed[k] = entry;
           } else if (typeof v === 'string') {
-            seed[k] = { value: v, enabled: true };
+            seed[k] = withDescription
+              ? { value: v, enabled: true, description: '' }
+              : { value: v, enabled: true };
           } else if (v !== undefined && v !== null) {
-            seed[k] = { value: String(v), enabled: true };
+            seed[k] = withDescription
+              ? { value: String(v), enabled: true, description: '' }
+              : { value: String(v), enabled: true };
           }
         }
       }
@@ -1778,7 +1926,13 @@ function appendKeyValueEditor(
 
   // ── Table of existing entries ──────────────────────────────────────
   const tableWrap = el('div', { class: 'kv-table-wrap' });
-  const table = el('table', { class: 'kv-table' });
+  // The `kv-table--with-description` modifier flips the column widths so
+  // Value shrinks to a narrow fixed-width column and Description absorbs the
+  // remaining space. Without this modifier the table keeps its legacy
+  // 2-data-column layout (Key + Value).
+  const table = el('table', {
+    class: withDescription ? 'kv-table kv-table--with-description' : 'kv-table',
+  });
   const thead = el('thead');
   const headRow = el('tr');
   if (richShape) {
@@ -1793,19 +1947,26 @@ function appendKeyValueEditor(
   // unconstrained so it absorbs whatever the fixed-pixel columns leave behind.
   const kHead = el('th', { class: 'kv-key-head' });
   kHead.textContent = field.keyLabel ?? 'Key';
-  const vHead = el('th');
+  const vHead = el('th', withDescription ? { class: 'kv-value-head' } : undefined);
   vHead.textContent = field.valueLabel ?? 'Value';
   const actionHead = el('th', { class: 'kv-actions-head' });
   actionHead.textContent = '';
   headRow.appendChild(kHead);
   headRow.appendChild(vHead);
+  if (withDescription) {
+    const dHead = el('th', { class: 'kv-description-head' });
+    dHead.textContent = field.descriptionLabel ?? 'Description';
+    headRow.appendChild(dHead);
+  }
   headRow.appendChild(actionHead);
   thead.appendChild(headRow);
   table.appendChild(thead);
 
   const tbody = el('tbody');
   const entries = Object.entries(draft);
-  const colSpan = richShape ? 4 : 3;
+  // Column count: Key + Value + Actions = 3 base; +1 for Enabled (richShape);
+  // +1 for Description (withDescription).
+  const colSpan = (richShape ? 4 : 3) + (withDescription ? 1 : 0);
   if (entries.length === 0) {
     const emptyRow = el('tr', { class: 'kv-empty-row' });
     const td = el('td');
@@ -1842,16 +2003,17 @@ function appendKeyValueEditor(
   parent.appendChild(tableWrap);
 }
 
-/** Render a single committed-entry row: optional enabled checkbox + key + value + delete. */
+/** Render a single committed-entry row: optional enabled checkbox + key + value + optional description + delete. */
 function renderKeyValueRow(
   field: SettingsField,
-  draft: Record<string, string> | Record<string, { value: string; enabled: boolean }>,
+  draft: Record<string, string> | Record<string, { value: string; enabled: boolean; description?: string }>,
   rowKey: string,
-  rowVal: string | { value: string; enabled: boolean },
+  rowVal: string | { value: string; enabled: boolean; description?: string },
   persist: () => void,
 ): HTMLElement {
   const tr = el('tr', { class: 'kv-row' });
   const richShape = field.optionalEnabled === true;
+  const withDescription = richShape && field.optionalDescription === true;
 
   // Surface the user-facing string (description text) regardless of which
   // shape the draft is in. When richShape is true, rowVal is always an
@@ -1866,6 +2028,30 @@ function renderKeyValueRow(
     richShape && rowVal && typeof rowVal === 'object'
       ? ((rowVal as { enabled?: unknown }).enabled !== false)
       : true;
+  const descriptionState: string =
+    withDescription && rowVal && typeof rowVal === 'object'
+      ? ((rowVal as { description?: unknown }).description as string) ?? ''
+      : '';
+
+  // Helper to read the current rich entry while preserving fields the caller
+  // didn't intend to touch (e.g. flipping `enabled` should not clobber
+  // `description`, and editing `description` should not clobber `value`).
+  const readRichEntry = (): { value: string; enabled: boolean; description?: string } => {
+    const richDraft = draft as Record<string, { value: string; enabled: boolean; description?: string }>;
+    const existing = richDraft[rowKey];
+    if (existing && typeof existing === 'object') {
+      return {
+        value: typeof existing.value === 'string' ? existing.value : '',
+        enabled: existing.enabled !== false,
+        description: withDescription
+          ? (typeof existing.description === 'string' ? existing.description : '')
+          : existing.description,
+      };
+    }
+    return withDescription
+      ? { value: '', enabled: true, description: '' }
+      : { value: '', enabled: true };
+  };
 
   if (richShape) {
     const enTd = el('td', { class: 'kv-cell kv-cell-enabled' });
@@ -1874,9 +2060,9 @@ function renderKeyValueRow(
     cb.checked = enabledState;
     cb.setAttribute('aria-label', `Enable ${rowKey}`);
     cb.addEventListener('change', () => {
-      const richDraft = draft as Record<string, { value: string; enabled: boolean }>;
-      const existing = richDraft[rowKey] ?? { value: '', enabled: true };
-      richDraft[rowKey] = { value: existing.value ?? '', enabled: cb.checked };
+      const richDraft = draft as Record<string, { value: string; enabled: boolean; description?: string }>;
+      const existing = readRichEntry();
+      richDraft[rowKey] = { ...existing, enabled: cb.checked };
       persist();
     });
     enTd.appendChild(cb);
@@ -1901,8 +2087,8 @@ function renderKeyValueRow(
       return;
     }
     if (richShape) {
-      const richDraft = draft as Record<string, { value: string; enabled: boolean }>;
-      const existing = richDraft[rowKey] ?? { value: '', enabled: true };
+      const richDraft = draft as Record<string, { value: string; enabled: boolean; description?: string }>;
+      const existing = readRichEntry();
       delete richDraft[rowKey];
       richDraft[newKey] = existing;
     } else {
@@ -1920,15 +2106,26 @@ function renderKeyValueRow(
   const vTd = el('td', { class: 'kv-cell kv-cell-value' });
   vTd.appendChild(renderValueCell(field, displayValue, (next) => {
     if (richShape) {
-      const richDraft = draft as Record<string, { value: string; enabled: boolean }>;
-      const existing = richDraft[rowKey] ?? { value: '', enabled: true };
-      richDraft[rowKey] = { value: next, enabled: existing.enabled !== false };
+      const richDraft = draft as Record<string, { value: string; enabled: boolean; description?: string }>;
+      const existing = readRichEntry();
+      richDraft[rowKey] = { ...existing, value: next };
     } else {
       (draft as Record<string, string>)[rowKey] = next;
     }
     persist();
   }));
   tr.appendChild(vTd);
+
+  if (withDescription) {
+    // Read-only display — descriptions are author-supplied manifest content,
+    // not user-editable. The seed value flows through from appendKeyValueEditor
+    // and is preserved on serialization via { value, enabled, description }.
+    const dTd = el('td', { class: 'kv-cell kv-cell-description' });
+    const dText = el('div', { class: 'kv-description-text' });
+    dText.textContent = descriptionState;
+    dTd.appendChild(dText);
+    tr.appendChild(dTd);
+  }
 
   const aTd = el('td', { class: 'kv-cell kv-cell-actions' });
   const del = el('button', {
@@ -1961,10 +2158,11 @@ function renderKeyValueRow(
  */
 function renderKeyValueAddRow(
   field: SettingsField,
-  draft: Record<string, string> | Record<string, { value: string; enabled: boolean }>,
+  draft: Record<string, string> | Record<string, { value: string; enabled: boolean; description?: string }>,
   persist: () => void,
 ): HTMLElement {
   const richShape = field.optionalEnabled === true;
+  const withDescription = richShape && field.optionalDescription === true;
   const tfoot = el('tfoot', { class: 'kv-add-foot' });
   const tr = el('tr', { class: 'kv-add-row' });
 
@@ -2003,6 +2201,13 @@ function renderKeyValueAddRow(
   vTd.appendChild(vField);
   tr.appendChild(vTd);
 
+  // Empty placeholder cell — descriptions are author-supplied manifest content
+  // and cannot be entered by the user. New entries get an empty description.
+  if (withDescription) {
+    const dTd = el('td', { class: 'kv-cell kv-cell-description kv-add-cell' });
+    tr.appendChild(dTd);
+  }
+
   const aTd = el('td', { class: 'kv-cell kv-cell-actions kv-add-cell kv-add-cell--actions' });
   const addBtn = el('button', { class: 'primary kv-add-button', type: 'button' }) as HTMLButtonElement;
   addBtn.textContent = 'Add';
@@ -2012,11 +2217,13 @@ function renderKeyValueAddRow(
     if (k.length === 0) return;
     if (!field.optionalValue && v.length === 0) return;
     // Existing-key behavior: overwrite the value rather than error.
+    // New entries get an empty description — module authors supply descriptions
+    // via the manifest; user-added entries have none.
     if (richShape) {
-      (draft as Record<string, { value: string; enabled: boolean }>)[k] = {
-        value: v,
-        enabled: true,
-      };
+      const richDraft = draft as Record<string, { value: string; enabled: boolean; description?: string }>;
+      richDraft[k] = withDescription
+        ? { value: v, enabled: true, description: '' }
+        : { value: v, enabled: true };
     } else {
       (draft as Record<string, string>)[k] = v;
     }
@@ -2111,7 +2318,7 @@ function renderLinqpadBanner(
   const actions = el('div', { class: 'kv-banner-actions' });
 
   const copyBtn = el('button', { class: 'primary', type: 'button' }) as HTMLButtonElement;
-  copyBtn.textContent = 'Copy install prompt';
+  copyBtn.textContent = 'Copy install instructions';
   copyBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'copyLinqpadInstallPrompt' });
   });
@@ -2317,7 +2524,7 @@ function renderAgent(wrapper: HTMLElement, agentId: string): void {
     h1.appendChild(elucidation);
   }
   wrapper.appendChild(h1);
-  wrapper.appendChild(textEl('p', 'Composed agent prompt: core definition, preamble, and Session Manifest. Module content is read on demand.', 'subtitle'));
+  wrapper.appendChild(textEl('p', 'Composed agent instruction: core definition, preamble, and Session Manifest. Module content is read on demand.', 'subtitle'));
 
   // SWE and QA subpages render an agent-config block above the composed prompt
   // for configuring how many concurrent subagents TPM may spawn. TPM itself is
@@ -2327,6 +2534,13 @@ function renderAgent(wrapper: HTMLElement, agentId: string): void {
   } else if (agentId === 'qa') {
     wrapper.appendChild(renderQaConfigBlock());
   }
+
+  // "Prompt" heading sits at the top hierarchy (NOT inside an agent-config block)
+  // so it appears on all three tabs, including TPM which has no config block.
+  // agent-config-header is unscoped in styles.css, so it applies here safely.
+  const promptHeader = el('div', { class: 'agent-config-header' });
+  promptHeader.textContent = 'Instructions';
+  wrapper.appendChild(promptHeader);
 
   const prompt = state.composedPrompts[agentId];
   if (prompt === undefined) {
@@ -2340,9 +2554,9 @@ function renderAgent(wrapper: HTMLElement, agentId: string): void {
 }
 
 /**
- * SWE subpage config block: two compact number inputs on one row laid out as
- * [label: input] [label: input]. The total SWE count is the sum of both.
- * Saves on blur via the existing `updateConfiguration` message.
+ * SWE subpage config block: single row with two grouped pairs —
+ * [Performance Agents (cores + model) | Efficiency Agents (cores + model)].
+ * Saves on blur (numeric) or change (select) via `updateConfiguration`.
  */
 function renderSweConfigBlock(): HTMLElement {
   const block = el('div', { class: 'agent-config' });
@@ -2353,34 +2567,42 @@ function renderSweConfigBlock(): HTMLElement {
   const row = el('div', { class: 'agent-config-row' });
 
   row.appendChild(
-    renderAgentConfigField('Performance Cores', state.sweConfig.performanceCores, (next) => {
-      state.sweConfig.performanceCores = next;
-      vscode.postMessage({
-        type: 'updateConfiguration',
-        section: 'nomeda',
-        key: 'swe.performanceCores',
-        value: next,
-      });
-    }),
+    renderAgentPairGroup(
+      'Performance Agents',
+      state.sweConfig.performanceCores,
+      state.sweConfig.performanceCoresModel,
+      (next) => {
+        state.sweConfig.performanceCores = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'swe.performanceCores', value: next });
+      },
+      (next) => {
+        state.sweConfig.performanceCoresModel = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'swe.performanceCoresModel', value: next });
+      },
+    ),
   );
 
   row.appendChild(
-    renderAgentConfigField('Efficiency Cores', state.sweConfig.efficiencyCores, (next) => {
-      state.sweConfig.efficiencyCores = next;
-      vscode.postMessage({
-        type: 'updateConfiguration',
-        section: 'nomeda',
-        key: 'swe.efficiencyCores',
-        value: next,
-      });
-    }),
+    renderAgentPairGroup(
+      'Efficiency Agents',
+      state.sweConfig.efficiencyCores,
+      state.sweConfig.efficiencyCoresModel,
+      (next) => {
+        state.sweConfig.efficiencyCores = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'swe.efficiencyCores', value: next });
+      },
+      (next) => {
+        state.sweConfig.efficiencyCoresModel = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'swe.efficiencyCoresModel', value: next });
+      },
+    ),
   );
 
   block.appendChild(row);
   return block;
 }
 
-/** QA subpage config block: single "QA Count" input above the composed prompt. */
+/** QA subpage config block: single "QA Agents" grouped pair (count + model). */
 function renderQaConfigBlock(): HTMLElement {
   const block = el('div', { class: 'agent-config' });
   const header = el('div', { class: 'agent-config-header' });
@@ -2389,66 +2611,125 @@ function renderQaConfigBlock(): HTMLElement {
 
   const row = el('div', { class: 'agent-config-row' });
   row.appendChild(
-    renderAgentConfigField('QA Count', state.qaConfig.count, (next) => {
-      state.qaConfig.count = next;
-      vscode.postMessage({
-        type: 'updateConfiguration',
-        section: 'nomeda',
-        key: 'qa.count',
-        value: next,
-      });
-    }),
+    renderAgentPairGroup(
+      'QA Agents',
+      state.qaConfig.count,
+      state.qaConfig.model,
+      (next) => {
+        state.qaConfig.count = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'qa.count', value: next });
+      },
+      (next) => {
+        state.qaConfig.model = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'qa.model', value: next });
+      },
+    ),
   );
   block.appendChild(row);
   return block;
 }
 
-/**
- * Compact [label : number input] field used inside the agent-config row.
- * Persists on blur (consistent with the Initiation Command pattern). Coerces
- * empty input back to the previous value rather than emitting NaN.
- */
-function renderAgentConfigField(
-  label: string,
-  initial: number,
-  onCommit: (next: number) => void,
-): HTMLElement {
-  const field = el('div', { class: 'agent-config-field' });
-  const lbl = el('label', { class: 'agent-config-label' });
-  lbl.textContent = label;
-  field.appendChild(lbl);
+/** Branch Widget config block: Enabled toggle + Jira Base URL + Bitbucket Workspace. */
+function renderBranchWidgetConfigBlock(): HTMLElement {
+  const block = el('div', { class: 'agent-config' });
+  const header = el('div', { class: 'agent-config-header' });
+  header.textContent = 'Branch Widget';
+  block.appendChild(header);
 
-  const input = el('input', { class: 'agent-config-input' }) as HTMLInputElement;
-  input.type = 'number';
-  input.value = String(initial);
-  input.addEventListener('blur', () => {
-    const parsed = Number(input.value);
-    if (input.value === '' || Number.isNaN(parsed)) {
-      // Restore previous value rather than persist garbage.
-      input.value = String(initial);
-      return;
-    }
-    if (parsed === initial) return;
-    onCommit(parsed);
+  const row = el('div', { class: 'agent-config-row' });
+
+  // Enabled field — real checkbox with label-above-input layout matching the
+  // Jira Base URL and Bitbucket Workspace fields in the same row.
+  const enabledField = el('div', { class: 'agent-config-field branch-widget-enable-field' });
+  const enabledLabelEl = el('label', { class: 'agent-config-label', for: 'branchWidgetEnabled' });
+  enabledLabelEl.textContent = 'Enable';
+  enabledField.appendChild(enabledLabelEl);
+  const enabledCheckbox = el('input', { type: 'checkbox', id: 'branchWidgetEnabled' }) as HTMLInputElement;
+  enabledCheckbox.checked = state.branchWidget.enabled;
+  enabledCheckbox.addEventListener('change', () => {
+    const next = enabledCheckbox.checked;
+    state.branchWidget.enabled = next;
+    vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'branchWidget.enabled', value: next });
   });
-  field.appendChild(input);
-  return field;
+  enabledField.appendChild(enabledCheckbox);
+  row.appendChild(enabledField);
+
+  // Jira Base URL field
+  const jiraField = el('div', { class: 'agent-config-field' });
+  const jiraLabel = el('label', { class: 'agent-config-label' });
+  jiraLabel.textContent = 'Jira Base URL';
+  jiraField.appendChild(jiraLabel);
+  const jiraInput = el('input', { class: 'agent-config-input' }) as HTMLInputElement;
+  jiraInput.type = 'text';
+  jiraInput.value = state.branchWidget.jiraBase;
+  jiraInput.addEventListener('change', () => {
+    state.branchWidget.jiraBase = jiraInput.value;
+    vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'branchWidget.jiraBase', value: jiraInput.value });
+  });
+  jiraField.appendChild(jiraInput);
+  jiraField.style.flex = '1 1 0';
+  jiraField.style.minWidth = '0';
+  jiraInput.style.width = '100%';
+  row.appendChild(jiraField);
+
+  // Bitbucket Workspace field
+  const bbField = el('div', { class: 'agent-config-field' });
+  const bbLabel = el('label', { class: 'agent-config-label' });
+  bbLabel.textContent = 'Bitbucket Workspace';
+  bbField.appendChild(bbLabel);
+  const bbInput = el('input', { class: 'agent-config-input' }) as HTMLInputElement;
+  bbInput.type = 'text';
+  bbInput.value = state.branchWidget.bitbucketWorkspace;
+  bbInput.addEventListener('change', () => {
+    state.branchWidget.bitbucketWorkspace = bbInput.value;
+    vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'branchWidget.bitbucketWorkspace', value: bbInput.value });
+  });
+  bbField.appendChild(bbInput);
+  bbField.style.flex = '1 1 0';
+  bbField.style.minWidth = '0';
+  bbInput.style.width = '100%';
+  row.appendChild(bbField);
+
+  block.appendChild(row);
+  return block;
 }
 
 /**
- * Compact [label : model select] field used inside the agent-config row.
- * Fires onCommit immediately on selection change (no blur needed for a select).
- * Reuses `agent-config-input` so the <select> inherits VS Code input theming.
+ * Grouped [label : cores input + model select] pair used inside the agent-config row.
+ * The number input persists on blur; the select fires immediately on change.
+ * Reuses `agent-config-field` / `agent-config-label` / `agent-config-input` for
+ * consistent styling across SWE and QA config blocks.
  */
-function renderAgentModelDropdown(
+function renderAgentPairGroup(
   label: string,
-  initial: string,
-  onCommit: (next: string) => void,
+  coresInitial: number,
+  modelInitial: string,
+  onCoresCommit: (next: number) => void,
+  onModelCommit: (next: string) => void,
 ): HTMLElement {
   const field = el('div', { class: 'agent-config-field' });
   const lbl = el('label', { class: 'agent-config-label' });
   lbl.textContent = label;
   field.appendChild(lbl);
+
+  const row = el('div') as HTMLDivElement;
+  row.style.display = 'flex';
+  row.style.gap = '6px';
+
+  const input = el('input', { class: 'agent-config-input' }) as HTMLInputElement;
+  input.type = 'number';
+  input.value = String(coresInitial);
+  input.style.width = '60px';
+  input.addEventListener('blur', () => {
+    const parsed = Number(input.value);
+    if (input.value === '' || Number.isNaN(parsed)) {
+      input.value = String(coresInitial);
+      return;
+    }
+    if (parsed === coresInitial) return;
+    onCoresCommit(parsed);
+  });
+  row.appendChild(input);
 
   const select = el('select', { class: 'agent-config-input' }) as HTMLSelectElement;
   const options = [
@@ -2460,12 +2741,128 @@ function renderAgentModelDropdown(
     const o = el('option') as HTMLOptionElement;
     o.value = opt.value;
     o.textContent = opt.text;
-    if (opt.value === initial) o.selected = true;
+    if (opt.value === modelInitial) o.selected = true;
     select.appendChild(o);
   }
-  select.addEventListener('change', () => onCommit(select.value));
-  field.appendChild(select);
+  select.addEventListener('change', () => onModelCommit(select.value));
+  row.appendChild(select);
+
+  field.appendChild(row);
   return field;
+}
+
+/**
+ * Renders the list of cards for the given status into `container`. Called
+ * both from the initial render and from `handleFeedbackLoaded` for in-place
+ * refresh. Newest-first by `createdAt`.
+ */
+function renderFeedbackList(container: HTMLElement, status: 'pending' | 'approved'): void {
+  container.innerHTML = '';
+  const entries = state.feedbackEntries
+    .filter((e) => e.status === status)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  if (entries.length === 0) {
+    const placeholder = status === 'pending'
+      ? 'Nothing pending.'
+      : 'Nothing approved.';
+    container.appendChild(textEl('div', placeholder, 'empty feedback-section-empty'));
+    return;
+  }
+
+  entries.forEach((entry) => {
+    container.appendChild(renderFeedbackCard(entry));
+  });
+}
+
+/**
+ * Single feedback entry card. Pending cards have Yes + No buttons; approved
+ * cards have a Delete button. The No button uses a two-step inline confirm:
+ * first click marks the entry as "confirming" (button text changes to
+ * "Confirm?" for 2 seconds); second click posts the delete message.
+ */
+function renderFeedbackCard(entry: FeedbackEntry): HTMLElement {
+  const card = el('div', { class: 'feedback-card' });
+
+  // Date line — top of card, subdued.
+  const dateLine = el('div', { class: 'feedback-card-date' });
+  dateLine.textContent = new Date(entry.createdAt).toLocaleDateString();
+  card.appendChild(dateLine);
+
+  // Branch chip — only rendered when branch is a non-empty string.
+  if (entry.branch) {
+    const branchChip = el('div', { class: 'feedback-card-branch' });
+    branchChip.textContent = `on ${entry.branch}`;
+    card.appendChild(branchChip);
+  }
+
+  // Text — wraps naturally for multi-line content.
+  const text = el('div', { class: 'feedback-card-text' });
+  text.textContent = entry.text;
+  card.appendChild(text);
+
+  // Button row
+  const actions = el('div', { class: 'feedback-card-actions' });
+
+  if (entry.status === 'pending') {
+    // Yes button — approve the entry.
+    const yesBtn = el('button', { class: 'primary feedback-card-btn', type: 'button' }) as HTMLButtonElement;
+    yesBtn.textContent = 'Yes';
+    yesBtn.addEventListener('click', () => {
+      vscode.postMessage({
+        type: 'feedbackEntryUpdate',
+        id: entry.id,
+        status: 'approved',
+      } as unknown as WebviewToHostMessage);
+    });
+    actions.appendChild(yesBtn);
+
+    // No button — two-step confirm before destructive delete.
+    const noBtn = el('button', { class: 'secondary feedback-card-btn feedback-card-no', type: 'button' }) as HTMLButtonElement;
+    const isConfirming = state.feedbackPendingNoConfirm.has(entry.id);
+    noBtn.textContent = isConfirming ? 'Confirm?' : 'No';
+    if (isConfirming) {
+      noBtn.classList.add('feedback-card-confirming');
+    }
+    noBtn.addEventListener('click', () => {
+      if (state.feedbackPendingNoConfirm.has(entry.id)) {
+        // Second click — delete.
+        state.feedbackPendingNoConfirm.delete(entry.id);
+        vscode.postMessage({
+          type: 'feedbackEntryDelete',
+          id: entry.id,
+        } as unknown as WebviewToHostMessage);
+      } else {
+        // First click — enter confirming state.
+        state.feedbackPendingNoConfirm.add(entry.id);
+        noBtn.textContent = 'Confirm?';
+        noBtn.classList.add('feedback-card-confirming');
+        // Auto-revert after 2 seconds if the user doesn't confirm.
+        setTimeout(() => {
+          if (state.feedbackPendingNoConfirm.has(entry.id)) {
+            state.feedbackPendingNoConfirm.delete(entry.id);
+            noBtn.textContent = 'No';
+            noBtn.classList.remove('feedback-card-confirming');
+          }
+        }, 2000);
+      }
+    });
+    actions.appendChild(noBtn);
+  } else {
+    // Delete button — approved entries can be removed.
+    const delBtn = el('button', { class: 'secondary feedback-card-btn', type: 'button' }) as HTMLButtonElement;
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', () => {
+      vscode.postMessage({
+        type: 'feedbackEntryDelete',
+        id: entry.id,
+      } as unknown as WebviewToHostMessage);
+    });
+    actions.appendChild(delBtn);
+  }
+
+  card.appendChild(actions);
+  return card;
 }
 
 function renderSessions(wrapper: HTMLElement): void {

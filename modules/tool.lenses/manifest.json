@@ -10,7 +10,7 @@
     "settings": {
       "reviewLenses": {
         "type": "string",
-        "label": "Review Mode lenses",
+        "label": "Review Mode Lenses",
         "description": "Comma-separated list of review lenses. SWE-1 runs the first, SWE-2 the second, etc. See the keyword table below for available lenses.",
         "default": "security, logic, quality",
         "keywordsPath": "review-lenses-keywords.json",
@@ -18,7 +18,7 @@
       },
       "planningLenses": {
         "type": "string",
-        "label": "Planning Mode lenses",
+        "label": "Planning Mode Lenses",
         "description": "Comma-separated list of planning lenses. Each becomes one SWE producing a plan fragment. See the keyword table below for available lenses.",
         "default": "architecture, implementation, test-strategy",
         "keywordsPath": "planning-lenses-keywords.json",

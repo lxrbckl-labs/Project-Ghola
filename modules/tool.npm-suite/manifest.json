@@ -11,7 +11,7 @@
     "settings": {
       "allowedCommands": {
         "type": "keyValue",
-        "label": "Allowed commands",
+        "label": "Allowed Commands",
         "description": "Commands the agent is permitted to run from the project root. Type a command (e.g. npm test, ng lint) plus an optional note about when it should be used, then click Add. Anything not on this list is off-limits. Delete an entry to revoke permission. Use the exact command form you want allowed — agents match on string equality.",
         "default": {
           "npm test": { "value": "Run the project's test script.", "enabled": true },

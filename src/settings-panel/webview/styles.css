@@ -252,6 +252,8 @@ pre.prompt {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 12px;
   line-height: 1.5;
+  max-height: 320px;
+  overflow: auto;
 }
 
 .dot {
@@ -496,6 +498,7 @@ button.module-row-chevron {
   color: var(--vscode-descriptionForeground);
   cursor: pointer;
   flex-shrink: 0;
+  align-self: stretch;
 }
 
 button.module-row-chevron:hover {
@@ -910,6 +913,50 @@ button.module-row-chevron:focus-visible {
   text-align: center;
 }
 
+/* Optional Description column — opt-in per `optionalDescription: true` in the
+   manifest. The renderer adds the `kv-table--with-description` modifier class
+   to the `<table>` element when the column is present, which lets us swap the
+   column width strategy without touching tables that don't use the column.
+
+   Layout under the modifier:
+     Enabled (60px) | Key (30%) | Value (80px) | Description (auto) | Actions (72px)
+
+   Without the modifier the legacy 2-data-column layout is preserved:
+     [Enabled (60px)] | Key (30%) | Value (auto) | Actions (72px)
+
+   The shared `.kv-cell-description` rule below applies regardless of the
+   modifier and just sets sane defaults (left-align, top-align) — width comes
+   from the modifier-scoped rule. */
+.kv-table .kv-cell-description {
+  vertical-align: top;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.kv-description-text {
+  display: block;
+}
+
+.kv-table--with-description .kv-value-head {
+  width: 80px;
+}
+
+.kv-table--with-description .kv-cell-value {
+  width: 80px;
+}
+
+.kv-table--with-description .kv-description-head {
+  width: auto;
+}
+
+.kv-table--with-description .kv-cell-description {
+  width: auto;
+}
+
 .kv-input {
   width: 100%;
   max-width: none;
@@ -1296,6 +1343,31 @@ button.module-row-chevron:focus-visible {
   white-space: nowrap;
 }
 
+/* ─── Branch Widget config row (General tab) ────────────────────────── */
+
+/* Vertically center all three fields (Enable checkbox + two text inputs) in the
+   row. The base .agent-config-row uses flex-end which would sink the checkbox
+   relative to the 28px text inputs; centering gives a balanced look. */
+.agent-config-row:has(.branch-widget-enable-field) {
+  align-items: center;
+}
+
+/* Keep the Enable field from stretching to the same flex width as the URL
+   fields — the checkbox doesn't need that space. */
+.branch-widget-enable-field {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* Size the checkbox to be visually substantial in the row. The text inputs
+   are 28px tall; 22×22px gives a readable checkbox without overwhelming
+   the row, matching the visual weight of the adjacent field labels + inputs. */
+.branch-widget-enable-field input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+}
+
 /* ─── CLI alias table (Sessions tab) ────────────────────────────────── */
 
 /* Per-row action button group (Register / Probe / Delete). Flex row keeps
@@ -1303,4 +1375,95 @@ button.module-row-chevron:focus-visible {
 .alias-row-actions {
   display: flex;
   gap: 4px;
+}
+
+/* ─── Feedback Logging module detail view ────────────────────────────── */
+
+/* Full-width empty state when both sections are empty. */
+.feedback-empty-all {
+  padding: 16px 0;
+  max-width: 560px;
+  line-height: 1.5;
+}
+
+/* Section header (Pending / Approved) — matches .module-detail .details-header
+   for visual consistency (uppercase, small, muted). */
+.feedback-section-header {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+  margin: 16px 0 8px;
+}
+
+.feedback-section-header:first-of-type {
+  margin-top: 0;
+}
+
+/* Container for a section's card list. Gaps match the module-row gap. */
+.feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+/* Per-section empty placeholder — smaller, less prominent than the all-empty state. */
+.feedback-section-empty {
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+/* Individual feedback card — bordered box matching .module-row chrome:
+   same border, background, border-radius, and padding. */
+.feedback-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
+  max-width: 720px;
+}
+
+/* Date label — subdued, sits above the text. */
+.feedback-card-date {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Branch chip — secondary metadata below the date, only rendered when present. */
+.feedback-card-branch {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+/* Entry text — full wrapping, normal line-height. */
+.feedback-card-text {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Button row — sits at the bottom of the card, left-aligned. */
+.feedback-card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Shared size for action buttons within a feedback card. */
+.feedback-card-btn {
+  min-width: 56px;
+}
+
+/* Two-step confirm state for the No button — uses a warning-ish border to
+   draw the eye without introducing a new colour token. */
+.feedback-card-no.feedback-card-confirming {
+  border-color: var(--vscode-inputValidation-warningBorder, var(--vscode-panel-border));
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
 }

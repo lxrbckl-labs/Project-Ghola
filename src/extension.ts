@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { BranchWidgetProvider } from './branch-widget/provider';
 import { registerCommands } from './commands';
 import { ModuleLoader } from './modules/loader';
 import { ModuleState } from './modules/state';
@@ -37,12 +38,20 @@ export function activate(context: vscode.ExtensionContext): void {
   const session = new SessionLauncher(loader, context.extensionPath, context.workspaceState, logger);
   const configurationsStore = new ConfigurationsStore(context.workspaceState);
   const resolveModulesDir = resolveModulesDirFn(context);
+  // Path used by the `tool.feedback-log` module: the host reads/writes this
+  // file directly from the Feedback panel tab, and the path is injected into
+  // the agent-facing Session Manifest as `parameters.feedbackFilePath` so TPM
+  // can read/write the same file via its Read/Write tools. `globalStorageUri`
+  // is per-extension and persists across workspaces, which matches the user's
+  // expectation that the feedback log follows them.
+  const feedbackFilePath = path.join(context.globalStorageUri.fsPath, 'feedback.json');
   const panel = new SettingsPanel(
     context,
     loader,
     composer,
     configurationsStore,
     resolveModulesDir,
+    feedbackFilePath,
     logger,
   );
   context.subscriptions.push(panel);
@@ -54,6 +63,13 @@ export function activate(context: vscode.ExtensionContext): void {
     resolveModulesDir,
     logger,
   });
+
+  // Source Control sidebar widget. Renders branch / Jira / Bitbucket links and
+  // is gated by `nomeda.branchWidget.enabled` (default off).
+  const branchWidgetProvider = new BranchWidgetProvider(context);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('nomedaBranchWidget', branchWidgetProvider),
+  );
 
   // Initial discovery (best-effort). After discover() resolves we apply any
   // user-flagged default configuration so the workspace boots into the same

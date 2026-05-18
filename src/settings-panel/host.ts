@@ -14,6 +14,7 @@ import {
   resolveLinqpadConnectionsPath,
 } from './linqpad-connections';
 import type {
+  FeedbackEntry,
   HostToWebviewMessage,
   ModuleSummary,
   NamedConfiguration,
@@ -23,6 +24,16 @@ import type {
 } from './protocol';
 
 const SETTINGS_KEY = 'nomeda.moduleSettings';
+
+/**
+ * Module id whose Session Manifest entry receives an injected
+ * `feedbackFilePath` parameter at compose time. The path is the same file the
+ * Settings panel "Feedback" tab reads/writes, so TPM and the panel share state.
+ */
+const FEEDBACK_MODULE_ID = 'tool.feedback-log';
+
+/** Disk schema version for the feedback log JSON file. */
+const FEEDBACK_SCHEMA_VERSION = 1;
 
 export class SettingsPanel implements vscode.Disposable {
   private panel?: vscode.WebviewPanel;
@@ -34,12 +45,28 @@ export class SettingsPanel implements vscode.Disposable {
    */
   private currentlyModified = false;
 
+  /**
+   * In-host mutex for serializing feedback-log read-modify-write operations.
+   * Every entry-point that touches `feedbackFilePath` chains onto this promise
+   * so concurrent webview messages (e.g. rapid Approve+Delete clicks) cannot
+   * race against each other. Note: this only protects the host from racing
+   * with itself — the TPM agent writes the same file out-of-band via its
+   * Read/Write tools, and that cross-process race is documented as acceptable.
+   */
+  private feedbackChain: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly loader: ModuleLoader,
     private readonly composer: PromptComposer,
     private readonly configurations: ConfigurationsStore,
     private readonly resolveModulesDir: () => string,
+    /**
+     * Absolute path to the feedback-log JSON file. Computed in `extension.ts`
+     * from `context.globalStorageUri` so the host and the agent (via the
+     * `tool.feedback-log` manifest parameter) point at the same file.
+     */
+    private readonly feedbackFilePath: string,
     private readonly logger?: vscode.OutputChannel,
   ) {
     this.disposables.push(
@@ -233,6 +260,15 @@ export class SettingsPanel implements vscode.Disposable {
         break;
       case 'getAliases':
         this.postAliases();
+        break;
+      case 'feedbackRequested':
+        await this.runOnFeedbackChain(() => this.broadcastFeedback());
+        break;
+      case 'feedbackEntryUpdate':
+        await this.runOnFeedbackChain(() => this.applyFeedbackUpdate(msg.id, msg.status));
+        break;
+      case 'feedbackEntryDelete':
+        await this.runOnFeedbackChain(() => this.applyFeedbackDelete(msg.id));
         break;
       default:
         this.logger?.appendLine(`[panel] unknown message: ${JSON.stringify(msg)}`);
@@ -502,10 +538,16 @@ export class SettingsPanel implements vscode.Disposable {
     };
     const qa = {
       count: cfg.get<number>('qa.count', 1),
+      model: cfg.get<string>('qa.model', 'sonnet'),
     };
     const aliases = cfg.get<CliAlias[]>('cliAliases', []);
     const selectedAlias = cfg.get<string>('selectedAlias', '');
     const aliasFile = cfg.get<string>('aliasFile', '~/.bashrc');
+    const branchWidget = {
+      enabled: cfg.get<boolean>('branchWidget.enabled', false),
+      jiraBase: cfg.get<string>('branchWidget.jiraBase', 'https://herzog.atlassian.net'),
+      bitbucketWorkspace: cfg.get<string>('branchWidget.bitbucketWorkspace', ''),
+    };
     this.post({
       type: 'settingsLoaded',
       values,
@@ -516,6 +558,7 @@ export class SettingsPanel implements vscode.Disposable {
       aliases,
       selectedAlias,
       aliasFile,
+      branchWidget,
     });
   }
 
@@ -587,6 +630,15 @@ export class SettingsPanel implements vscode.Disposable {
       const fieldKey = scopedKey.slice(sep + 2);
       if (!out[moduleId]) out[moduleId] = {};
       out[moduleId]![fieldKey] = value;
+    }
+    // Host-injected parameter for `tool.feedback-log`: the agent receives the
+    // same absolute path the panel reads/writes so both sides share state.
+    // Only injected when the module is enabled — otherwise the manifest entry
+    // wouldn't appear in the agent's prompt anyway and the injection would be
+    // dead weight in the workspace settings dict.
+    if (this.loader.find(FEEDBACK_MODULE_ID)?.isEnabled) {
+      if (!out[FEEDBACK_MODULE_ID]) out[FEEDBACK_MODULE_ID] = {};
+      out[FEEDBACK_MODULE_ID]!['feedbackFilePath'] = this.feedbackFilePath;
     }
     return out;
   }
@@ -963,6 +1015,138 @@ export class SettingsPanel implements vscode.Disposable {
       .get<string>('linqpadInstallPrompt', '');
     await vscode.env.clipboard.writeText(promptText);
     vscode.window.showInformationMessage('LINQPad install prompt copied to clipboard');
+  }
+
+  // ─── Feedback log ─────────────────────────────────────────────────────
+
+  /**
+   * Chain `task` onto the feedback mutex so concurrent webview messages run
+   * sequentially even when each one is async. The chain swallows errors from
+   * individual tasks so a single failure does not poison subsequent runs;
+   * tasks are expected to log + recover internally.
+   */
+  private runOnFeedbackChain(task: () => Promise<void>): Promise<void> {
+    const next = this.feedbackChain.then(task).catch((err) => {
+      this.logger?.appendLine(`[panel] feedback task failed: ${(err as Error).message}`);
+    });
+    this.feedbackChain = next;
+    return next;
+  }
+
+  /**
+   * Read the feedback JSON file. Returns an empty list when the file is
+   * missing, unparseable, or malformed — the panel is the canonical writer
+   * and will heal the shape on its own next write. Never throws.
+   */
+  private async readFeedback(): Promise<FeedbackEntry[]> {
+    try {
+      const raw = await fs.readFile(this.feedbackFilePath, 'utf-8');
+      const parsed = JSON.parse(raw) as { entries?: unknown };
+      if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.entries)) {
+        return [];
+      }
+      // Filter out malformed entries rather than failing the whole read.
+      const valid: FeedbackEntry[] = [];
+      for (const e of parsed.entries) {
+        if (
+          e &&
+          typeof e === 'object' &&
+          typeof (e as FeedbackEntry).id === 'string' &&
+          typeof (e as FeedbackEntry).createdAt === 'string' &&
+          typeof (e as FeedbackEntry).text === 'string' &&
+          ((e as FeedbackEntry).status === 'pending' ||
+            (e as FeedbackEntry).status === 'approved')
+        ) {
+          const raw = e as FeedbackEntry;
+          const entry: FeedbackEntry = {
+            id: raw.id,
+            createdAt: raw.createdAt,
+            text: raw.text,
+            status: raw.status,
+          };
+          // Preserve branch if present and valid type (optional field — absent on legacy entries).
+          if (raw.branch === null || typeof raw.branch === 'string') {
+            entry.branch = raw.branch;
+          }
+          valid.push(entry);
+        }
+      }
+      return valid;
+    } catch (err) {
+      // ENOENT is the expected first-read case — log louder errors only.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') {
+        this.logger?.appendLine(
+          `[panel] feedback read failed (${this.feedbackFilePath}): ${(err as Error).message}`,
+        );
+      }
+      return [];
+    }
+  }
+
+  /**
+   * Write the feedback JSON file. Ensures the parent directory exists first
+   * (VS Code does not pre-create `globalStorageUri`). Errors propagate to the
+   * caller so the chain wrapper can log them.
+   */
+  private async writeFeedback(entries: FeedbackEntry[]): Promise<void> {
+    await fs.mkdir(path.dirname(this.feedbackFilePath), { recursive: true });
+    const payload = JSON.stringify(
+      { schemaVersion: FEEDBACK_SCHEMA_VERSION, entries },
+      null,
+      2,
+    );
+    await fs.writeFile(this.feedbackFilePath, payload, 'utf-8');
+  }
+
+  /** Read the current feedback list and post it to the webview. */
+  private async broadcastFeedback(): Promise<void> {
+    const entries = await this.readFeedback();
+    this.post({ type: 'feedbackLoaded', entries });
+  }
+
+  /**
+   * Mark an entry approved: read, mutate matching entry's status, write,
+   * re-broadcast. Missing ids are silently ignored — the webview UI is the
+   * source of truth for which ids exist, and a stale id usually means the
+   * TPM agent rewrote the file between the read and the click.
+   */
+  private async applyFeedbackUpdate(
+    id: string,
+    status: 'approved',
+  ): Promise<void> {
+    try {
+      const entries = await this.readFeedback();
+      const next = entries.map((e) => (e.id === id ? { ...e, status } : e));
+      await this.writeFeedback(next);
+      this.post({ type: 'feedbackLoaded', entries: next });
+    } catch (err) {
+      this.logger?.appendLine(
+        `[panel] feedback update failed (${id}): ${(err as Error).message}`,
+      );
+      // Degrade gracefully — re-broadcast whatever read succeeds.
+      const fallback = await this.readFeedback();
+      this.post({ type: 'feedbackLoaded', entries: fallback });
+    }
+  }
+
+  /**
+   * Delete an entry by id: read, filter, write, re-broadcast. Missing ids are
+   * silently ignored for the same reason as `applyFeedbackUpdate`.
+   */
+  private async applyFeedbackDelete(id: string): Promise<void> {
+    try {
+      const entries = await this.readFeedback();
+      const next = entries.filter((e) => e.id !== id);
+      await this.writeFeedback(next);
+      this.post({ type: 'feedbackLoaded', entries: next });
+    } catch (err) {
+      this.logger?.appendLine(
+        `[panel] feedback delete failed (${id}): ${(err as Error).message}`,
+      );
+      const fallback = await this.readFeedback();
+      this.post({ type: 'feedbackLoaded', entries: fallback });
+    }
   }
 
   dispose(): void {

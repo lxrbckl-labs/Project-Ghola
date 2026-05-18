@@ -83,6 +83,7 @@ export class SessionLauncher {
         SWE_PERFORMANCE_MODEL: cfg.get<string>('swe.performanceCoresModel', 'opus'),
         SWE_EFFICIENCY_MODEL: cfg.get<string>('swe.efficiencyCoresModel', 'sonnet'),
         QA_AGENT_COUNT: String(cfg.get<number>('qa.count', 1)),
+        QA_MODEL: cfg.get<string>('qa.model', 'sonnet'),
       },
     });
 
