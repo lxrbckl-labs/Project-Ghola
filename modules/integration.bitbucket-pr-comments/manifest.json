@@ -1,0 +1,33 @@
+{
+  "id": "integration.bitbucket-pr-comments",
+  "name": "PR Monitor",
+  "version": "0.1.0",
+  "description": "Fetch open Bitbucket PR review comments, triage them, deploy SWEs to fix the code, and post generated replies. Depends on integration.atlassian-suite for credentials.",
+  "author": "aarbuckle",
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "pr-monitor.md" }
+    ],
+    "settings": {
+      "replyInstruction": {
+        "type": "string",
+        "label": "Reply Instruction",
+        "multiline": true,
+        "default": "Write a 1-2 sentence professional PR reply confirming what was fixed and where. No double-dashes.",
+        "description": "Instruction used to generate PR replies after SWEs fix the underlying code."
+      },
+      "coderabbitReplyPersona": {
+        "type": "string",
+        "label": "CodeRabbit Reply Persona",
+        "multiline": true,
+        "description": "Optional persona or voice instruction layered on top of the Reply Instruction when the parent comment author is CodeRabbit. Leave blank to use the Reply Instruction unchanged for CodeRabbit replies."
+      },
+      "autoResolveAfterReply": {
+        "type": "boolean",
+        "label": "Auto-Resolve After Reply",
+        "default": false,
+        "description": "After a successful reply, automatically mark the thread resolved. Off by default; TPM asks each time."
+      }
+    }
+  }
+}

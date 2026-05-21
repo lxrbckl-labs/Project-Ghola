@@ -225,6 +225,7 @@ button.primary {
   padding: 6px 14px;
   cursor: pointer;
   font: inherit;
+  border-radius: 3px;
 }
 
 button.primary:hover {
@@ -238,6 +239,7 @@ button.secondary {
   padding: 6px 14px;
   cursor: pointer;
   font: inherit;
+  border-radius: 3px;
 }
 
 
@@ -653,6 +655,19 @@ button.module-row-chevron:focus-visible {
 
 .module-detail .module-field-row .setting-input {
   flex: 1 1 auto;
+}
+
+/* Multi-line string field: textarea variant of .setting-input. Inherits the
+   width / background / border / padding chrome from .setting-input, then
+   overrides the fixed 28px height with a sensible min-height for ~4 rows and
+   allows vertical-only resize (consistent with VS Code textarea conventions). */
+.module-detail textarea.module-setting-textarea {
+  height: auto;
+  min-height: 5em;
+  padding: 6px 8px;
+  font: inherit;
+  border-radius: 3px;
+  resize: vertical;
 }
 
 /* Save button next to a setting input. Neutral by default; .dirty signals the
@@ -1343,29 +1358,156 @@ button.module-row-chevron:focus-visible {
   white-space: nowrap;
 }
 
-/* ─── Branch Widget config row (General tab) ────────────────────────── */
+/* ─── Atlassian Suite token block (module detail view) ──────────────── */
 
-/* Vertically center all three fields (Enable checkbox + two text inputs) in the
-   row. The base .agent-config-row uses flex-end which would sink the checkbox
-   relative to the 28px text inputs; centering gives a balanced look. */
-.agent-config-row:has(.branch-widget-enable-field) {
+/* Outer wrapper — stacks both product slots vertically with a shared helper link below. */
+.atlassian-token-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Individual product slot — single inline row: [icon] label · status … [buttons]. */
+.atlassian-token-slot {
+  display: flex;
+  flex-direction: row;
   align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
 }
 
-/* Keep the Enable field from stretching to the same flex width as the URL
-   fields — the checkbox doesn't need that space. */
-.branch-widget-enable-field {
-  flex: 0 0 auto;
-  min-width: 0;
+/* Leading key glyph — muted by default; SVG inherits via fill="currentColor". */
+.atlassian-token-slot-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--vscode-descriptionForeground);
 }
 
-/* Size the checkbox to be visually substantial in the row. The text inputs
-   are 28px tall; 22×22px gives a readable checkbox without overwhelming
-   the row, matching the visual weight of the adjacent field labels + inputs. */
-.branch-widget-enable-field input[type="checkbox"] {
-  width: 22px;
-  height: 22px;
+/* Product label header inside each slot — small bold, matches section sub-headers. */
+.atlassian-token-slot-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+/* Status line — dimmed, inline next to the label. */
+.atlassian-token-status {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Button row — pushed to the trailing edge of the slot. */
+.atlassian-token-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
+}
+
+/* Two-step confirm state for the Clear button — mirrors .feedback-card-no.feedback-card-confirming. */
+.atlassian-token-clear.atlassian-token-confirming {
+  border-color: var(--vscode-inputValidation-warningBorder, var(--vscode-panel-border));
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+}
+
+/* Helper text below buttons — links styled naturally; text is muted. */
+.atlassian-token-helper {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.5;
+}
+
+/* Button-as-link for the external API-token URL inside the helper text. */
+.atlassian-token-helper .atlassian-token-link {
+  background: transparent;
+  border: none;
+  color: var(--vscode-textLink-foreground);
   cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.atlassian-token-helper .atlassian-token-link:hover {
+  color: var(--vscode-textLink-activeForeground);
+}
+
+/* ─── Atlassian Suite — Token Validation block ───────────────────────── */
+
+/* Outer container — mirrors .atlassian-token-block layout. */
+.atlassian-validation-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
+}
+
+/* "Validating…" text shown while the probe is in flight. */
+.atlassian-validation-in-progress {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+/* Muted prompt shown when no validation has been run yet (State A). */
+.atlassian-validation-prompt {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.5;
+}
+
+/* Container for the per-product status lines (State C). */
+.atlassian-validation-status-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Single product row: glyph + detail text, flex so they stay on one line. */
+.atlassian-validation-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+}
+
+/* Verdict glyph — colored by outcome. */
+.atlassian-validation-glyph {
+  font-size: 13px;
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+
+.atlassian-validation-glyph-ok {
+  color: var(--vscode-charts-green, #4ec994);
+}
+
+.atlassian-validation-glyph-failed {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.atlassian-validation-glyph-skipped {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Detail text sits to the right of the glyph. */
+.atlassian-validation-detail {
+  color: var(--vscode-foreground);
+  line-height: 1.4;
+}
+
+/* "Last checked: Xs ago" footer — dim, small. */
+.atlassian-validation-footer {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
 }
 
 /* ─── CLI alias table (Sessions tab) ────────────────────────────────── */

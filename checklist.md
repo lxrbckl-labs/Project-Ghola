@@ -19,6 +19,7 @@ Sources: Project SWT feature extraction (95 features across 3 slice files), pre-
 - [x] **tool.fastpath-check** — Detects WSL fast-path; launcher cd's bash terminal into it on session start.
 - [~] **tool.lenses** — Three-lens deployment scaffolding for review/planning modes (in-flight, untracked).
 - [x] **tool.feedback-log** — Cross-session feedback log; TPM appends entries to a JSON file in extension global storage, Feedback tab in the settings panel exposes Yes/No/Delete triage on cards.
+- [x] **integration.atlassian-suite** — Atlassian credentials module (email, API token in SecretStorage, Jira base URL, Bitbucket workspace) plus REST integration: token validation against Jira `/myself` and Bitbucket workspace endpoints, ticket-existence and open-PR-by-branch lookups feeding the optional Source Control branch widget's button states. Includes Refresh button and streaming API state updates.
 
 ---
 
@@ -30,9 +31,7 @@ Sources: Project SWT feature extraction (95 features across 3 slice files), pre-
 
 ## External integrations
 
-- [ ] **integration.bitbucket** — Bitbucket Cloud REST via secrets-wrapped helper; token never touches the agent, supports `cloud` flavor only (server/DC gated for later).
-- [ ] **integration.atlassian-jira** — Jira ticket pull on session boot, JQL sprint/board queries, MCP cloud-ID resolution with fallback.
-- [ ] **tool.pr-resolution-by-branch** — Look up the current branch's PR number via Bitbucket so agent can act on PR context without the user pasting the URL.
+- [x] **tool.pr-resolution-by-branch** — Bitbucket REST lookup of the open PR for the current branch (via `integration.atlassian-suite`'s `findOpenPrForBranch`), powering the PR button's URL in the Branch Widget.
 
 ## Session modes
 

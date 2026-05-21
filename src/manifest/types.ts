@@ -77,6 +77,8 @@ export interface SettingsField {
    * the webview falls back to the standard text input.
    */
   multiSelect?: boolean;
+  /** When true and `type` is `'string'`, the settings panel renders the field as a multi-line textarea instead of a single-line input. */
+  multiline?: boolean;
   /**
    * For `type === 'keyValue'`: identifies a host-known source of candidate
    * values shown in the value-cell dropdown. Free-form text override is

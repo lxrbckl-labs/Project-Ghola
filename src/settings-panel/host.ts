@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { validateManifest } from '../manifest/validator';
+import type { AtlassianBridge } from '../extension';
 import type { ModuleLoader } from '../modules/loader';
 import type { PromptComposer } from '../prompts/composer';
 import { syncAliasFile, validateAlias, type CliAlias } from '../session/alias-sync';
@@ -67,6 +68,19 @@ export class SettingsPanel implements vscode.Disposable {
      * `tool.feedback-log` manifest parameter) point at the same file.
      */
     private readonly feedbackFilePath: string,
+    /**
+     * Coordination surface for Atlassian credential queries and token-change
+     * notifications. The token values never pass through the panel — only their
+     * existence is communicated as booleans via `isJiraTokenSet()` and
+     * `isBitbucketTokenSet()`.
+     */
+    private readonly atlassianBridge: AtlassianBridge,
+    /**
+     * Emitter the host fires after every successful module-settings save (and
+     * after batch preset application). Signals the branch widget provider and
+     * the context-key sync in `extension.ts` to re-pull updated settings.
+     */
+    private readonly moduleSettingsEmitter: vscode.EventEmitter<void>,
     private readonly logger?: vscode.OutputChannel,
   ) {
     this.disposables.push(
@@ -96,6 +110,23 @@ export class SettingsPanel implements vscode.Disposable {
         }
       }),
     );
+
+    // Re-broadcast Atlassian token status whenever the token is set or cleared.
+    this.disposables.push(
+      this.atlassianBridge.onDidChangeAtlassianTokenStatus(() => {
+        void this.broadcastAtlassianTokenStatus();
+      }),
+    );
+
+    // Push validation results to the webview whenever the bridge fires its event
+    // (i.e., after setToken auto-validates or after the validateToken command completes).
+    if (this.atlassianBridge.onDidChangeValidation) {
+      this.disposables.push(
+        this.atlassianBridge.onDidChangeValidation((result) => {
+          this.post({ type: 'atlassianValidationResult', result });
+        }),
+      );
+    }
   }
 
   open(): void {
@@ -270,6 +301,50 @@ export class SettingsPanel implements vscode.Disposable {
       case 'feedbackEntryDelete':
         await this.runOnFeedbackChain(() => this.applyFeedbackDelete(msg.id));
         break;
+      case 'atlassianSetJiraToken':
+        await vscode.commands.executeCommand('nomeda.atlassianSuite.setJiraToken');
+        break;
+      case 'atlassianClearJiraToken':
+        await vscode.commands.executeCommand('nomeda.atlassianSuite.clearJiraToken');
+        break;
+      case 'atlassianSetBitbucketToken':
+        await vscode.commands.executeCommand('nomeda.atlassianSuite.setBitbucketToken');
+        break;
+      case 'atlassianClearBitbucketToken':
+        await vscode.commands.executeCommand('nomeda.atlassianSuite.clearBitbucketToken');
+        break;
+      case 'atlassianTokenStatusRequested':
+        await this.broadcastAtlassianTokenStatus();
+        break;
+      case 'atlassianValidationStatusRequested': {
+        // Synchronous pull: return whatever is cached on the bridge right now.
+        const lastResult = this.atlassianBridge.getLastValidation?.() ?? null;
+        this.post({ type: 'atlassianValidationResult', result: lastResult });
+        break;
+      }
+      case 'atlassianValidate':
+        // Execute the command registered by SWE-1. The bridge fires onDidChangeValidation
+        // when done, which the constructor subscription above will broadcast.
+        // We do NOT call bridge.validate() directly so that all telemetry / hooks
+        // stay routed through the single command path.
+        await vscode.commands.executeCommand('nomeda.atlassianSuite.validateToken');
+        break;
+      case 'openExternal': {
+        // Only allow https: URLs — reject http: and any other scheme.
+        let parsed: URL;
+        try {
+          parsed = new URL(msg.url);
+        } catch {
+          this.logger?.appendLine(`[panel] openExternal: invalid URL rejected: ${msg.url}`);
+          break;
+        }
+        if (parsed.protocol !== 'https:') {
+          this.logger?.appendLine(`[panel] openExternal: non-https scheme rejected: ${msg.url}`);
+          break;
+        }
+        await vscode.env.openExternal(vscode.Uri.parse(msg.url));
+        break;
+      }
       default:
         this.logger?.appendLine(`[panel] unknown message: ${JSON.stringify(msg)}`);
     }
@@ -543,11 +618,6 @@ export class SettingsPanel implements vscode.Disposable {
     const aliases = cfg.get<CliAlias[]>('cliAliases', []);
     const selectedAlias = cfg.get<string>('selectedAlias', '');
     const aliasFile = cfg.get<string>('aliasFile', '~/.bashrc');
-    const branchWidget = {
-      enabled: cfg.get<boolean>('branchWidget.enabled', false),
-      jiraBase: cfg.get<string>('branchWidget.jiraBase', 'https://herzog.atlassian.net'),
-      bitbucketWorkspace: cfg.get<string>('branchWidget.bitbucketWorkspace', ''),
-    };
     this.post({
       type: 'settingsLoaded',
       values,
@@ -558,7 +628,6 @@ export class SettingsPanel implements vscode.Disposable {
       aliases,
       selectedAlias,
       aliasFile,
-      branchWidget,
     });
   }
 
@@ -571,6 +640,8 @@ export class SettingsPanel implements vscode.Disposable {
       this.postConfigurations();
       // Broadcast fresh composed prompts after settings change per architecture spec.
       this.broadcastComposedPrompts();
+      // Signal branch widget + context-key sync that module settings changed.
+      this.moduleSettingsEmitter.fire();
     } catch (err) {
       this.post({ type: 'settingsSaved', ok: false, error: (err as Error).message });
     }
@@ -772,6 +843,8 @@ export class SettingsPanel implements vscode.Disposable {
     this.postSettings();
     this.postConfigurations();
     this.broadcastComposedPrompts();
+    // Signal branch widget + context-key sync that settings changed via preset application.
+    this.moduleSettingsEmitter.fire();
   }
 
   private async deleteConfiguration(id: string): Promise<void> {
@@ -1015,6 +1088,22 @@ export class SettingsPanel implements vscode.Disposable {
       .get<string>('linqpadInstallPrompt', '');
     await vscode.env.clipboard.writeText(promptText);
     vscode.window.showInformationMessage('LINQPad install prompt copied to clipboard');
+  }
+
+  // ─── Atlassian Suite token status ─────────────────────────────────────
+
+  /**
+   * Query both `isJiraTokenSet()` and `isBitbucketTokenSet()` in parallel and
+   * post the combined result to the webview. Token values are never read —
+   * only existence is communicated as booleans.
+   */
+  private async broadcastAtlassianTokenStatus(): Promise<void> {
+    if (!this.panel) return;
+    const [jiraSet, bitbucketSet] = await Promise.all([
+      this.atlassianBridge.isJiraTokenSet(),
+      this.atlassianBridge.isBitbucketTokenSet(),
+    ]);
+    this.post({ type: 'atlassianTokenStatus', jiraSet, bitbucketSet });
   }
 
   // ─── Feedback log ─────────────────────────────────────────────────────

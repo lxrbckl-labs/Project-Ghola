@@ -73,6 +73,14 @@ When the user reports a bug, a failing test, an unexpected behavior, or any ques
 
 The team exists so you can use it. Delegate first, narrate constantly.
 
+## Recommend, Don't Poll
+
+Default to recommend-and-execute. When you spot a scope or approach decision the user could go either way on, pick the one you'd recommend, state it in one sentence with the tradeoff, and proceed — if they disagree they'll redirect, and that costs less than a multiple-choice prompt. Only ask narrow questions when a real constraint cannot be inferred from context, when the user has stated competing requirements and needs a tiebreaker, or when the action is destructive/irreversible and guessing wrong is costly. Don't frame alternatives as "Option A / Option B" lists in prose when the user has delegated the decision.
+
+## Match the Chrome
+
+When adding or modifying UI in the settings panel webview (`src/settings-panel/webview/`), match the existing input-material chrome: `border-radius: 3px` on buttons and rounded controls, `font: inherit` for type, and padding consistent with neighboring controls. If a new button would diverge from `button.primary` / `button.secondary`, reuse the existing class or extend the global rule rather than introducing a one-off override. The goal is visual consistency — new buttons should look like they belong in the same family as Save, Open Session, Set Token, and Validate.
+
 ## File Conflict Prevention
 
 When more than one SWE is in flight at the same time, coordinate file ownership.

@@ -1,9 +1,25 @@
 import * as vscode from 'vscode';
+import type { AtlassianBridge } from '../extension';
+import { AtlassianClient } from '../integration/atlassian-client';
 import {
   buildBitbucketBranchUrl,
   buildTicketUrl,
+  extractBitbucketRepoSlug,
+  extractBitbucketWorkspace,
   extractTicketKey,
 } from './url-builder';
+
+/**
+ * Workspace-state key under which the Settings panel persists flattened
+ * module settings as `{ "moduleId::fieldKey": value }`. Mirrors the constant
+ * in `src/settings-panel/host.ts` and `src/session/launcher.ts`; we duplicate
+ * it here (rather than importing) because the provider sits one directory
+ * below and a cross-cut import would force a wider refactor.
+ */
+const MODULE_SETTINGS_KEY = 'nomeda.moduleSettings';
+
+/** Module id this widget draws its configuration from. */
+const ATLASSIAN_MODULE_ID = 'integration.atlassian-suite';
 
 /**
  * Minimal structural typing for VS Code's built-in Git extension API. The Git
@@ -38,17 +54,46 @@ interface GitExtension {
 }
 
 /**
+ * Status of the live Jira ticket probe.
+ *   - `unknown`  : no ticket key extracted from the branch name.
+ *   - `checking` : ticket key present, API call in flight.
+ *   - `exists`   : API confirmed the ticket exists.
+ *   - `missing`  : API confirmed the ticket does not exist.
+ *   - `fallback` : credentials missing — we surface the URL-builder URL
+ *                  without an API check; the button stays enabled.
+ */
+type TicketStatus = 'unknown' | 'checking' | 'exists' | 'missing' | 'fallback';
+
+/**
+ * Status of the live Bitbucket PR probe.
+ *   - `unknown`  : no branch + remote — cannot even guess.
+ *   - `checking` : API call in flight against the open-PR endpoint.
+ *   - `found`    : an open PR exists for this branch.
+ *   - `none`     : no open PR found — the URL is the branch-overview fallback.
+ *   - `fallback` : credentials missing — we surface the URL-builder URL
+ *                  without an API check; the button stays enabled.
+ */
+type PrStatus = 'unknown' | 'checking' | 'found' | 'none' | 'fallback';
+
+/**
  * Host → webview state push. The webview is purely render-and-postMessage; all
  * URL resolution happens on the host side so the iframe never holds raw
  * remote URLs or config values it does not need.
+ *
+ * Each push carries a monotonically-increasing `generation` — the webview
+ * ignores any message with a generation lower than the most-recently-rendered
+ * one so a late-arriving API response from a previous refresh never overwrites
+ * a fresh state.
  */
 interface StateMessage {
   type: 'state';
-  enabled: boolean;
+  generation: number;
   branch: string | null;
   ticketKey: string | null;
   ticketUrl: string | null;
   branchUrl: string | null;
+  ticketStatus: TicketStatus;
+  prStatus: PrStatus;
   /** Total number of Git repositories in the workspace. 1 in the common case. */
   repoCount: number;
 }
@@ -57,12 +102,20 @@ interface StateMessage {
 type WebviewMessage =
   | { type: 'openTicket' }
   | { type: 'openBranch' }
-  | { type: 'openSettings' };
+  | { type: 'refresh' };
 
 /**
  * Renders a small panel inside the Source Control container that surfaces the
  * current branch's Jira ticket key and one-click links to the Jira ticket and
- * the Bitbucket branch/PR page. Gated by `nomeda.branchWidget.enabled`.
+ * the Bitbucket PR / branch page. Visibility is gated by the
+ * `nomeda.atlassianSuite.widgetEnabled` context key (driven by the
+ * `integration.atlassian-suite` module's `showWidget` setting); if this
+ * provider resolves a view, the toggle is on.
+ *
+ * State resolution is **streaming**: the synchronous git/config read is pushed
+ * to the webview immediately so the user sees branch info without waiting,
+ * and live API probes (ticket exists? open PR?) are spawned in parallel and
+ * pushed as follow-up state messages as they resolve.
  */
 export class BranchWidgetProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
@@ -74,11 +127,36 @@ export class BranchWidgetProvider implements vscode.WebviewViewProvider {
   private viewDisposables: vscode.Disposable[] = [];
   /** Per-repo `onDidChange` subscriptions, refreshed when repositories open/close. */
   private repoSubscriptions: vscode.Disposable[] = [];
+  /**
+   * Monotonically-increasing generation counter. Each call to `pushState()`
+   * increments this and stamps the new value onto every message it posts.
+   * Late-arriving API responses from a previous generation are dropped before
+   * posting; the webview also performs a defensive check on the receive side.
+   */
+  private activeGen = 0;
 
-  constructor(_context: vscode.ExtensionContext) {
-    // Context is accepted for future extension (e.g. localResourceRoots, state
-    // persistence) but the current implementation only needs config + globals.
-  }
+  /**
+   * @param context Extension context — used to read flattened module settings
+   *   from workspaceState under `nomeda.moduleSettings`.
+   * @param onDidChangeModuleSettings Event fired by the host whenever
+   *   `nomeda.moduleSettings` is rewritten. The provider re-pulls config and
+   *   pushes fresh state to the webview when it fires.
+   * @param bridge AtlassianBridge — supplies the API token, validation state,
+   *   and a change event so the widget refreshes after the user sets / clears
+   *   the token or re-validates.
+   * @param getAtlassianSetting Optional resolver supplied by the host that
+   *   reads a named setting from workspaceState and falls back to the module
+   *   manifest's declared default when no persisted value exists. When provided,
+   *   `readModuleSetting` delegates to it for string fields so that fields shown
+   *   as pre-populated in the Settings panel (e.g. `bitbucketWorkspace`) are
+   *   treated as present by the widget even before the user has saved them.
+   */
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly onDidChangeModuleSettings?: vscode.Event<void>,
+    private readonly bridge?: AtlassianBridge,
+    private readonly getAtlassianSetting?: (fieldKey: string) => string,
+  ) {}
 
   resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -94,20 +172,28 @@ export class BranchWidgetProvider implements vscode.WebviewViewProvider {
     });
     this.viewDisposables.push(messageSub);
 
-    // React to config changes for any nomeda.branchWidget.* key.
-    const configSub = vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('nomeda.branchWidget')) {
-        this.pushState();
-      }
-    });
-    this.viewDisposables.push(configSub);
+    // React to module-settings changes. The host fires `onDidChangeModuleSettings`
+    // after every save of the flattened `nomeda.moduleSettings` workspace-state
+    // entry, so we re-pull `jiraBase` / `bitbucketWorkspace` and refresh the
+    // webview without depending on a `nomeda.*` configuration key.
+    if (this.onDidChangeModuleSettings) {
+      const settingsSub = this.onDidChangeModuleSettings(() => this.pushState());
+      this.viewDisposables.push(settingsSub);
+    }
+
+    // React to validation events (token set / cleared / re-validated). Each
+    // change re-runs the full probe pass so the buttons reflect the new state.
+    if (this.bridge) {
+      const validationSub = this.bridge.onDidChangeValidation(() => this.pushState());
+      this.viewDisposables.push(validationSub);
+    }
 
     // Wire Git-extension listeners. Wrapped because the extension may not be
     // available in environments without the built-in Git provider.
     this.wireGitListeners();
 
-    // Initial state push happens after the webview ready handshake fires from
-    // the inline script; the script posts no message, so push immediately too.
+    // Initial state push happens immediately so the webview renders branch
+    // info without waiting for API probes; the async probes follow up.
     this.pushState();
 
     webviewView.onDidDispose(() => {
@@ -155,26 +241,296 @@ export class BranchWidgetProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  // ─── State resolution + push ───────────────────────────────────────────
+  // ─── State resolution + push (streaming) ───────────────────────────────
 
+  /**
+   * Compose and post the initial synchronous state, then spawn async API
+   * probes that post follow-up updates as they resolve. Each push carries
+   * the current generation counter; late responses from a previous
+   * generation are dropped so a stale probe never clobbers fresh state.
+   */
   private pushState(): void {
     if (!this.view) return;
-    const state = this.resolveState();
-    void this.view.webview.postMessage(state);
-  }
 
-  private resolveState(): StateMessage {
-    const cfg = vscode.workspace.getConfiguration('nomeda.branchWidget');
-    const enabled = cfg.get<boolean>('enabled', false);
-    const jiraBase = cfg.get<string>('jiraBase', 'https://herzog.atlassian.net');
-    const fallbackWorkspace = cfg.get<string>('bitbucketWorkspace', '');
+    this.activeGen += 1;
+    const gen = this.activeGen;
+
+    // ── Synchronous read of git + module config ──
+    const jiraBase = this.readModuleSetting<string>('jiraBase', 'https://herzog.atlassian.net');
+    const fallbackWorkspace = this.readModuleSetting<string>('bitbucketWorkspace', '');
+    const email = this.readModuleSetting<string>('email', '');
 
     const { branch, remoteUrl, repoCount } = this.readGitState();
     const ticketKey = extractTicketKey(branch);
-    const ticketUrl = buildTicketUrl(ticketKey, jiraBase);
-    const branchUrl = buildBitbucketBranchUrl(remoteUrl, branch, fallbackWorkspace);
+    const fallbackTicketUrl = buildTicketUrl(ticketKey, jiraBase);
+    const fallbackBranchUrl = buildBitbucketBranchUrl(remoteUrl, branch, fallbackWorkspace);
 
-    return { type: 'state', enabled, branch, ticketKey, ticketUrl, branchUrl, repoCount };
+    const repoSlug = extractBitbucketRepoSlug(remoteUrl);
+    const workspaceFromRemote = extractBitbucketWorkspace(remoteUrl);
+    const workspace = workspaceFromRemote || fallbackWorkspace;
+
+    // ── Decide credentials availability ──
+    // We resolve the token lazily inside an async closure so the synchronous
+    // initial push is not blocked on SecretStorage I/O. The closure then
+    // decides whether to spawn API probes or short-circuit to fallback.
+    let initialTicketStatus: TicketStatus = ticketKey ? 'checking' : 'unknown';
+    let initialPrStatus: PrStatus = branch && repoSlug ? 'checking' : 'unknown';
+
+    // Synchronous initial post — webview gets branch info instantly.
+    this.post({
+      type: 'state',
+      generation: gen,
+      branch,
+      ticketKey,
+      ticketUrl: fallbackTicketUrl,
+      branchUrl: fallbackBranchUrl,
+      ticketStatus: initialTicketStatus,
+      prStatus: initialPrStatus,
+      repoCount,
+    });
+
+    // Async follow-up: token + probes.
+    void this.runProbes({
+      gen,
+      branch,
+      remoteUrl,
+      repoCount,
+      ticketKey,
+      jiraBase,
+      email,
+      workspace,
+      repoSlug,
+      fallbackTicketUrl,
+      fallbackBranchUrl,
+    });
+  }
+
+  /**
+   * Async follow-up half of `pushState`. Resolves the token, decides whether
+   * to run the API probes, and posts follow-up state messages as each probe
+   * resolves. All paths check `gen === this.activeGen` before posting so a
+   * late probe from a stale generation is silently dropped.
+   */
+  private async runProbes(args: {
+    gen: number;
+    branch: string | null;
+    remoteUrl: string | null;
+    repoCount: number;
+    ticketKey: string | null;
+    jiraBase: string;
+    email: string;
+    workspace: string;
+    repoSlug: string | null;
+    fallbackTicketUrl: string | null;
+    fallbackBranchUrl: string | null;
+  }): Promise<void> {
+    const {
+      gen,
+      branch,
+      ticketKey,
+      jiraBase,
+      email,
+      workspace,
+      repoSlug,
+      repoCount,
+      fallbackTicketUrl,
+      fallbackBranchUrl,
+    } = args;
+
+    // Resolve both product tokens in parallel — they live under separate
+    // SecretStorage keys (Jira / Bitbucket) and either may be undefined. Each
+    // probe checks ITS own token independently before deciding fallback vs
+    // live API check; we do NOT gate one product's probe on the other's
+    // credentials.
+    const [jiraToken, bitbucketToken] = await Promise.all([
+      this.bridge ? this.bridge.getJiraToken() : Promise.resolve(undefined),
+      this.bridge ? this.bridge.getBitbucketToken() : Promise.resolve(undefined),
+    ]);
+
+    // Helper: derive the snapshot of state for any follow-up post. The
+    // ticket/PR status + URL fields are passed in; everything else is
+    // captured from the closure.
+    const snapshot = (
+      ticketStatus: TicketStatus,
+      ticketUrl: string | null,
+      prStatus: PrStatus,
+      branchUrl: string | null,
+    ): StateMessage => ({
+      type: 'state',
+      generation: gen,
+      branch,
+      ticketKey,
+      ticketUrl,
+      branchUrl,
+      ticketStatus,
+      prStatus,
+      repoCount,
+    });
+
+    // Credentials check per product:
+    //   - Ticket probe needs email + Jira token + jiraBase + ticketKey.
+    //   - PR probe needs email + Bitbucket token + workspace + repoSlug + branch.
+    // Each gate is independent — missing a Jira token does NOT disable the
+    // PR probe and vice versa.
+    const canProbeTicket = Boolean(email && jiraToken && jiraBase && ticketKey);
+    const canProbePr = Boolean(email && bitbucketToken && workspace && repoSlug && branch);
+
+    // Track local status so each probe's post reflects the latest values of
+    // BOTH statuses, not just its own. We need this because the two probes
+    // resolve independently but each post carries the full state.
+    let ticketStatus: TicketStatus = canProbeTicket
+      ? 'checking'
+      : ticketKey
+        ? 'fallback'
+        : 'unknown';
+    let prStatus: PrStatus = canProbePr
+      ? 'checking'
+      : branch && (repoSlug || fallbackBranchUrl)
+        ? 'fallback'
+        : 'unknown';
+    let ticketUrl: string | null = fallbackTicketUrl;
+    let branchUrl: string | null = fallbackBranchUrl;
+
+    // If neither probe will run, post the fallback state once and bail. This
+    // upgrades the initial `checking` markers to `fallback` / `unknown` so the
+    // UI does not show a permanent spinner.
+    if (!canProbeTicket && !canProbePr) {
+      if (gen === this.activeGen) {
+        this.post(snapshot(ticketStatus, ticketUrl, prStatus, branchUrl));
+      }
+      return;
+    }
+
+    // Build a single client. Both probes share the instance but each picks
+    // up its own product-specific token from the constructor options. The
+    // client's per-method short-circuit ("missing token → skipped/empty
+    // result") covers any per-product token absence — we do not need extra
+    // branching here.
+    const client = new AtlassianClient({
+      email,
+      jiraToken,
+      bitbucketToken,
+      jiraBase,
+      bitbucketWorkspace: workspace,
+    });
+
+    // Post an intermediate state if a probe was downgraded to fallback while
+    // the other still runs (e.g. ticket-key absent but PR probe live). Without
+    // this the `checking` indicator on the dead leg would never clear.
+    if (
+      (!canProbeTicket && ticketStatus !== 'checking') ||
+      (!canProbePr && prStatus !== 'checking')
+    ) {
+      if (gen === this.activeGen) {
+        this.post(snapshot(ticketStatus, ticketUrl, prStatus, branchUrl));
+      }
+    }
+
+    const probes: Promise<void>[] = [];
+
+    if (canProbeTicket && ticketKey) {
+      probes.push(
+        client
+          .checkTicketExists(ticketKey)
+          .then((result) => {
+            ticketStatus = result.exists ? 'exists' : 'missing';
+            // Keep the URL-builder URL regardless — Jira URLs are stable and
+            // the button stays useful even when the ticket lookup says missing
+            // (the user may want to investigate). The status field is what
+            // drives the disabled flag.
+            if (gen === this.activeGen) {
+              this.post(snapshot(ticketStatus, ticketUrl, prStatus, branchUrl));
+            }
+          })
+          .catch(() => {
+            // The client never throws, but belt-and-braces: a thrown error
+            // collapses to fallback so the UI does not get stuck on `checking`.
+            ticketStatus = 'fallback';
+            if (gen === this.activeGen) {
+              this.post(snapshot(ticketStatus, ticketUrl, prStatus, branchUrl));
+            }
+          }),
+      );
+    }
+
+    if (canProbePr && repoSlug && branch) {
+      probes.push(
+        client
+          .findOpenPrForBranch(repoSlug, branch)
+          .then((result) => {
+            if (result.prUrl) {
+              prStatus = 'found';
+              branchUrl = result.prUrl;
+            } else {
+              prStatus = 'none';
+              // Keep the branch-overview fallback URL — when there is no
+              // open PR yet the user often wants the branch page anyway.
+              branchUrl = fallbackBranchUrl;
+            }
+            if (gen === this.activeGen) {
+              this.post(snapshot(ticketStatus, ticketUrl, prStatus, branchUrl));
+            }
+          })
+          .catch(() => {
+            prStatus = 'fallback';
+            branchUrl = fallbackBranchUrl;
+            if (gen === this.activeGen) {
+              this.post(snapshot(ticketStatus, ticketUrl, prStatus, branchUrl));
+            }
+          }),
+      );
+    }
+
+    // Wait for all probes; we do not need the aggregate value, only to keep
+    // the function alive long enough that any unhandled rejections would have
+    // a chance to surface (the per-probe `.catch` above already handles them).
+    await Promise.all(probes);
+  }
+
+  /**
+   * Post a `StateMessage` to the webview, but only if it belongs to the
+   * current generation. Returning early here is the second line of defence
+   * after each caller's own `gen === this.activeGen` check.
+   */
+  private post(msg: StateMessage): void {
+    if (!this.view) return;
+    if (msg.generation !== this.activeGen) return;
+    void this.view.webview.postMessage(msg);
+  }
+
+  /**
+   * Read a single field from the `integration.atlassian-suite` module's
+   * persisted settings. Mirrors the flat `moduleId::fieldKey` shape that the
+   * panel writes; `defaultValue` is returned when the key is absent or the
+   * stored value is not the expected primitive type.
+   *
+   * For string fields, if the stored value is absent or empty AND the host
+   * supplied a `getAtlassianSetting` resolver, we delegate to it so that the
+   * manifest-declared default is honoured even before the user has explicitly
+   * saved the field. This mirrors the fix applied to `readAtlassianSetting` in
+   * `extension.ts` and ensures the widget uses the correct workspace slug /
+   * Jira base for URL construction even on first load.
+   */
+  private readModuleSetting<T>(fieldKey: string, defaultValue: T): T {
+    const flat = this.context.workspaceState.get<Record<string, unknown>>(MODULE_SETTINGS_KEY, {});
+    const v = flat[`${ATLASSIAN_MODULE_ID}::${fieldKey}`];
+    if (typeof v === typeof defaultValue && v !== null) {
+      // For string fields, prefer the host resolver when the stored value is
+      // an empty string — empty means "never explicitly saved", in which case
+      // the manifest default (e.g. "herzog-technologies") should win.
+      if (typeof v === 'string' && (v as string) === '' && this.getAtlassianSetting) {
+        const resolved = this.getAtlassianSetting(fieldKey);
+        return (resolved !== '' ? resolved : defaultValue) as T;
+      }
+      return v as T;
+    }
+    // No stored value at all — delegate to the host resolver (which applies
+    // the manifest default) when available, otherwise use the local fallback.
+    if (typeof defaultValue === 'string' && this.getAtlassianSetting) {
+      const resolved = this.getAtlassianSetting(fieldKey);
+      return (resolved !== '' ? resolved : defaultValue) as T;
+    }
+    return defaultValue;
   }
 
   private readGitState(): { branch: string | null; remoteUrl: string | null; repoCount: number } {
@@ -201,17 +557,31 @@ export class BranchWidgetProvider implements vscode.WebviewViewProvider {
   private async handle(msg: WebviewMessage): Promise<void> {
     switch (msg.type) {
       case 'openTicket': {
-        const { ticketUrl } = this.resolveState();
+        // Resolve the current ticket URL synchronously. The webview holds the
+        // authoritative URL string in its last-rendered state, but re-deriving
+        // here keeps the click side-channel free of any URL that might have
+        // become stale between the last push and the click.
+        const jiraBase = this.readModuleSetting<string>('jiraBase', 'https://herzog.atlassian.net');
+        const { branch } = this.readGitState();
+        const ticketKey = extractTicketKey(branch);
+        const ticketUrl = buildTicketUrl(ticketKey, jiraBase);
         if (ticketUrl) await this.openInSimpleBrowser(ticketUrl);
         break;
       }
       case 'openBranch': {
-        const { branchUrl } = this.resolveState();
+        // For the PR/branch button we cannot recover the live PR URL
+        // synchronously (it lives only in the most-recent state push). Fall
+        // back to the URL-builder branch URL — same behavior as before this
+        // feature shipped, and a reasonable default when the user clicks
+        // mid-refresh.
+        const fallbackWorkspace = this.readModuleSetting<string>('bitbucketWorkspace', '');
+        const { branch, remoteUrl } = this.readGitState();
+        const branchUrl = buildBitbucketBranchUrl(remoteUrl, branch, fallbackWorkspace);
         if (branchUrl) await this.openInSimpleBrowser(branchUrl);
         break;
       }
-      case 'openSettings':
-        await vscode.commands.executeCommand('nomeda.openSettings');
+      case 'refresh':
+        this.pushState();
         break;
       default:
         // Unknown message — ignore to stay forward-compatible with new fields.
@@ -297,19 +667,15 @@ export class BranchWidgetProvider implements vscode.WebviewViewProvider {
       }
       button:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
       button:disabled { opacity: 0.5; cursor: default; }
+      /* The refresh button is the action chrome — narrower than the link
+         buttons so it does not steal horizontal space from Ticket/PR. */
+      #refreshBtn { flex: 0 0 auto; min-width: 28px; }
       .repo-count {
         color: var(--vscode-descriptionForeground);
         font-size: 11px;
         margin-left: auto;
         white-space: nowrap;
       }
-      .disabled-state {
-        color: var(--vscode-descriptionForeground);
-        font-size: 12px;
-        line-height: 1.4;
-      }
-      .disabled-state a { color: var(--vscode-textLink-foreground); cursor: pointer; }
-      .disabled-state a:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
     </style>
   </head>
   <body>
@@ -324,10 +690,8 @@ export class BranchWidgetProvider implements vscode.WebviewViewProvider {
         <div class="buttons">
           <button id="ticket" disabled>Ticket</button>
           <button id="branchBtn" disabled>PR</button>
+          <button id="refreshBtn" aria-label="Refresh branch state" title="Refresh">↻</button>
         </div>
-      </div>
-      <div class="disabled-state" id="disabledState" hidden>
-        Branch Widget is disabled. <a id="openSettings">Open Settings</a>
       </div>
     </div>
     <script nonce="${nonce}">
@@ -336,28 +700,23 @@ export class BranchWidgetProvider implements vscode.WebviewViewProvider {
       const keyEl = document.getElementById('key');
       const ticketBtn = document.getElementById('ticket');
       const branchBtn = document.getElementById('branchBtn');
-      const enabledContent = document.getElementById('enabledContent');
-      const disabledState = document.getElementById('disabledState');
-      const openSettings = document.getElementById('openSettings');
+      const refreshBtn = document.getElementById('refreshBtn');
       const repoCountEl = document.getElementById('repoCount');
+
+      // Track the highest generation rendered so far. Defensive: the host
+      // already drops stale messages before postMessage, but a race during
+      // very fast refreshes could still surface an older message — ignore it.
+      let lastGen = -1;
 
       ticketBtn.addEventListener('click', () => vscode.postMessage({ type: 'openTicket' }));
       branchBtn.addEventListener('click', () => vscode.postMessage({ type: 'openBranch' }));
-      openSettings.addEventListener('click', (e) => {
-        e.preventDefault();
-        vscode.postMessage({ type: 'openSettings' });
-      });
+      refreshBtn.addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
 
       window.addEventListener('message', (event) => {
         const msg = event.data;
         if (!msg || msg.type !== 'state') return;
-        if (!msg.enabled) {
-          enabledContent.hidden = true;
-          disabledState.hidden = false;
-          return;
-        }
-        enabledContent.hidden = false;
-        disabledState.hidden = true;
+        if (typeof msg.generation === 'number' && msg.generation < lastGen) return;
+        if (typeof msg.generation === 'number') lastGen = msg.generation;
 
         if (msg.branch) {
           branchEl.textContent = msg.branch;
@@ -377,8 +736,44 @@ export class BranchWidgetProvider implements vscode.WebviewViewProvider {
         } else {
           keyEl.hidden = true;
         }
-        ticketBtn.disabled = !msg.ticketUrl;
-        branchBtn.disabled = !msg.branchUrl;
+
+        // Ticket button: label reflects probe status, disabled flag reflects
+        // whether we have a URL the user can usefully click through.
+        const ticketChecking = msg.ticketStatus === 'checking';
+        ticketBtn.textContent = ticketChecking ? 'Ticket …' : 'Ticket';
+        ticketBtn.title =
+          msg.ticketStatus === 'exists' ? 'Ticket exists — open in Jira'
+          : msg.ticketStatus === 'missing' ? 'Ticket not found in Jira'
+          : msg.ticketStatus === 'fallback' ? 'Open ticket URL (unverified)'
+          : '';
+        ticketBtn.disabled =
+          !msg.ticketUrl ||
+          ticketChecking ||
+          msg.ticketStatus === 'missing' ||
+          msg.ticketStatus === 'unknown';
+
+        // PR button: same pattern. The 'unknown' status (no branch/remote) is
+        // the only state that fully disables the button — every other state
+        // has at least the branch-overview fallback URL.
+        const prChecking = msg.prStatus === 'checking';
+        branchBtn.textContent =
+          prChecking ? 'PR …'
+          : msg.prStatus === 'found' ? 'PR'
+          : msg.prStatus === 'none' ? 'Branch'
+          : 'PR';
+        branchBtn.title =
+          msg.prStatus === 'found' ? 'Open the pull request'
+          : msg.prStatus === 'none' ? 'No open PR — open the branch in Bitbucket'
+          : msg.prStatus === 'fallback' ? 'Open branch URL (unverified)'
+          : '';
+        branchBtn.disabled =
+          !msg.branchUrl ||
+          prChecking ||
+          msg.prStatus === 'unknown';
+
+        // Refresh button is always enabled — even when no branch is detected,
+        // re-running the check is harmless and may pick up a newly-opened repo.
+        refreshBtn.disabled = false;
       });
     </script>
   </body>

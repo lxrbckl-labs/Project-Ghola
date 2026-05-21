@@ -93,6 +93,26 @@ export interface FeedbackEntry {
   branch?: string | null;
 }
 
+// ─── Atlassian validation types ───────────────────────────────────────────
+
+/**
+ * Per-product validation outcome. Re-declared here (rather than re-exported
+ * from `src/extension.ts`) so the webview can consume this file without
+ * pulling in any Node / vscode imports.
+ */
+export interface AtlassianValidationProductStatus {
+  status: 'ok' | 'failed' | 'skipped';
+  message?: string;
+  displayName?: string;
+}
+
+export interface AtlassianValidationResult {
+  jira: AtlassianValidationProductStatus;
+  bitbucket: AtlassianValidationProductStatus;
+  /** ISO 8601 timestamp of when the validation probe completed. */
+  lastCheckedAt: string;
+}
+
 // Webview → host
 export type WebviewToHostMessage =
   | { type: 'ready' }
@@ -121,7 +141,18 @@ export type WebviewToHostMessage =
   | { type: 'getAliases' }
   | { type: 'feedbackRequested' }
   | { type: 'feedbackEntryUpdate'; id: string; status: 'approved' }
-  | { type: 'feedbackEntryDelete'; id: string };
+  | { type: 'feedbackEntryDelete'; id: string }
+  | { type: 'atlassianSetJiraToken' }
+  | { type: 'atlassianClearJiraToken' }
+  | { type: 'atlassianSetBitbucketToken' }
+  | { type: 'atlassianClearBitbucketToken' }
+  | { type: 'atlassianTokenStatusRequested' }
+  /** Trigger an on-demand validation probe via the nomeda.atlassianSuite.validateToken command. */
+  | { type: 'atlassianValidate' }
+  /** Request the last cached validation result synchronously from the host. */
+  | { type: 'atlassianValidationStatusRequested' }
+  /** Open an external https: URL via vscode.env.openExternal. Only https: scheme is accepted. */
+  | { type: 'openExternal'; url: string };
 
 // Host → webview
 export type HostToWebviewMessage =
@@ -136,11 +167,6 @@ export type HostToWebviewMessage =
       aliases: CliAlias[];
       selectedAlias: string;
       aliasFile: string;
-      branchWidget: {
-        enabled: boolean;
-        jiraBase: string;
-        bitbucketWorkspace: string;
-      };
     }
   | { type: 'settingsSaved'; ok: boolean; error?: string }
   | { type: 'composedPromptUpdated'; agent: string; prompt: string }
@@ -167,4 +193,11 @@ export type HostToWebviewMessage =
     }
   | { type: 'aliasesLoaded'; aliases: CliAlias[]; selectedAlias: string; aliasFile: string }
   | { type: 'aliasesSaved'; ok: boolean; error?: string }
-  | { type: 'feedbackLoaded'; entries: FeedbackEntry[] };
+  | { type: 'feedbackLoaded'; entries: FeedbackEntry[] }
+  | { type: 'atlassianTokenStatus'; jiraSet: boolean; bitbucketSet: boolean }
+  /**
+   * Sent after a validation probe completes (event-driven) or in response to
+   * `atlassianValidationStatusRequested` (synchronous pull). `result` is null
+   * when no validation has been run yet in this session.
+   */
+  | { type: 'atlassianValidationResult'; result: AtlassianValidationResult | null };

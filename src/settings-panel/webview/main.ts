@@ -35,6 +35,41 @@ interface FeedbackLoadedMessage {
 // interface FeedbackEntryUpdateMessage { type: 'feedbackEntryUpdate'; id: string; status: 'approved'; }
 // interface FeedbackEntryDeleteMessage { type: 'feedbackEntryDelete'; id: string; }
 
+// ─── Atlassian Suite protocol types ─────────────────────────────────────────
+// Local re-declarations kept in sync with src/settings-panel/protocol.ts.
+
+interface AtlassianTokenStatusMessage {
+  type: 'atlassianTokenStatus';
+  jiraSet: boolean;
+  bitbucketSet: boolean;
+}
+
+interface AtlassianValidationProductStatus {
+  status: 'ok' | 'failed' | 'skipped';
+  message?: string;
+  displayName?: string;
+}
+
+interface AtlassianValidationResult {
+  jira: AtlassianValidationProductStatus;
+  bitbucket: AtlassianValidationProductStatus;
+  lastCheckedAt: string;
+}
+
+interface AtlassianValidationResultMessage {
+  type: 'atlassianValidationResult';
+  result: AtlassianValidationResult | null;
+}
+
+// Webview → host send-site types (documented here, sent via postMessage):
+// interface AtlassianSetJiraTokenMessage { type: 'atlassianSetJiraToken'; }
+// interface AtlassianClearJiraTokenMessage { type: 'atlassianClearJiraToken'; }
+// interface AtlassianSetBitbucketTokenMessage { type: 'atlassianSetBitbucketToken'; }
+// interface AtlassianClearBitbucketTokenMessage { type: 'atlassianClearBitbucketToken'; }
+// interface AtlassianTokenStatusRequestedMessage { type: 'atlassianTokenStatusRequested'; }
+// interface AtlassianValidateMessage { type: 'atlassianValidate'; }
+// interface AtlassianValidationStatusRequestedMessage { type: 'atlassianValidationStatusRequested'; }
+
 interface VsCodeApi {
   postMessage(msg: WebviewToHostMessage): void;
   setState(state: unknown): void;
@@ -159,12 +194,32 @@ interface UIState {
   selectedAlias: string;
   /** Shell rc file the aliases are persisted into (mirrors `nomeda.aliasFile`). */
   aliasFile: string;
-  /** Branch Widget configuration pulled from `nomeda.branchWidget.*` VS Code configuration. */
-  branchWidget: {
-    enabled: boolean;
-    jiraBase: string;
-    bitbucketWorkspace: string;
-  };
+  /**
+   * Whether the Jira API token is currently stored in SecretStorage.
+   * Set by 'atlassianTokenStatus' messages from the host; never contains the
+   * actual token value.
+   */
+  atlassianJiraTokenSet: boolean;
+  /**
+   * Whether the Bitbucket API token is currently stored in SecretStorage.
+   * Set by 'atlassianTokenStatus' messages from the host; never contains the
+   * actual token value.
+   */
+  atlassianBitbucketTokenSet: boolean;
+  /** Whether the Jira Clear token button is in its two-step confirm state. */
+  atlassianJiraTokenConfirming: boolean;
+  /** Whether the Bitbucket Clear token button is in its two-step confirm state. */
+  atlassianBitbucketTokenConfirming: boolean;
+  /**
+   * Last validation result received from the host. Null means no validation
+   * has been run yet. Updated by 'atlassianValidationResult' messages.
+   */
+  atlassianValidation: AtlassianValidationResult | null;
+  /**
+   * True while a validate command is in flight (user clicked Validate /
+   * Re-validate). Set to true on click; cleared when a result message arrives.
+   */
+  atlassianValidating: boolean;
   /** Feedback entries last received from the host via 'feedbackLoaded'. */
   feedbackEntries: FeedbackEntry[];
   /**
@@ -200,7 +255,12 @@ const state: UIState = {
   aliases: [],
   selectedAlias: '',
   aliasFile: '~/.bashrc',
-  branchWidget: { enabled: false, jiraBase: 'https://herzog.atlassian.net', bitbucketWorkspace: '' },
+  atlassianJiraTokenSet: false,
+  atlassianBitbucketTokenSet: false,
+  atlassianJiraTokenConfirming: false,
+  atlassianBitbucketTokenConfirming: false,
+  atlassianValidation: null,
+  atlassianValidating: false,
   feedbackEntries: [],
   feedbackPendingNoConfirm: new Set(),
 };
@@ -251,16 +311,29 @@ const COPY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height
 // the Modules search row. Up-arrow rising out of a tray base.
 const UPLOAD_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5l4 4-.71.71L8.5 3.41V11h-1V3.41L4.71 6.21 4 5.5l4-4zM2.5 11.5h1V14h9v-2.5h1V14a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-2.5z"/></svg>`;
 
+// Key glyph — leads each Atlassian token slot to flag the row as a secret/credential field.
+// Path adapted from GitHub Octicons (MIT).
+const KEY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.5 0a5.5 5.5 0 1 1-1.288 10.848l-.932.932a.75.75 0 0 1-.53.22H7v.75a.75.75 0 0 1-.22.53l-.5.5a.75.75 0 0 1-.53.22H5v.75a.75.75 0 0 1-.22.53l-.5.5a.75.75 0 0 1-.53.22h-2A1.75 1.75 0 0 1 0 14.25v-2c0-.2.079-.39.22-.53l5.932-5.932A5.5 5.5 0 0 1 10.5 0zm0 1.5a4 4 0 0 0-3.957 4.585.75.75 0 0 1-.21.65L1.5 12.56v1.69c0 .136.114.25.25.25h1.69l.06-.06v-.94c0-.2.079-.39.22-.53l.5-.5a.75.75 0 0 1 .53-.22h.94l.06-.06v-.94c0-.2.079-.39.22-.53l.5-.5a.75.75 0 0 1 .53-.22h.94l1.815-1.815a.75.75 0 0 1 .65-.21A4 4 0 1 0 10.5 1.5zm1 2.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/></svg>`;
+
 function init(): void {
   render();
   vscode.postMessage({ type: 'ready' });
   vscode.postMessage({ type: 'getSettings' });
   window.addEventListener('message', (ev) => {
-    // Route protocol-extension messages (feedbackLoaded) before the typed
-    // switch so the compiler doesn't complain about unknown discriminants.
+    // Route protocol-extension messages before the typed switch so the
+    // compiler doesn't complain about unknown discriminants on message types
+    // that live outside the HostToWebviewMessage union.
     const raw = ev.data as { type?: string };
     if (raw.type === 'feedbackLoaded') {
       handleFeedbackLoaded(raw as unknown as FeedbackLoadedMessage);
+      return;
+    }
+    if (raw.type === 'atlassianTokenStatus') {
+      handleAtlassianTokenStatus(raw as unknown as AtlassianTokenStatusMessage);
+      return;
+    }
+    if (raw.type === 'atlassianValidationResult') {
+      handleAtlassianValidationResult(raw as unknown as AtlassianValidationResultMessage);
       return;
     }
     handleMessage(ev.data as HostToWebviewMessage);
@@ -320,13 +393,6 @@ function handleMessage(msg: HostToWebviewMessage): void {
       state.aliases = msg.aliases ?? [];
       state.selectedAlias = msg.selectedAlias ?? '';
       state.aliasFile = msg.aliasFile ?? '~/.bashrc';
-      if (msg.branchWidget) {
-        state.branchWidget = {
-          enabled: msg.branchWidget.enabled ?? false,
-          jiraBase: msg.branchWidget.jiraBase ?? 'https://herzog.atlassian.net',
-          bitbucketWorkspace: msg.branchWidget.bitbucketWorkspace ?? '',
-        };
-      }
       state.dirty = false;
       render();
       break;
@@ -437,6 +503,57 @@ function handleFeedbackLoaded(msg: FeedbackLoadedMessage): void {
       return;
     }
     // Fallback — full render if the lists don't exist yet (first paint).
+    render();
+  }
+}
+
+/**
+ * Handle the atlassianTokenStatus message. Updates per-product token-set state
+ * and re-renders the token block if the Atlassian Suite module is currently open.
+ */
+function handleAtlassianTokenStatus(msg: AtlassianTokenStatusMessage): void {
+  state.atlassianJiraTokenSet = msg.jiraSet;
+  state.atlassianBitbucketTokenSet = msg.bitbucketSet;
+  // Reset confirming state when tokens flip — the button context changes.
+  state.atlassianJiraTokenConfirming = false;
+  state.atlassianBitbucketTokenConfirming = false;
+  const isAtlassianDetailOpen =
+    state.activeSection === 'modules' &&
+    state.moduleView.mode === 'detail' &&
+    state.moduleView.moduleId === 'integration.atlassian-suite';
+  if (isAtlassianDetailOpen) {
+    // Re-render only the token block in place to preserve scroll position.
+    const tokenBlock = document.getElementById('atlassian-token-block');
+    if (tokenBlock) {
+      const fresh = renderAtlassianTokenSlots();
+      fresh.id = 'atlassian-token-block';
+      tokenBlock.replaceWith(fresh);
+      return;
+    }
+    render();
+  }
+}
+
+/**
+ * Handle the atlassianValidationResult message. Updates validation state and
+ * re-renders only the validation block when the Atlassian Suite detail view is open.
+ */
+function handleAtlassianValidationResult(msg: AtlassianValidationResultMessage): void {
+  state.atlassianValidation = msg.result;
+  state.atlassianValidating = false;
+  const isAtlassianDetailOpen =
+    state.activeSection === 'modules' &&
+    state.moduleView.mode === 'detail' &&
+    state.moduleView.moduleId === 'integration.atlassian-suite';
+  if (isAtlassianDetailOpen) {
+    // Re-render only the validation block in place to preserve scroll position.
+    const validationBlock = document.getElementById('atlassian-validation-block');
+    if (validationBlock) {
+      const fresh = renderAtlassianValidationBlock();
+      fresh.id = 'atlassian-validation-block';
+      validationBlock.replaceWith(fresh);
+      return;
+    }
     render();
   }
 }
@@ -584,10 +701,6 @@ function renderGeneral(wrapper: HTMLElement): void {
   // Alias registry editor — lives above the launch row so the user defines
   // aliases first, then picks one from the dropdown to launch.
   wrapper.appendChild(renderAliasEditor());
-  wrapper.appendChild(el('hr', { class: 'section-divider' }));
-
-  // Branch Widget configuration — sits between the alias editor and the launch row.
-  wrapper.appendChild(renderBranchWidgetConfigBlock());
   wrapper.appendChild(el('hr', { class: 'section-divider' }));
 
   launchRow.appendChild(sessionBtn);
@@ -1313,6 +1426,16 @@ function openModuleDetail(moduleId: string): void {
     vscode.postMessage({ type: 'feedbackRequested' } as unknown as WebviewToHostMessage);
   }
 
+  // Atlassian Suite module: request current token status and last validation result;
+  // also reset transient UI state so confirm/validating don't linger across navigations.
+  if (moduleId === 'integration.atlassian-suite') {
+    state.atlassianJiraTokenConfirming = false;
+    state.atlassianBitbucketTokenConfirming = false;
+    state.atlassianValidating = false;
+    vscode.postMessage({ type: 'atlassianTokenStatusRequested' } as unknown as WebviewToHostMessage);
+    vscode.postMessage({ type: 'atlassianValidationStatusRequested' } as unknown as WebviewToHostMessage);
+  }
+
   // For every setting on this module that ships a keywordsPath, request the
   // parsed keywords payload now so the table renders as soon as the user lands
   // on the detail page. Cached entries (including prior error responses) are
@@ -1485,6 +1608,22 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
       }
       container.appendChild(pre);
     });
+  }
+
+  // Atlassian Suite module: render the API token management block below the
+  // instructions. Tokens are stored in SecretStorage — only set/cleared status
+  // flows through the panel; the values themselves are never read here.
+  if (m.id === 'integration.atlassian-suite') {
+    container.appendChild(textEl('div', 'Atlassian API Tokens', 'details-header'));
+    const tokenBlock = renderAtlassianTokenSlots();
+    tokenBlock.id = 'atlassian-token-block';
+    container.appendChild(tokenBlock);
+
+    // Validation block — appended below the token block.
+    container.appendChild(textEl('div', 'Token Validation', 'details-header'));
+    const validationBlock = renderAtlassianValidationBlock();
+    validationBlock.id = 'atlassian-validation-block';
+    container.appendChild(validationBlock);
   }
 
   // Feedback Logging module: render the feedback entry card UI below the
@@ -1746,6 +1885,23 @@ function renderModuleSettingField(
     readInputValue = () => (inp.value === '' ? undefined : Number(inp.value));
     row.appendChild(inp);
     inp.addEventListener('change', () => {
+      state.settingsValues[key] = readInputValue();
+      persistSettings();
+    });
+  } else if (field.type === 'string' && field.multiline === true) {
+    // Multi-line string — render a textarea. Same value binding, same auto-save
+    // on `change` (which fires on blur for textareas, identical to inputs), and
+    // the same `.setting-input` class so existing CSS applies. The extra
+    // `.module-setting-textarea` class hosts textarea-specific styling
+    // (resize + min-height).
+    const ta = el('textarea', {
+      class: 'setting-input module-setting-textarea',
+      rows: '4',
+    }) as HTMLTextAreaElement;
+    if (current !== undefined && current !== null) ta.value = String(current);
+    readInputValue = () => ta.value;
+    row.appendChild(ta);
+    ta.addEventListener('change', () => {
       state.settingsValues[key] = readInputValue();
       persistSettings();
     });
@@ -2629,69 +2785,314 @@ function renderQaConfigBlock(): HTMLElement {
   return block;
 }
 
-/** Branch Widget config block: Enabled toggle + Jira Base URL + Bitbucket Workspace. */
-function renderBranchWidgetConfigBlock(): HTMLElement {
-  const block = el('div', { class: 'agent-config' });
-  const header = el('div', { class: 'agent-config-header' });
-  header.textContent = 'Branch Widget';
-  block.appendChild(header);
+/**
+ * Atlassian Suite API token slots container. Renders two stacked token slots —
+ * one for Jira and one for Bitbucket — followed by a single shared helper link.
+ * Token values are NEVER read or displayed — only set/cleared status flows here.
+ */
+function renderAtlassianTokenSlots(): HTMLElement {
+  const wrapper = el('div', { class: 'atlassian-token-slots' });
 
-  const row = el('div', { class: 'agent-config-row' });
+  wrapper.appendChild(renderSingleTokenSlot({
+    label: 'Jira API Token',
+    tokenSet: state.atlassianJiraTokenSet,
+    confirming: state.atlassianJiraTokenConfirming,
+    onSet: () => {
+      vscode.postMessage({ type: 'atlassianSetJiraToken' } as unknown as WebviewToHostMessage);
+    },
+    onClear: () => {
+      vscode.postMessage({ type: 'atlassianClearJiraToken' } as unknown as WebviewToHostMessage);
+    },
+    setConfirming: (v) => { state.atlassianJiraTokenConfirming = v; },
+    getConfirming: () => state.atlassianJiraTokenConfirming,
+  }));
 
-  // Enabled field — real checkbox with label-above-input layout matching the
-  // Jira Base URL and Bitbucket Workspace fields in the same row.
-  const enabledField = el('div', { class: 'agent-config-field branch-widget-enable-field' });
-  const enabledLabelEl = el('label', { class: 'agent-config-label', for: 'branchWidgetEnabled' });
-  enabledLabelEl.textContent = 'Enable';
-  enabledField.appendChild(enabledLabelEl);
-  const enabledCheckbox = el('input', { type: 'checkbox', id: 'branchWidgetEnabled' }) as HTMLInputElement;
-  enabledCheckbox.checked = state.branchWidget.enabled;
-  enabledCheckbox.addEventListener('change', () => {
-    const next = enabledCheckbox.checked;
-    state.branchWidget.enabled = next;
-    vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'branchWidget.enabled', value: next });
+  wrapper.appendChild(renderSingleTokenSlot({
+    label: 'Bitbucket API Token',
+    tokenSet: state.atlassianBitbucketTokenSet,
+    confirming: state.atlassianBitbucketTokenConfirming,
+    onSet: () => {
+      vscode.postMessage({ type: 'atlassianSetBitbucketToken' } as unknown as WebviewToHostMessage);
+    },
+    onClear: () => {
+      vscode.postMessage({ type: 'atlassianClearBitbucketToken' } as unknown as WebviewToHostMessage);
+    },
+    setConfirming: (v) => { state.atlassianBitbucketTokenConfirming = v; },
+    getConfirming: () => state.atlassianBitbucketTokenConfirming,
+  }));
+
+  // Shared helper text + external link — shown once below both slots.
+  const helper = el('div', { class: 'atlassian-token-helper' });
+  helper.appendChild(document.createTextNode("Tokens are stored encrypted in VS Code's SecretStorage. Manage them at "));
+  const tokenLink = el('button', { class: 'atlassian-token-link', type: 'button' }) as HTMLButtonElement;
+  tokenLink.textContent = 'https://id.atlassian.com/manage-profile/security/api-tokens';
+  tokenLink.addEventListener('click', () => {
+    vscode.postMessage({ type: 'openExternal', url: 'https://id.atlassian.com/manage-profile/security/api-tokens' } as unknown as WebviewToHostMessage);
   });
-  enabledField.appendChild(enabledCheckbox);
-  row.appendChild(enabledField);
+  helper.appendChild(tokenLink);
+  helper.appendChild(document.createTextNode('.'));
+  wrapper.appendChild(helper);
 
-  // Jira Base URL field
-  const jiraField = el('div', { class: 'agent-config-field' });
-  const jiraLabel = el('label', { class: 'agent-config-label' });
-  jiraLabel.textContent = 'Jira Base URL';
-  jiraField.appendChild(jiraLabel);
-  const jiraInput = el('input', { class: 'agent-config-input' }) as HTMLInputElement;
-  jiraInput.type = 'text';
-  jiraInput.value = state.branchWidget.jiraBase;
-  jiraInput.addEventListener('change', () => {
-    state.branchWidget.jiraBase = jiraInput.value;
-    vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'branchWidget.jiraBase', value: jiraInput.value });
+  return wrapper;
+}
+
+/**
+ * Render a single product token slot (Jira or Bitbucket). Each slot has a
+ * labelled header, a status line, and Set / Replace / Clear (two-step) buttons.
+ * The two-step confirm is per-slot and independent of the other slot.
+ */
+function renderSingleTokenSlot(opts: {
+  label: string;
+  tokenSet: boolean;
+  confirming: boolean;
+  onSet: () => void;
+  onClear: () => void;
+  setConfirming: (v: boolean) => void;
+  getConfirming: () => boolean;
+}): HTMLElement {
+  const { label, tokenSet, confirming, onSet, onClear, setConfirming, getConfirming } = opts;
+
+  const slot = el('div', { class: 'atlassian-token-slot' });
+
+  // Leading key glyph — flags the row as a credential field at a glance.
+  const icon = el('span', { class: 'atlassian-token-slot-icon', 'aria-hidden': 'true' });
+  icon.innerHTML = KEY_ICON_SVG;
+  slot.appendChild(icon);
+
+  // Slot header (product label).
+  const slotLabel = el('div', { class: 'atlassian-token-slot-label' });
+  slotLabel.textContent = label;
+  slot.appendChild(slotLabel);
+
+  // Status line.
+  const statusLine = el('div', { class: 'atlassian-token-status' });
+  statusLine.textContent = tokenSet ? '●●●●●● set' : 'not set';
+  slot.appendChild(statusLine);
+
+  // Button row.
+  const actions = el('div', { class: 'atlassian-token-actions' });
+
+  if (!tokenSet) {
+    // Not set → single "Set Token" button.
+    const setBtn = el('button', { class: 'primary', type: 'button' }) as HTMLButtonElement;
+    setBtn.textContent = 'Set Token';
+    setBtn.addEventListener('click', onSet);
+    actions.appendChild(setBtn);
+  } else {
+    // Set → "Replace" + "Clear" (two-step confirm).
+    const replaceBtn = el('button', { class: 'primary', type: 'button' }) as HTMLButtonElement;
+    replaceBtn.textContent = 'Replace';
+    replaceBtn.addEventListener('click', onSet);
+    actions.appendChild(replaceBtn);
+
+    const clearBtn = el('button', {
+      class: 'secondary atlassian-token-clear',
+      type: 'button',
+    }) as HTMLButtonElement;
+    clearBtn.textContent = confirming ? 'Confirm?' : 'Clear';
+    if (confirming) {
+      clearBtn.classList.add('atlassian-token-confirming');
+    }
+    clearBtn.addEventListener('click', () => {
+      if (getConfirming()) {
+        // Second click — execute the clear.
+        setConfirming(false);
+        onClear();
+      } else {
+        // First click — enter confirming state.
+        setConfirming(true);
+        clearBtn.textContent = 'Confirm?';
+        clearBtn.classList.add('atlassian-token-confirming');
+        setTimeout(() => {
+          if (getConfirming()) {
+            setConfirming(false);
+            clearBtn.textContent = 'Clear';
+            clearBtn.classList.remove('atlassian-token-confirming');
+          }
+        }, 2000);
+      }
+    });
+    actions.appendChild(clearBtn);
+  }
+
+  slot.appendChild(actions);
+  return slot;
+}
+
+/**
+ * Atlassian Suite token validation block. Renders three states:
+ *   A — never validated (null result): muted prompt + Validate button
+ *   B — validating in progress: "Validating…" spinner text
+ *   C — has result: per-product status lines + Re-validate button + last-checked footer
+ *
+ * The token value is NEVER shown here. Only sanitized `message` / `displayName`
+ * fields from AtlassianValidationProductStatus are rendered.
+ */
+function renderAtlassianValidationBlock(): HTMLElement {
+  const block = el('div', { class: 'atlassian-validation-block' });
+
+  if (state.atlassianValidating) {
+    // State B — validating in progress
+    const inProgress = textEl('div', 'Validating…', 'atlassian-validation-in-progress');
+    block.appendChild(inProgress);
+    return block;
+  }
+
+  if (state.atlassianValidation === null) {
+    // State A — never validated
+    const prompt = textEl(
+      'div',
+      'Validate the token to confirm Jira and Bitbucket are reachable.',
+      'atlassian-validation-prompt',
+    );
+    block.appendChild(prompt);
+
+    const validateBtn = el('button', {
+      class: 'primary',
+      type: 'button',
+    }) as HTMLButtonElement;
+    validateBtn.textContent = 'Validate';
+    validateBtn.addEventListener('click', () => {
+      state.atlassianValidating = true;
+      // Re-render only this block in place.
+      const self = document.getElementById('atlassian-validation-block');
+      if (self) {
+        const fresh = renderAtlassianValidationBlock();
+        fresh.id = 'atlassian-validation-block';
+        self.replaceWith(fresh);
+      }
+      vscode.postMessage({ type: 'atlassianValidate' } as unknown as WebviewToHostMessage);
+    });
+    block.appendChild(validateBtn);
+    return block;
+  }
+
+  // State C — has result
+  const result = state.atlassianValidation;
+
+  // Extract display hints from module settings.
+  const jiraBaseSetting = state.settingsValues['integration.atlassian-suite::jiraBase'];
+  const workspaceSetting = state.settingsValues['integration.atlassian-suite::bitbucketWorkspace'];
+  const jiraHost = extractHost(typeof jiraBaseSetting === 'string' ? jiraBaseSetting : '');
+  const workspace = typeof workspaceSetting === 'string' ? workspaceSetting : '';
+
+  const statusLines = el('div', { class: 'atlassian-validation-status-lines' });
+
+  // Jira row
+  statusLines.appendChild(renderValidationStatusLine('Jira', result.jira, jiraHost));
+  // Bitbucket row
+  statusLines.appendChild(renderValidationStatusLine('Bitbucket', result.bitbucket, workspace));
+
+  block.appendChild(statusLines);
+
+  // Footer: last-checked timestamp
+  const footer = textEl(
+    'div',
+    `Last checked: ${formatTimeAgo(result.lastCheckedAt)}`,
+    'atlassian-validation-footer',
+  );
+  block.appendChild(footer);
+
+  // Validate button (re-run)
+  const revalidateBtn = el('button', {
+    class: 'primary',
+    type: 'button',
+  }) as HTMLButtonElement;
+  revalidateBtn.textContent = 'Validate';
+  revalidateBtn.addEventListener('click', () => {
+    state.atlassianValidating = true;
+    const self = document.getElementById('atlassian-validation-block');
+    if (self) {
+      const fresh = renderAtlassianValidationBlock();
+      fresh.id = 'atlassian-validation-block';
+      self.replaceWith(fresh);
+    }
+    vscode.postMessage({ type: 'atlassianValidate' } as unknown as WebviewToHostMessage);
   });
-  jiraField.appendChild(jiraInput);
-  jiraField.style.flex = '1 1 0';
-  jiraField.style.minWidth = '0';
-  jiraInput.style.width = '100%';
-  row.appendChild(jiraField);
+  block.appendChild(revalidateBtn);
 
-  // Bitbucket Workspace field
-  const bbField = el('div', { class: 'agent-config-field' });
-  const bbLabel = el('label', { class: 'agent-config-label' });
-  bbLabel.textContent = 'Bitbucket Workspace';
-  bbField.appendChild(bbLabel);
-  const bbInput = el('input', { class: 'agent-config-input' }) as HTMLInputElement;
-  bbInput.type = 'text';
-  bbInput.value = state.branchWidget.bitbucketWorkspace;
-  bbInput.addEventListener('change', () => {
-    state.branchWidget.bitbucketWorkspace = bbInput.value;
-    vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'branchWidget.bitbucketWorkspace', value: bbInput.value });
-  });
-  bbField.appendChild(bbInput);
-  bbField.style.flex = '1 1 0';
-  bbField.style.minWidth = '0';
-  bbInput.style.width = '100%';
-  row.appendChild(bbField);
-
-  block.appendChild(row);
   return block;
+}
+
+/**
+ * Render a single product status line (Jira or Bitbucket) inside the
+ * validation block. Layout: [glyph] [Product] — [detail text]
+ * The token value, auth header, and raw stack traces are never shown here;
+ * only the sanitized `message` and `displayName` from the validation result.
+ */
+function renderValidationStatusLine(
+  product: string,
+  s: AtlassianValidationProductStatus,
+  hint: string,
+): HTMLElement {
+  const row = el('div', { class: 'atlassian-validation-row' });
+
+  const glyph = el('span', { class: `atlassian-validation-glyph atlassian-validation-glyph-${s.status}` });
+  let glyphText: string;
+  let detail: string;
+
+  switch (s.status) {
+    case 'ok':
+      glyphText = '✓'; // ✓
+      detail = hint
+        ? `${product} (${hint}) — verified${s.displayName ? ` as ${s.displayName}` : ''}`
+        : `${product} — verified${s.displayName ? ` as ${s.displayName}` : ''}`;
+      break;
+    case 'failed':
+      glyphText = '✗'; // ✗
+      detail = `${product} — ${s.message ?? 'validation failed'}`;
+      break;
+    case 'skipped':
+      glyphText = '—'; // —
+      detail = `${product} — ${s.message ?? 'skipped'}`;
+      break;
+    default:
+      glyphText = '?';
+      detail = product;
+  }
+
+  glyph.textContent = glyphText;
+  row.appendChild(glyph);
+
+  const label = textEl('span', detail, 'atlassian-validation-detail');
+  row.appendChild(label);
+
+  return row;
+}
+
+/**
+ * Extract the hostname from a URL string. Returns the original string on
+ * parse failure (e.g. when the setting is empty or not a valid URL).
+ */
+function extractHost(url: string): string {
+  if (!url) return '';
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Format an ISO 8601 timestamp as a short relative-time string.
+ * Returns "Xs ago", "Xm ago", "Xh ago", or "Xd ago" for durations under a
+ * year; falls back to the local date/time string on parse failure.
+ */
+function formatTimeAgo(iso: string): string {
+  try {
+    const diffMs = Date.now() - new Date(iso).getTime();
+    if (diffMs < 0) return new Date(iso).toLocaleString();
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) return `${diffSec}s ago`;
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDay = Math.floor(diffHr / 24);
+    return `${diffDay}d ago`;
+  } catch {
+    return iso;
+  }
 }
 
 /**

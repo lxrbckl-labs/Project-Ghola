@@ -28,6 +28,26 @@
       {
         "command": "nomeda.reloadModules",
         "title": "Nomeda: Reload Modules"
+      },
+      {
+        "command": "nomeda.atlassianSuite.setJiraToken",
+        "title": "Atlassian Suite: Set Jira API Token"
+      },
+      {
+        "command": "nomeda.atlassianSuite.clearJiraToken",
+        "title": "Atlassian Suite: Clear Jira API Token"
+      },
+      {
+        "command": "nomeda.atlassianSuite.setBitbucketToken",
+        "title": "Atlassian Suite: Set Bitbucket API Token"
+      },
+      {
+        "command": "nomeda.atlassianSuite.clearBitbucketToken",
+        "title": "Atlassian Suite: Clear Bitbucket API Token"
+      },
+      {
+        "command": "nomeda.atlassianSuite.validateToken",
+        "title": "Atlassian Suite: Validate Token"
       }
     ],
     "configuration": {
@@ -126,21 +146,6 @@
           "editPresentation": "multilineText",
           "description": "Instruction text copied to clipboard when the 'Copy install instructions' button is clicked on the LINQPad-not-installed banner in the Modules tab. Edit this to customize the instructions given to an AI assistant for walking a user through installing LINQPad and exporting their connection metadata so Nomeda's Database Access module can populate its connection allowlist.",
           "default": "I need to install LINQPad on Windows and create at least one named connection so the Nomeda VS Code extension can detect it.\n\nWalk me through:\n\n1. Where to download LINQPad for my Windows version (free edition is fine).\n2. How to install it without admin rights if my machine is locked down.\n3. After install, how to add a new connection — specifically a SQL Server connection. I need to enter:\n   - Server name (instance form: hostname or hostname\\instance)\n   - Authentication (Windows Integrated vs SQL Login)\n   - Database name (optional — a server-only connection is allowed)\n4. Where LINQPad stores the resulting connection metadata. Confirm it is at %APPDATA%\\LINQPad\\ConnectionsV2.xml and explain how to verify that file exists.\n5. If I am running VS Code under WSL, how to make sure the WSL side can read the Windows-side ConnectionsV2.xml (the default /mnt/c/Users/<me>/AppData/Roaming/LINQPad/ path).\n\nKeep the steps short and actionable. I will paste your reply into a notes app and follow it linearly."
-        },
-        "nomeda.branchWidget.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Show a Source Control sidebar widget that extracts the ticket key (e.g. CMMS-2650, MCP-2123) from the current branch name and offers one-click links to the Jira ticket and Bitbucket branch/PR. Disabled by default; enable in the Nomeda Settings panel's Session view or directly here."
-        },
-        "nomeda.branchWidget.jiraBase": {
-          "type": "string",
-          "default": "https://herzog.atlassian.net",
-          "description": "Base URL for Jira ticket links. Combined with the extracted ticket key to form the full ticket URL: <jiraBase>/browse/<KEY>. Example: https://herzog.atlassian.net. Trailing slashes are stripped automatically."
-        },
-        "nomeda.branchWidget.bitbucketWorkspace": {
-          "type": "string",
-          "default": "herzog-technologies",
-          "description": "Bitbucket Cloud workspace used as a fallback when the local repo's git remote URL cannot be parsed. Typically auto-detected from 'git remote get-url origin' — leave empty to rely on auto-detection."
         }
       }
     },
@@ -150,7 +155,8 @@
           "type": "webview",
           "id": "nomedaBranchWidget",
           "name": "Nomeda Branch Widget",
-          "icon": "$(git-branch)"
+          "icon": "$(git-branch)",
+          "when": "nomeda.atlassianSuite.widgetEnabled"
         }
       ]
     }

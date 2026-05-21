@@ -53,3 +53,4 @@ Retired modules (do not recreate): `reference.hello-nomeda`, `tool.wsl-migrate`,
    to manifests or types.
 6. Orphaned files `src/state/watcher.ts` and `src/status-bar.ts` are pending
    user deletion; do not modify or re-wire them.
+7. Use ASCII quotes (`'` and `"`) in TypeScript / JavaScript source — never smart quotes (U+2018, U+2019, U+201C, U+201D); smart quotes break esbuild parsing. Run `bash scripts/check-smart-quotes.sh` to verify.
