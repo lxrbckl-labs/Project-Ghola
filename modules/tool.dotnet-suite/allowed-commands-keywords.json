@@ -3,8 +3,10 @@
   { "keyword": "test", "purpose": "Run the test suite. Read-only against source; may write test results to bin/. Common SWE/QA tool." },
   { "keyword": "restore", "purpose": "Restore NuGet packages. Writes to obj/ and possibly modifies package lock; usually benign." },
   { "keyword": "format", "purpose": "Apply code formatting. Modifies source files according to .editorconfig. Reversible." },
-  { "keyword": "run", "purpose": "Build and execute the application. Side-effects depend on the app (DB writes, file I/O). Use cautiously." },
-  { "keyword": "publish", "purpose": "Produce release artifacts. Writes to bin/Release or publish folder; can take time." },
-  { "keyword": "ef", "purpose": "Entity Framework migrations and DB operations. HIGH RISK — can alter database schema. Avoid in production-pointing config." },
-  { "keyword": "nuget", "purpose": "NuGet package management (push, delete, etc.). Affects shared package state. Avoid unless intentional." }
+  { "keyword": "run", "purpose": "USE WITH CAUTION — Build and execute the application. Side-effects depend on the app (DB writes, file I/O)." },
+  { "keyword": "publish", "purpose": "HIGH RISK — Produce release artifacts. Writes to bin/Release or publish folder; can trigger unintended deployments if CI consumes the output folder." },
+  { "keyword": "ef", "purpose": "HIGH RISK — Entity Framework migrations and DB operations. Can alter database schema. Avoid in production-pointing config." },
+  { "keyword": "nuget", "purpose": "HIGH RISK — NuGet package management (push, delete, etc.). Mutates the shared package feed; destructive actions cannot be undone. Avoid unless intentional." },
+  { "keyword": "tool install", "purpose": "HIGH RISK — Install a .NET global or local tool. Mutates machine or repo tool manifest. Enable only when deliberately installing tooling." },
+  { "keyword": "tool uninstall", "purpose": "HIGH RISK — Uninstall a .NET global or local tool. Reverses a tool install; affects machine or repo tool manifest. Enable only when deliberately removing tooling." }
 ]

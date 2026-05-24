@@ -1,7 +1,7 @@
 {
   "id": "tool.lenses",
   "name": "Lenses",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "description": "Configures the parallel-lens dispatch SWE uses when TPM runs Review Mode or Planning Mode.",
   "contributes": {
     "promptFragments": [
@@ -14,7 +14,8 @@
         "description": "Comma-separated list of review lenses. SWE-1 runs the first, SWE-2 the second, etc. See the keyword table below for available lenses.",
         "default": "security, logic, quality",
         "keywordsPath": "review-lenses-keywords.json",
-        "multiSelect": true
+        "multiSelect": true,
+        "fullWidth": true
       },
       "planningLenses": {
         "type": "string",
@@ -22,7 +23,8 @@
         "description": "Comma-separated list of planning lenses. Each becomes one SWE producing a plan fragment. See the keyword table below for available lenses.",
         "default": "architecture, implementation, test-strategy",
         "keywordsPath": "planning-lenses-keywords.json",
-        "multiSelect": true
+        "multiSelect": true,
+        "fullWidth": true
       }
     }
   }

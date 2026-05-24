@@ -1,7 +1,7 @@
 {
   "id": "tool.database-access",
   "name": "Database Access",
-  "version": "0.3.0",
+  "version": "0.3.10",
   "description": "Read-only SQL access for SWE via an allowlisted set of connections.",
   "contributes": {
     "promptFragments": [
@@ -15,7 +15,8 @@
         "default": {},
         "valueSource": "linqpad-connections",
         "keyLabel": "Project",
-        "valueLabel": "Connection"
+        "valueLabel": "Connection",
+        "fullWidth": true
       }
     }
   }

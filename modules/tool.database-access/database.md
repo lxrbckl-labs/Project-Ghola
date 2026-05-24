@@ -17,7 +17,7 @@ Parsing rules:
 - **The connection name (value) is the authoritative gate.** Project keys are documentation/routing context only — they let TPM and SWE talk about "the CMMS connection" without ambiguity, but the security check is on the value.
 - Connection names are **case-sensitive** and must match exactly — do not normalize, lowercase, or guess.
 - Project keys are unique within the map. If the user enters a duplicate key, the existing value is overwritten.
-- An empty object `{}` means **no** DB access is granted for this session, even though the module is enabled. SWE must ask TPM to populate the map before running any query.
+- An empty object `{}` means **no** DB access is granted for this session, even though the module is enabled. SWE must ask TPM to populate the map before running any query. When the Session Manifest renders `parameters: (defaults)` instead of an explicit map, the default applies — treat it the same as an empty object: no DB access is granted.
 - SWE may **only** query a connection whose name appears verbatim as a value in the map — never invent connection names, pull credentials from `appsettings.json` or environment variables, or construct an ad-hoc connection.
 
 Example:
@@ -31,7 +31,13 @@ Example:
 
 In the example above, SWE may query `localhost.cmms` and `mcpdevsql.MCP_Dev`. The project keys "CMMS" and "MCP" are how TPM and SWE refer to those connections in dispatch and reporting; they are not themselves connection strings.
 
-**Host-specific note:** Connection names are sourced from the user's LINQPad ConnectionsV2.xml on Windows/WSL hosts, surfaced as a quick-pick in the Nomeda settings panel. The user may also type a custom connection name (e.g. appending a database to a server-only LINQPad entry). On other hosts, the names map to whatever connection registry the host exposes; when in doubt, ask TPM for the registry location before running a query.
+**Host-specific note:** Connection names are sourced from the user's LINQPad ConnectionsV2.xml on Windows/WSL hosts, surfaced as a dropdown quick-pick in the Nomeda settings panel. The dropdown is the only input — free-form text entry is not available in the value cell. When the settings panel cannot supply connections, three distinct non-`ok` states apply:
+
+- **Loading** (`loading`): the webview has not yet received a probe result from the host. No banner is shown; the value cell renders a dropdown with only a placeholder option ("Loading…"). The dropdown is enabled but has no selectable connections — the change-handler guards against selecting the placeholder — so no value can actually be committed until the host responds.
+- **LINQPad connections file not found** (`not-installed`): no candidate XML path existed on this host. A banner appears above the table with the heading "LINQPad connections file not found". The value cell renders empty and the allowlist cannot be populated from the UI. The user must install LINQPad and define at least one connection, then refresh.
+- **LINQPad connections file could not be read** (`error`): a candidate path was found but the file could not be read or parsed (e.g. permissions issue, corrupt XML, or wrong override path). A banner appears with the heading "LINQPad connections file could not be read". The value cell renders empty.
+
+In the `not-installed` and `error` states the panel shows two action buttons: "Copy install instructions" (copies a configurable prompt to the clipboard) and "Configure path…" (opens the `nomeda.linqpadConnectionsPath` VS Code setting so the user can supply an explicit path to the XML file). The user must resolve the underlying problem before the dropdown will populate. In the `loading` state no action buttons are shown.
 
 ## Universal rules (when module is enabled with a populated allowlist)
 
@@ -50,7 +56,7 @@ A query that appears read-only but calls a function with side effects (e.g. `SEL
 
 ### Use the host-provided query runner
 
-Use only the tool path the host exposes. On SWT, the wrapper is `lprun-query.sh`. On other hosts it may differ. **Ask TPM for the wrapper path before running your first query** on an unfamiliar host — do not hand-roll connections via `sqlcmd`, `psql`, ODBC drivers, or any other direct database client.
+Use only the tool path the host exposes. On Windows/WSL hosts configured for LINQPad, the wrapper is typically `lprun-query.sh`. On other hosts it may differ. **Ask TPM for the wrapper path before running your first query** on an unfamiliar host — do not hand-roll connections via `sqlcmd`, `psql`, ODBC drivers, or any other direct database client.
 
 ### Returning results
 
@@ -58,7 +64,7 @@ Include the exact query you ran, the connection name you targeted (the **value**
 
 ### When to stop and ask
 
-If you are unsure whether a query is read-only, whether a connection name is on the allowlist, or whether the host's query runner is `lprun-query.sh` or something else — ask TPM rather than guessing.
+If you are unsure whether a query is read-only, whether a connection name is on the allowlist, or what the host's query runner path is — ask TPM rather than guessing.
 
 ## Role-specific notes
 

@@ -82,10 +82,16 @@
               },
               "keyLabel": { "type": "string" },
               "valueLabel": { "type": "string" },
+              "valueReadonly": { "type": "boolean" },
+              "valueOptions": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
               "optionalValue": { "type": "boolean" },
               "optionalEnabled": { "type": "boolean" },
               "optionalDescription": { "type": "boolean" },
-              "descriptionLabel": { "type": "string" }
+              "descriptionLabel": { "type": "string" },
+              "fullWidth": { "type": "boolean" }
             }
           }
         },

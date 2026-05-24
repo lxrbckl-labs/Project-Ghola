@@ -628,7 +628,7 @@ button.module-row-chevron:focus-visible {
 
 .module-detail .setting-input {
   width: 100%;
-  max-width: 360px;
+  max-width: none;
   height: 28px;
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
@@ -644,9 +644,8 @@ button.module-row-chevron:focus-visible {
   outline-offset: -1px;
 }
 
-/* Per-field flex row: [input grows up to ~360px] [save icon button on right].
-   Mirrors the Session Command row pattern but constrains the input width so
-   the layout doesn't stretch to the full content column. */
+/* Per-field flex row: [input grows to fill] [save icon button on right].
+   Mirrors the Session Command row pattern; input uses full available width. */
 .module-detail .module-field-row {
   display: flex;
   align-items: center;
@@ -732,6 +731,17 @@ button.module-row-chevron:focus-visible {
   border-collapse: collapse;
   font-size: 12px;
   border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border, #3c3c3c));
+}
+
+/* Opt-in modifier — gated by the manifest's `fullWidth: true` flag on a
+   keyword-table field (a setting with `keywordsPath`). Drops the shared 720px
+   ceiling so the table stretches to fill the surrounding settings card. Used
+   for keyword tables whose Purpose column would otherwise look pinched (e.g.
+   tool.dotnet-suite's allowed-commands list with multi-word entries like
+   `tool install` / `tool uninstall`). Other `.setting-keywords-table`
+   instances keep their 720px ceiling. */
+.module-detail .setting-keywords-table--full-width {
+  max-width: none;
 }
 
 .module-detail .setting-keywords-table th,
@@ -904,6 +914,19 @@ button.module-row-chevron:focus-visible {
   outline-offset: 2px;
 }
 
+/* Read-only value display — used when a `keyValue` field declares
+   `valueReadonly: true` (e.g. tool.git's r|w|d Category column). The cell
+   surfaces the manifest-authored value as plain styled text rather than an
+   editable input. Sits inside `.kv-value-cell` so the surrounding cell width
+   rules continue to apply. */
+.kv-value-readonly {
+  display: inline-block;
+  padding: 0 4px;
+  color: var(--vscode-foreground);
+  font: inherit;
+  opacity: 0.85;
+}
+
 .kv-table .kv-empty-row td {
   color: var(--vscode-descriptionForeground);
   font-style: italic;
@@ -970,6 +993,16 @@ button.module-row-chevron:focus-visible {
 
 .kv-table--with-description .kv-cell-description {
   width: auto;
+}
+
+/* Opt-in modifier — gated by the manifest's `fullWidth: true` flag on a
+   `keyValue` field. Drops the shared 720px ceiling so the table stretches to
+   fill the surrounding settings card. Used for tables whose value column
+   would otherwise look pinched (e.g. tool.database-access's allowlist, which
+   surfaces long LINQPad connection names). Other `.kv-table` instances keep
+   their 720px ceiling. */
+.kv-table--full-width {
+  max-width: none;
 }
 
 .kv-input {
@@ -1608,4 +1641,12 @@ button.module-row-chevron:focus-visible {
 .feedback-card-no.feedback-card-confirming {
   border-color: var(--vscode-inputValidation-warningBorder, var(--vscode-panel-border));
   color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+}
+
+/* Approved-section cards stretch to fill the surrounding settings card —
+   approved entries are reference material the user re-reads, so the extra
+   horizontal room helps long text scan in one line rather than wrapping
+   against the shared 720px cap. Pending cards keep the default ceiling. */
+#feedback-approved-list .feedback-card {
+  max-width: none;
 }

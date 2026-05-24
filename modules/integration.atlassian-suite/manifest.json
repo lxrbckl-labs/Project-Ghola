@@ -1,8 +1,8 @@
 {
   "id": "integration.atlassian-suite",
   "name": "Atlassian Suite",
-  "version": "0.1.0",
-  "description": "Provides Atlassian credentials and the optional Source Control branch widget. Currently structural only — the Jira/Bitbucket API integration ships in a future iteration.",
+  "version": "0.1.8",
+  "description": "Provides Atlassian credentials (email, Jira base URL, Bitbucket workspace) and independent per-product API token storage in SecretStorage. Validates each token via live Jira and Bitbucket probes and powers the optional Source Control branch widget that verifies ticket existence and open PR state.",
   "proactive": false,
   "contributes": {
     "promptFragments": [
@@ -12,7 +12,7 @@
       "email": {
         "type": "string",
         "label": "Atlassian Email",
-        "description": "Email address tied to your Atlassian account. Required for the future API integration that will verify Jira tickets and look up Bitbucket pull requests. The API token paired with this email is stored separately in VS Code's SecretStorage and managed from this module's panel — it is not entered here.",
+        "description": "Email address tied to your Atlassian account. Used to authenticate live Jira and Bitbucket API requests — ticket verification and PR lookups run against this identity. The API token paired with this email is stored separately in VS Code's SecretStorage and managed from this module's panel — it is not entered here.",
         "default": ""
       },
       "jiraBase": {

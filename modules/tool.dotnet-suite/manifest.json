@@ -1,7 +1,7 @@
 {
   "id": "tool.dotnet-suite",
   "name": "Dotnet Suite",
-  "version": "0.3.0",
+  "version": "0.3.8",
   "description": "Grants the agents dotnet CLI capability through an allowlist, plus protections for sensitive .NET config files.",
   "contributes": {
     "promptFragments": [
@@ -11,10 +11,11 @@
       "allowedCommands": {
         "type": "string",
         "label": "Allowed Dotnet Subcommands",
-        "description": "Comma-separated list of dotnet subcommands the agents may run. See the keyword table below for each available subcommand. Default empty string means no dotnet commands allowed.",
+        "description": "Comma-separated list of dotnet subcommands the agents may run. Entries may be multi-word (e.g. 'tool install', 'tool uninstall') — each entry matches the full token after 'dotnet '. See the keyword table below for each available subcommand. Default empty string means no dotnet commands allowed.",
         "default": "",
         "keywordsPath": "allowed-commands-keywords.json",
-        "multiSelect": true
+        "multiSelect": true,
+        "fullWidth": true
       }
     }
   }

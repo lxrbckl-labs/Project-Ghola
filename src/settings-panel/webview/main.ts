@@ -1113,8 +1113,12 @@ function renderAliasEditor(): HTMLElement {
   block.appendChild(subtitle);
 
   // ── Table of existing aliases ──────────────────────────────────────
+  // The `kv-table--full-width` modifier drops the shared 720px ceiling so
+  // the alias table stretches to fill the Session tab. This editor doesn't
+  // route through `appendKeyValueEditor`, so the modifier is applied here
+  // directly rather than via a `fullWidth: true` manifest flag.
   const tableWrap = el('div', { class: 'kv-table-wrap' });
-  const table = el('table', { class: 'kv-table' });
+  const table = el('table', { class: 'kv-table kv-table--full-width' });
 
   const thead = el('thead');
   const headRow = el('tr');
@@ -2086,9 +2090,16 @@ function appendKeyValueEditor(
   // Value shrinks to a narrow fixed-width column and Description absorbs the
   // remaining space. Without this modifier the table keeps its legacy
   // 2-data-column layout (Key + Value).
-  const table = el('table', {
-    class: withDescription ? 'kv-table kv-table--with-description' : 'kv-table',
-  });
+  //
+  // The `kv-table--full-width` modifier (opt-in via the manifest's
+  // `fullWidth: true` flag) drops the shared 720px max-width ceiling so the
+  // table stretches to fill the surrounding settings card. Used for tables
+  // whose value column would otherwise look pinched (e.g. the database-access
+  // allowlist surfacing long LINQPad connection names).
+  const tableClasses = ['kv-table'];
+  if (withDescription) tableClasses.push('kv-table--with-description');
+  if (field.fullWidth === true) tableClasses.push('kv-table--full-width');
+  const table = el('table', { class: tableClasses.join(' ') });
   const thead = el('thead');
   const headRow = el('tr');
   if (richShape) {
@@ -2211,17 +2222,26 @@ function renderKeyValueRow(
 
   if (richShape) {
     const enTd = el('td', { class: 'kv-cell kv-cell-enabled' });
-    const cb = el('input', { class: 'kv-enabled-checkbox' }) as HTMLInputElement;
+    // Use the shared .switch/.slider toggle pattern so the Enabled column
+    // matches module-row toggles elsewhere in the panel. The hidden <input>
+    // still receives the change event and keeps space/enter keyboard
+    // semantics intact.
+    const switchLabel = el('label', {
+      class: 'switch',
+      'aria-label': `Enable ${rowKey}`,
+    });
+    const cb = el('input', { class: 'kv-enabled-input' }) as HTMLInputElement;
     cb.type = 'checkbox';
     cb.checked = enabledState;
-    cb.setAttribute('aria-label', `Enable ${rowKey}`);
     cb.addEventListener('change', () => {
       const richDraft = draft as Record<string, { value: string; enabled: boolean; description?: string }>;
       const existing = readRichEntry();
       richDraft[rowKey] = { ...existing, enabled: cb.checked };
       persist();
     });
-    enTd.appendChild(cb);
+    switchLabel.appendChild(cb);
+    switchLabel.appendChild(el('span', { class: 'slider' }));
+    enTd.appendChild(switchLabel);
     tr.appendChild(enTd);
   }
 
@@ -2259,7 +2279,10 @@ function renderKeyValueRow(
   kTd.appendChild(kInp);
   tr.appendChild(kTd);
 
-  const vTd = el('td', { class: 'kv-cell kv-cell-value' });
+  const valueReadonly = field.valueReadonly === true;
+  const vTd = el('td', {
+    class: valueReadonly ? 'kv-cell kv-cell-value kv-cell--readonly' : 'kv-cell kv-cell-value',
+  });
   vTd.appendChild(renderValueCell(field, displayValue, (next) => {
     if (richShape) {
       const richDraft = draft as Record<string, { value: string; enabled: boolean; description?: string }>;
@@ -2342,18 +2365,52 @@ function renderKeyValueAddRow(
   kTd.appendChild(kField);
   tr.appendChild(kTd);
 
-  const vTd = el('td', { class: 'kv-cell kv-cell-value kv-add-cell' });
+  // Add-row special case: when the value column is read-only (so existing
+  // rows show a static span) BUT the manifest supplies `valueOptions`, we
+  // still need a way for the user to classify a NEW entry. Render a dropdown
+  // populated from `valueOptions` instead of the read-only span; existing
+  // rows remain unchanged (renderKeyValueRow still calls renderValueCell as
+  // before).
+  const useValueSelect =
+    field.valueReadonly === true &&
+    Array.isArray(field.valueOptions) &&
+    field.valueOptions.length > 0;
+  const vTd = el('td', {
+    class: useValueSelect
+      ? 'kv-cell kv-cell-value kv-add-cell kv-cell--select'
+      : field.valueReadonly === true
+        ? 'kv-cell kv-cell-value kv-add-cell kv-cell--readonly'
+        : 'kv-cell kv-cell-value kv-add-cell',
+  });
   const vField = el('div', { class: 'kv-add-field kv-add-field--value' });
   const vLabel = el('label', { class: 'kv-add-label' });
   vLabel.textContent = field.valueLabel ?? 'Value';
   vField.appendChild(vLabel);
 
-  // Use a draft-internal mutable string for the new value so renderValueCell
+  // Use a draft-internal mutable string for the new value so the input/select
   // can call back into our local state without touching `draft` until Add.
   let pendingValue = '';
-  vField.appendChild(renderValueCell(field, '', (next) => {
-    pendingValue = next;
-  }));
+  if (useValueSelect) {
+    const select = el('select', { class: 'kv-input kv-value-select' }) as HTMLSelectElement;
+    const placeholder = el('option') as HTMLOptionElement;
+    placeholder.value = '';
+    placeholder.textContent = '—';
+    select.appendChild(placeholder);
+    for (const opt of field.valueOptions!) {
+      const o = el('option') as HTMLOptionElement;
+      o.value = opt;
+      o.textContent = opt;
+      select.appendChild(o);
+    }
+    select.addEventListener('change', () => {
+      pendingValue = select.value;
+    });
+    vField.appendChild(select);
+  } else {
+    vField.appendChild(renderValueCell(field, '', (next) => {
+      pendingValue = next;
+    }));
+  }
   vTd.appendChild(vField);
   tr.appendChild(vTd);
 
@@ -2408,6 +2465,17 @@ function renderValueCell(
   onChange: (next: string) => void,
 ): HTMLElement {
   const wrap = el('div', { class: 'kv-value-cell' });
+
+  // Read-only display — for fields whose value column carries a fixed taxonomy
+  // authored in the manifest (e.g. tool.git's r|w|d Category). No input is
+  // rendered, so `onChange` is never invoked; the seeded value flows through
+  // unchanged via the surrounding read path.
+  if (field.valueReadonly === true) {
+    const span = el('span', { class: 'kv-value-readonly' });
+    span.textContent = initial;
+    wrap.appendChild(span);
+    return wrap;
+  }
 
   if (field.valueSource === 'linqpad-connections') {
     const lp = state.linqpadConnections;
@@ -2558,7 +2626,14 @@ function appendKeywordsTable(
     return;
   }
 
-  const table = el('table', { class: 'setting-keywords-table' });
+  // The `setting-keywords-table--full-width` modifier (opt-in via the
+  // manifest's `fullWidth: true` flag) drops the shared 720px max-width ceiling
+  // so the table stretches to fill the surrounding settings card. Used for
+  // keyword tables whose Purpose column would otherwise look pinched (e.g.
+  // tool.dotnet-suite's allowed-commands list).
+  const tableClasses = ['setting-keywords-table'];
+  if (field.fullWidth === true) tableClasses.push('setting-keywords-table--full-width');
+  const table = el('table', { class: tableClasses.join(' ') });
   const thead = el('thead');
   const headRow = el('tr');
   if (selection) {

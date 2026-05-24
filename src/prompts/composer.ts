@@ -123,19 +123,38 @@ export class PromptComposer {
   // --- parameter rendering -------------------------------------------------
 
   /**
-   * Three-branch rendering for a module's parameters in the Session Manifest:
-   *   - None:     module declares no settings schema     → render `(none)`
-   *   - Defaults: schema present but no user overrides   → render `(defaults)`
-   *   - Values:   user has overrides                     → render as a sub-list of key: value pairs
+   * Four-branch rendering for a module's parameters in the Session Manifest:
+   *   - None:          no schema AND no host-injected values     → render `(none)`
+   *   - Injected only: no schema but host injected values exist  → render as a sub-list (schema-less, e.g. feedbackFilePath)
+   *   - Defaults:      schema present but no user overrides      → render `(defaults)`
+   *   - Values:        user has overrides (schema + values)      → render as a sub-list of key: value pairs
+   *
+   * The "injected only" branch exists because some modules (e.g. tool.feedback-log)
+   * declare no user-editable settings schema but receive host-injected parameters
+   * at compose time. Without this branch those parameters would be silently dropped,
+   * leaving the agent with `(none)` and no path to operate.
    */
   private renderParameters(
     schema: SettingsSchema | undefined,
     userValues: Record<string, unknown> | undefined,
   ): string[] {
     const hasSchema = schema && Object.keys(schema).length > 0;
-    if (!hasSchema) return ['  - parameters: (none)'];
+    const hasValues = userValues && Object.keys(userValues).length > 0;
 
-    const overrides = userValues && Object.keys(userValues).length > 0 ? userValues : undefined;
+    if (!hasSchema && !hasValues) return ['  - parameters: (none)'];
+
+    // Schema-less but host injected values exist — render them directly.
+    if (!hasSchema && hasValues) {
+      const out: string[] = ['  - parameters:'];
+      for (const key of Object.keys(userValues!)) {
+        const projected = this.projectValueForAgent(undefined, userValues![key]);
+        const rendered = this.renderValue(projected);
+        out.push(`    - ${key}: ${rendered}`);
+      }
+      return out;
+    }
+
+    const overrides = hasValues ? userValues : undefined;
     if (!overrides) return ['  - parameters: (defaults)'];
 
     const out: string[] = ['  - parameters:'];

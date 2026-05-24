@@ -12,10 +12,19 @@ An Atlassian unified API token (generated at id.atlassian.com) works for both pr
 
 - Stores the Atlassian email, Jira base URL (`jiraBase`), and Bitbucket workspace slug (`bitbucketWorkspace`) as regular module settings.
 - Stores two independent API tokens in SecretStorage: `nomeda.atlassianSuite.jiraToken` (for Jira) and `nomeda.atlassianSuite.bitbucketToken` (for Bitbucket).
-- Validates each token independently after it is set: Jira via a `/myself` probe, Bitbucket via a `/workspaces/{ws}` probe. Validation results are shown per-product in the UI.
+- **Validation probes** (run automatically after a token is set **or cleared**, and when the user triggers re-validation from the settings panel): Jira via `GET /rest/api/3/myself`, Bitbucket via `GET /2.0/workspaces/{slug}`. These confirm the token is accepted and extract the account display name for UI feedback. When a token is cleared, its product's probe returns `skipped` (not `failed`) because the missing-token check short-circuits before any request is made. They are not called by the branch widget.
 - Toggles visibility of the Source Control branch widget via the `showWidget` setting. When on, the widget renders in the SCM sidebar and surfaces the current branch's ticket key plus one-click links to the Jira ticket and the Bitbucket branch/PR page.
-- The branch widget uses the appropriate per-product token for its API calls: ticket existence is verified via the Jira token, and open-PR-by-branch lookup uses the Bitbucket token.
-- The Refresh button on the widget re-runs both the Jira and Bitbucket validation probes.
+- **Domain probes** (run by the widget on branch change, when the user presses Refresh, when a token is set or cleared — the widget subscribes to `onDidChangeValidation`, which fires after every set/clear — and when module settings are saved, e.g. `jiraBase` or `bitbucketWorkspace` change): `checkTicketExists` verifies ticket existence via the Jira token; `findOpenPrForBranch` looks up an open PR for the current branch via the Bitbucket token. These are independent of the validation probes.
+- The Refresh button re-runs both domain probes (`checkTicketExists` + `findOpenPrForBranch`) — it does not re-run the validation probes.
+
+## Parameter defaults
+
+The composer only renders keys that are present in `userValues` — any parameter the user has never saved is absent from the Session Manifest. When a parameter is absent, the manifest shows `parameters: (defaults)` for this module rather than an explicit value, and the factory default applies:
+
+- `email` absent (default `""`) — no email is available; API requests will fail authentication. The user must set this in the Modules tab.
+- `jiraBase` absent (default `"https://herzog.atlassian.net"`) — the branch widget uses the default Jira base URL for ticket links. If the user's instance is at a different domain they must set this explicitly.
+- `bitbucketWorkspace` absent (default `"herzog-technologies"`) — the widget uses the default workspace slug as its remote-URL fallback. If the user's workspace differs they must set this explicitly.
+- `showWidget` absent (default `false`) — the branch widget is hidden. The user must toggle it on in the Modules tab to see it in the SCM sidebar.
 
 ## TPM rules
 

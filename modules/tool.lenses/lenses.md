@@ -13,10 +13,11 @@ This module exposes two parameters:
 
 Parsing rules apply identically to both:
 
-- Comma-separated. Whitespace around each entry is trimmed. Case is folded to lowercase.
-- Order has no effect on behavior — TPM dispatches one SWE per lens in parallel.
-- Duplicates are deduplicated silently.
-- An empty value means TPM **cannot dispatch that mode**. If the user asks for the mode and the corresponding lens set is empty, surface that explicitly: "Cannot dispatch <mode> — `<param>` is empty. Set a value in the Modules tab or specify the lenses you want for this session."
+- Comma-separated. Whitespace around each entry is trimmed. Case is preserved as stored — all built-in keywords are lowercase, so match them exactly.
+- Order has no effect on behavior — TPM dispatches one SWE per lens in parallel. (The settings panel rebuilds the stored string in keywords-file order on every checkbox change, so the value is always canonically ordered regardless of the order the user enabled lenses.)
+- Duplicates are not possible via the checkbox UI; if a raw string value somehow contains a repeated keyword it is deduplicated by the Set the webview uses internally.
+- When the Session Manifest renders `parameters: (defaults)` instead of explicit values, the user has not overridden the module settings — the factory defaults apply: `reviewLenses` is `security, logic, quality` and `planningLenses` is `architecture, implementation, test-strategy`. Treat those as the operative lens sets and proceed to dispatch normally.
+- An empty string value (distinct from `(defaults)`) means TPM **cannot dispatch that mode**. If the user asks for the mode and the corresponding lens set is an explicit empty string, surface that: "Cannot dispatch <mode> — `<param>` is empty. Set a value in the Modules tab or specify the lenses you want for this session."
 
 The two parameters are independent: an empty `reviewLenses` does not block Planning Mode, and vice versa.
 
@@ -45,6 +46,8 @@ Examples of what each default lens covers, when present:
 - **security** — injection, XSS, path traversal, broken auth, missing input validation, leaked secrets, dangerous deserialization, SSRF, open redirects, insecure crypto.
 - **logic** — correctness, off-by-one, inverted conditions, sign errors, race conditions, edge cases the diff misses, faulty error handling.
 - **quality** — naming, structure, duplication, dead code, readability, style mismatches, comment density, test coverage gaps.
+- **performance** — algorithmic complexity, N+1 queries, allocation churn, blocking I/O on hot paths, excessive serialization.
+- **accessibility** — ARIA roles, keyboard navigation, color contrast, screen-reader semantics, focus management.
 
 If the configured lens set differs from the defaults, infer scope from the lens name and your assignment. When in doubt, ask TPM rather than expanding scope.
 
@@ -106,6 +109,8 @@ Examples of what each default lens covers, when present:
 - **architecture** — module boundaries, data flow, dependency direction, where new code lives, what existing abstractions to reuse vs. extend.
 - **implementation** — the concrete code changes, function signatures, control flow, naming, error handling, the order in which files should be touched.
 - **test-strategy** — what to test, at what level (unit / integration / end-to-end), test data fixtures, regression coverage, the testability implications of architectural choices.
+- **migration** — data migration steps, state-machine transitions, backwards compatibility requirements, rollback plan.
+- **rollout** — feature flags, gradual rollout strategy, observability hooks, runbook outline for high-risk launches.
 
 If the configured lens set differs from the defaults, infer scope from the lens name and your assignment. When in doubt, ask TPM rather than expanding scope.
 
@@ -157,7 +162,7 @@ The body above applies identically to every agent. The notes below are short fra
 
 ### TPM
 
-You are the dispatcher: read `parameters.reviewLenses` or `parameters.planningLenses` for the requested mode and decide what to assign. Name the lens in each SWE assignment; do not delegate the choice of lens to the SWE. If the relevant parameter is empty, surface that to the user instead of dispatching with a default — the user owns the lens set. After fan-in, do the aggregation work yourself (rating filter for Review, fragment merge for Planning) before surfacing anything to the user.
+You are the dispatcher: read `parameters.reviewLenses` or `parameters.planningLenses` for the requested mode and decide what to assign. Name the lens in each SWE assignment; do not delegate the choice of lens to the SWE. If the Session Manifest shows `parameters: (defaults)`, the user has not overridden the module — use the factory defaults (`reviewLenses: security, logic, quality` / `planningLenses: architecture, implementation, test-strategy`) and dispatch normally. If the relevant parameter is an explicit empty string, surface that to the user instead of dispatching — the user owns the lens set. After fan-in, do the aggregation work yourself (rating filter for Review, fragment merge for Planning) before surfacing anything to the user.
 
 ### SWE
 

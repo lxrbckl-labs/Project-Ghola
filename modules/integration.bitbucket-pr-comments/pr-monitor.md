@@ -16,10 +16,10 @@ The `bitbucketWorkspace` setting on the suite is also consulted by the client wh
 
 The host-side client at `src/integration/bitbucket-pr-client.ts` exposes the following TypeScript methods, callable from the extension host process. These are NOT shell commands — TPM invokes them by asking the host to run the client, not by shelling out. The client wraps Bitbucket Cloud's REST API and threads every call through the AtlassianBridge so the Bitbucket token never crosses the agent boundary.
 
-- `listPullRequestComments(repoSlug, prId)` — returns every comment on the PR (resolved + unresolved, inline + general) as a flat array, with each comment carrying its own `parentId` for callers that need it.
-- `replyToComment(repoSlug, prId, parentCommentId, body)` — posts a reply threaded under an existing comment. The original inline anchor (file + line) is echoed automatically so the reply lands on the same thread.
-- `resolveComment(repoSlug, prId, commentId)` — marks a comment thread resolved.
-- `findOpenPrForBranch(repoSlug, branch)` — looks up the open PR (if any) for a given source branch on a given repo slug.
+- `listPullRequestComments(repoSlug, prId)` — returns `{ status, comments, message? }`. On `status: 'ok'`, `comments` is a flat array of every comment on the PR (resolved + unresolved, inline + general). Each comment carries: `id` (its own Bitbucket comment id), `parentId` (`null` for top-level thread starters, a comment id for replies), `kind` (`'inline'` or `'general'`), `author` (`{ displayName: string, accountId: string }`), `body` (markdown source), `inline?` (`{ path, to, from? }` — present only when `kind === 'inline'`), `resolved` (boolean), `createdAt`, and `updatedAt`. On any non-`'ok'` status, `comments` is empty and `message` names the error. `message` may also be set on `status: 'ok'` when the 200-comment pagination cap is hit (truncation notice).
+- `replyToComment({ repoSlug, prId, parentId, body, inline? })` — posts a reply threaded under an existing comment. Returns `{ status, commentId?, message? }`: on `'ok'`, `commentId` is the new Bitbucket comment id. For inline comments, supply the parent's `inline` block (`{ path, to, from? }`) so the reply lands on the same file/line thread; without it the reply lands as a general comment.
+- `resolveComment({ repoSlug, prId, commentId })` — marks a comment thread resolved. Returns `{ status, message? }`.
+- `findOpenPrForBranch(repoSlug, branch)` — looks up the open PR (if any) for a given source branch on a given repo slug. Returns `{ prUrl: string | null, prTitle?: string, prId?: number }`: `prUrl` is `null` when no open PR exists.
 
 If any of these calls is unavailable at runtime (host not initialized, module entry not loaded), refuse the trigger in one sentence and surface the failure to the user rather than improvising a workaround.
 
@@ -54,8 +54,8 @@ Within a snapshot, ordinals are stable. If the user resolves comments 1, 2, and 
 
 ## Round-Trip Flow
 
-1. **PR resolution.** Resolve the open PR for the current branch via `findOpenPrForBranch(repoSlug, branch)`. Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). Multiple matches -> pick the highest id. No matches -> ask the user.
-2. **Fetch.** Call `listPullRequestComments(repoSlug, prId)`. Filter out deleted comments. Include resolved + unresolved (mark them visually).
+1. **PR resolution.** Resolve the open PR for the current branch via `findOpenPrForBranch(repoSlug, branch)`. Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). The client returns `values[0]` from Bitbucket's response — the first PR in whatever order Bitbucket returns (no explicit sort is requested). In practice this is the most recently created open PR for the branch, but the client does not enforce a sort order. No matches -> ask the user.
+2. **Fetch.** Call `listPullRequestComments(repoSlug, prId)`. The client filters out deleted comments, any comment missing a numeric `id`, and any comment with an empty body before returning. Include resolved + unresolved in the snapshot (mark them visually).
 3. **Number + present.** Assign globally stable ordinals across the session. Group by file/thread. Print in chat:
    ```
    [1] inline - src/Foo.cs:42 - @coderabbit - unresolved
@@ -68,18 +68,23 @@ Within a snapshot, ordinals are stable. If the user resolves comments 1, 2, and 
    - **Manual reply** (user provides the text)
    - **Dismiss** (no action; flagged in audit)
 5. **Dispatch SWEs.** For code-fix ordinals, deploy SWEs in parallel respecting `SWE_AGENT_COUNT`. Each assignment carries the comment's body verbatim, `file:line`, the PR id, and the dependency that this is a PR-comment fix (so the SWE knows to keep the change scoped to the comment).
-6. **Generate replies.** After SWEs return, write each reply using `replyInstruction`. 1-2 sentences. Never include severity/rating/SWE attribution.
+6. **Generate replies.** After SWEs return, write each reply using `parameters.replyInstruction`. 1-2 sentences. Never include severity/rating/SWE attribution.
 
-   **CodeRabbit persona overlay.** If the parent comment's author display name contains "coderabbit" (case-insensitive), prepend the `coderabbitReplyPersona` instruction onto the `replyInstruction` before generating the reply. The persona shapes voice/tone; the instruction shapes content. If `coderabbitReplyPersona` is empty, treat CodeRabbit replies the same as any other (no overlay).
-7. **Approve + post.** Show all generated replies in one block. User confirms with `ok / revise N: <change> / cancel`. On `ok`, post each via `replyToComment` with `parent.id` and the original `inline` block echoed.
-8. **Optional resolve.** If `autoResolveAfterReply: true`, call `resolveComment` on each successful reply. Otherwise TPM asks per thread.
+   **CodeRabbit persona overlay.** If the parent comment's author display name contains "coderabbit" (case-insensitive), prepend the `parameters.coderabbitReplyPersona` instruction onto the `parameters.replyInstruction` before generating the reply. The persona shapes voice/tone; the instruction shapes content. If `parameters.coderabbitReplyPersona` is empty, treat CodeRabbit replies the same as any other (no overlay).
+7. **Approve + post.** Show all generated replies in one block. User confirms with `ok / revise N: <change> / cancel`. On `ok`, post each via `replyToComment`, passing the comment's own `.id` as `parentId` (not its `.parentId` field — that is the comment's parent, which is `null` for top-level threads) and the parent comment's `inline` block (if any) so the reply lands on the correct thread.
+8. **Flag falsely-resolved comments.** If `parameters.flagFalselyResolved` is enabled, scan each unresolved comment (and the text of its latest reply, if any) for phrases that claim resolution — e.g., "resolved", "fixed", "done", "addressed", "handled", "taken care of". For each match, list the comment with its `file:line` location and a short excerpt of the claim phrase. Do not call `resolveComment` automatically; the user reviews the list and resolves manually. If `parameters.flagFalselyResolved` is disabled, skip this scan entirely.
 
 ## Failure Handling
 
 - Per-comment post failure -> tell the user, leave audit untouched, continue the batch. No silent retries (could double-post on timeouts). User retries via `address <ordinal>` again.
-- 401 / 403 from the client -> cancel the batch, point the user at the Atlassian Suite's Set Token button. Do not echo the token, do not suggest the user paste it into chat.
+- `status: 'network-error'` -> the client could not reach Bitbucket's API: either the 8-second AbortController timeout fired (message "Request timed out — try again") or a lower-level network error occurred (message "Network error — try again"). Surface the message to the user and suggest retrying. Do not retry automatically — on a timeout the request may have reached the server and a retry could double-post.
+- `status: 'not-found'` with `message` starting "Missing repo" -> the client detected that the `repoSlug` is empty or `prId` / `commentId` / `parentId` is not a finite number before making any request. This is a call-site gap, not a Bitbucket error. Surface the message to the user so they can check repo-slug resolution and PR-id lookup.
+- `status: 'unknown-error'` with `message` "Reply body is empty" -> the client detected an empty reply body before making any request in `replyToComment`. Surface the message and ask the user to provide reply text before retrying.
+- `status: 'unauthorized'` with `message` starting "Missing:" -> the client detected that `email`, `bitbucketWorkspace`, or `bitbucketToken` is unset before making any request. Cancel the batch and tell the user which fields are missing (the message names them) — this is a configuration gap, not a token-rejection; point the user at the Atlassian Suite settings to fill in the missing values.
+- 401 / 403 from the API (client returns `status: 'unauthorized'` with message "401 Unauthorized..." or `status: 'forbidden'`) -> cancel the batch, point the user at the Atlassian Suite's Set Token button. Do not echo the token, do not suggest the user paste it into chat.
 - 404 on the PR id -> the PR may have been merged or closed since the snapshot was taken. Refresh the snapshot via a fresh `address comments` rather than retrying the stale id.
-- 429 (rate limit) -> stop the batch, tell the user what completed, and recommend they retry after a short pause. Do not implement automatic backoff in this module's flow; that belongs in the client.
+- 429 (rate limit) -> the client maps 429 to `status: 'unknown-error'` with a `message` of the form `"<status-code> <statusText>"` (e.g. "429 Too Many Requests") or `"429 request failed"` when statusText is absent. Detect this by checking `status === 'unknown-error' && message.startsWith('429 ')` (note the trailing space — avoids false positives from other codes that might begin with the digits "429"). Stop the batch, tell the user what completed, and recommend they retry after a short pause. Do not implement automatic backoff in this module's flow; that belongs in the client.
+- 5xx / other non-2xx -> the client maps all HTTP errors not explicitly handled (400, 409, 422, 500, 502, 503, etc.) to `status: 'unknown-error'` with a sanitized `message` of the form `"<status-code> <statusText>"`. Surface `message` to the user so they can see the raw code; do not retry automatically.
 - Snapshot staleness: if a comment in the snapshot has been deleted/resolved upstream between fetch and post, the client returns `not-found` — surface this to the user and continue.
 
 ## Hard Rules
@@ -88,7 +93,7 @@ Within a snapshot, ordinals are stable. If the user resolves comments 1, 2, and 
 - **No token echo.** The host-side client owns auth — tokens never appear in chat, logs, or error messages. Already enforced by the client.
 - **No git writes / no Jira writes.** Read-only git only. This module never touches Jira.
 - **No new code in the work repo outside what SWEs are dispatched to do.** TPM does not author code in this flow; SWEs do.
-- **Generated reply must not include severity, rating, attribution, or any SWT-style filter metadata.** It's a public Bitbucket comment.
+- **Generated reply must not include severity, rating, attribution, or any Nomeda-internal filter metadata.** It's a public Bitbucket comment.
 - **Don't replace the user's words in manual replies.** When the user supplies reply text, post it verbatim (no generation step).
 - **No batching across PRs.** A single `address` invocation operates on one PR at a time. If the user wants to address comments on a different PR, end the current batch and start a fresh one.
 - **No reordering of the snapshot mid-batch.** Once ordinals are assigned, they remain stable until a fresh `address comments` refresh. Do not renumber after a partial post.
@@ -101,9 +106,9 @@ Within a snapshot, ordinals are stable. If the user resolves comments 1, 2, and 
 - You hold the global ordinal numbering for the session. Ordinals are stable until a fresh `address comments` call refreshes the snapshot. If the user references an ordinal after a refresh, confirm which snapshot they mean.
 - Maintain a per-session audit of which comments have been addressed and how (code-fix, manual reply, dismiss). Surface the audit when the user asks for a status check, and include it in the closing summary of any batch.
 - Settings (read from the module's parameters block in the Session Manifest):
-  - `replyInstruction` — feed into the reply-generation step
-  - `coderabbitReplyPersona` — optional voice/tone overlay layered onto `replyInstruction` when the parent comment author is CodeRabbit
-  - `autoResolveAfterReply` — controls the resolve step's default
+  - `parameters.replyInstruction` — feed into the reply-generation step. If absent from the Session Manifest, the default applies: `"Write a 1-2 sentence professional PR reply confirming what was fixed and where. No double-dashes."`
+  - `parameters.coderabbitReplyPersona` — optional voice/tone overlay layered onto `parameters.replyInstruction` when the parent comment author is CodeRabbit. If absent from the Session Manifest, the default applies: empty string (no overlay).
+  - `parameters.flagFalselyResolved` — when true, scan each unresolved comment for claim-phrases and surface matches; does not auto-resolve. If absent from the Session Manifest, the default applies: `true` (scanning is on).
 
 ### SWE
 

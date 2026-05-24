@@ -1,7 +1,7 @@
 {
   "id": "integration.bitbucket-pr-comments",
   "name": "PR Monitor",
-  "version": "0.1.0",
+  "version": "0.1.14",
   "description": "Fetch open Bitbucket PR review comments, triage them, deploy SWEs to fix the code, and post generated replies. Depends on integration.atlassian-suite for credentials.",
   "author": "aarbuckle",
   "contributes": {
@@ -19,14 +19,13 @@
       "coderabbitReplyPersona": {
         "type": "string",
         "label": "CodeRabbit Reply Persona",
-        "multiline": true,
         "description": "Optional persona or voice instruction layered on top of the Reply Instruction when the parent comment author is CodeRabbit. Leave blank to use the Reply Instruction unchanged for CodeRabbit replies."
       },
-      "autoResolveAfterReply": {
+      "flagFalselyResolved": {
         "type": "boolean",
-        "label": "Auto-Resolve After Reply",
-        "default": false,
-        "description": "After a successful reply, automatically mark the thread resolved. Off by default; TPM asks each time."
+        "label": "Flag Falsely-Resolved Comments",
+        "default": true,
+        "description": "When on, the agent scans PR comments whose body claims the issue is resolved (e.g., 'resolved', 'fixed', 'done') but which Bitbucket still marks as unresolved, and surfaces them for review. It does not auto-resolve anything."
       }
     }
   }

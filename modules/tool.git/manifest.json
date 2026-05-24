@@ -1,7 +1,7 @@
 {
   "id": "tool.git",
   "name": "Git Suite",
-  "version": "0.2.0",
+  "version": "0.3.2",
   "description": "Per-command git allowlist for agents. Each command has a category (r/w/d) and an independent enable/disable toggle.",
   "contributes": {
     "promptFragments": [
@@ -12,6 +12,7 @@
         "type": "keyValue",
         "label": "Allowed Commands",
         "description": "Commands the agent is permitted to run. Toggle each row's Enabled checkbox to grant or revoke that specific command. The Category column labels the operation type: r = read-only (safe in all contexts), w = state-modifying but recoverable (commit, push, pull, etc.), d = destructive or history-rewriting (reset --hard, push --force, etc.). The Description column is a short reminder of what each command does — it's panel-only metadata and is not passed to the agent. Defaults grant all r commands and refuse everything else; enable individual w / d commands as needed for the task.",
+        "keywordsPath": "permissions-keywords.json",
         "default": {
           "git blame": { "value": "r", "enabled": true, "description": "Show who last modified each line of a file and in which commit." },
           "git branch": { "value": "r", "enabled": true, "description": "List local branches; mark the current branch with an asterisk." },
@@ -32,7 +33,7 @@
           "git apply": { "value": "w", "enabled": false, "description": "Apply a patch to files and/or the index without committing." },
           "git branch <name>": { "value": "w", "enabled": false, "description": "Create a new local branch pointing at the current commit." },
           "git cherry-pick": { "value": "w", "enabled": false, "description": "Apply the changes from existing commits onto the current branch." },
-          "git checkout": { "value": "w", "enabled": false, "description": "Switch branches or restore working-tree files from a ref." },
+          "git checkout": { "value": "w", "enabled": false, "description": "Switch branches (non-destructive form). Use `git checkout -- <path>` for file-restore, which is a separate `d`-category entry." },
           "git clone": { "value": "w", "enabled": false, "description": "Clone a repository into a new directory." },
           "git commit": { "value": "w", "enabled": false, "description": "Record staged changes to the repository as a new commit." },
           "git fetch": { "value": "w", "enabled": false, "description": "Download objects and refs from a remote without merging." },
@@ -41,7 +42,7 @@
           "git mv": { "value": "w", "enabled": false, "description": "Move or rename a tracked file, directory, or symlink." },
           "git pull": { "value": "w", "enabled": false, "description": "Fetch from a remote and integrate the changes into the current branch." },
           "git push": { "value": "w", "enabled": false, "description": "Update a remote ref using the local ref's commits." },
-          "git rebase": { "value": "w", "enabled": false, "description": "Reapply commits on top of another base tip; rewrites local history." },
+          "git rebase": { "value": "w", "enabled": false, "description": "Reapply commits on top of another base tip (non-interactive). Rewrites local unpublished commits; recoverable via reflog." },
           "git remote add": { "value": "w", "enabled": false, "description": "Register a new remote repository under a short name." },
           "git reset": { "value": "w", "enabled": false, "description": "Move HEAD and optionally update the index; safe modes preserve the working tree." },
           "git restore --staged": { "value": "w", "enabled": false, "description": "Unstage paths from the index without touching the working tree." },
@@ -64,10 +65,13 @@
         },
         "keyLabel": "Command",
         "valueLabel": "Category",
+        "valueReadonly": true,
+        "valueOptions": ["r", "w", "d"],
         "optionalValue": false,
         "optionalEnabled": true,
         "optionalDescription": true,
-        "descriptionLabel": "Description"
+        "descriptionLabel": "Description",
+        "fullWidth": true
       },
       "protectedBranches": {
         "type": "keyValue",
@@ -77,7 +81,8 @@
         "keyLabel": "Branch",
         "valueLabel": "Description",
         "optionalValue": true,
-        "keywordsPath": "protected-branches-keywords.json"
+        "keywordsPath": "protected-branches-keywords.json",
+        "fullWidth": true
       }
     }
   }

@@ -62,6 +62,8 @@ When a trigger fires:
 
 If the write fails (permission error, disk full, etc.), tell the user the capture failed and give them the error message in one line. Do not retry silently.
 
+Note: the Settings panel creates the parent directory of `feedbackFilePath` automatically before its first write (the directory may not exist until then). As the TPM agent, you do not need to create it — your `Write` tool will target the path directly and will fail if the directory is missing; in that case the error message is sufficient.
+
 ## How to surface
 
 When the user asks "what's in feedback?", "show me the feedback log", "what have I saved?", or similar, read `{parameters.feedbackFilePath}` and surface the entries grouped by status. Suggested format:
@@ -80,7 +82,21 @@ Do not include the `id` field — it is for the panel's internal routing, not us
 
 ## Who triages
 
-The Settings panel's "Feedback" tab is the user's primary triage surface — it renders pending entries with Yes/No buttons (approve / delete) and approved entries with a Delete button. Your role here is mostly capture, with surfacing as a secondary function. Do not offer to "mark this approved" or "delete this" from the chat — the panel is where that happens. If the user explicitly asks you to delete or approve an entry from the chat, tell them the panel is the right surface and that direct chat-side state transitions are not supported in this module.
+The Settings panel's "Feedback" tab is the user's primary triage surface — it renders pending entries with Yes/No buttons (approve / delete) and approved entries with a Delete button. Entries in each group are sorted newest-first. Each card shows the creation date and, when a git branch was captured at log time, a branch chip (`on <branch>`).
+
+The No button (pending entries) uses a two-step inline confirm: the first click changes the button to "Confirm?" for 2 seconds; a second click within that window posts the delete. If the user does not confirm within 2 seconds the button reverts to "No" automatically. The two-step confirm state is cleared when the user navigates away from and back to the Feedback detail view, so an in-progress confirm does not survive navigation.
+
+The Delete button (approved entries) is immediate — it fires the delete on the first click with no confirm step.
+
+Your role here is mostly capture, with surfacing as a secondary function. Do not offer to "mark this approved" or "delete this" from the chat — the panel is where that happens. If the user explicitly asks you to delete or approve an entry from the chat, tell them the panel is the right surface and that direct chat-side state transitions are not supported in this module.
+
+## Concurrency note
+
+The Settings panel serializes its own read-modify-write operations internally. However, concurrent writes between the panel and the TPM agent (which uses its own Read/Write tools) are not serialized — both can write the file simultaneously. This is an accepted limitation. In practice the window is small: TPM appends only when a trigger phrase fires, and the panel writes only when the user clicks Approve or Delete. If you notice the file looks unexpectedly stale after a write, advise the user to close and reopen the Feedback tab to force a fresh read.
+
+## Entry validation by the panel
+
+The Settings panel's reader silently drops individual entries that fail basic shape validation: an entry must have `id` (string), `createdAt` (string), `text` (string), and `status` (`"pending"` or `"approved"`). Entries missing any of these fields, or with an unrecognized `status` value, are filtered out and will not appear in the panel. The `branch` field is optional — absent or `null` branch values are valid and preserved. This means an agent-written entry with a typo in `status` (e.g. `"done"`) will silently disappear from the panel view. Use only `"pending"` or `"approved"` as the `status` value when writing entries.
 
 ## What NOT to do
 

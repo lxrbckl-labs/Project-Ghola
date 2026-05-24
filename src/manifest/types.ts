@@ -48,9 +48,13 @@ export interface SettingsField {
   description?: string;
   /**
    * Default value for the field. For `type === 'keyValue'` the value is a
-   * `Record<string, string>` — user-defined keys mapped to string values
-   * (e.g. project key → connection name). Empty `{}` is the conventional
-   * "no entries" default.
+   * `Record<string, { value: string; enabled?: boolean; description?: string }>`
+   * — user-defined keys mapped to rich entry objects. `value` carries the
+   * column-specific meaning for the setting (e.g. a category letter for
+   * tool.git, a description string for tool.npm-suite). `enabled` is present
+   * when `optionalEnabled === true`; `description` is present when
+   * `optionalDescription === true`. Empty `{}` is the conventional "no entries"
+   * default.
    */
   default?: unknown;
   required?: boolean;
@@ -90,6 +94,21 @@ export interface SettingsField {
   /** Optional UI label for the value column of a `keyValue` table. */
   valueLabel?: string;
   /**
+   * When true and the field type is keyValue, the value cell renders as
+   * read-only display text (a styled span) rather than an editable input.
+   * Use for value columns that carry a fixed taxonomy authored in the
+   * manifest (e.g. tool.git's r|w|d Category) where the user should not
+   * be free to type arbitrary values. Default false.
+   */
+  valueReadonly?: boolean;
+  /**
+   * Allowed values for the value column (e.g. ["r", "w", "d"]). When set
+   * together with `valueReadonly: true`, the add-row renders a dropdown
+   * populated from these options so the user can still classify new
+   * entries — existing rows continue to display the read-only span.
+   */
+  valueOptions?: string[];
+  /**
    * When the field type is keyValue, allow rows to be added with an empty
    * value. Default false.
    */
@@ -109,6 +128,18 @@ export interface SettingsField {
   optionalDescription?: boolean;
   /** Optional UI label for the description column of a `keyValue` table. Default "Description". */
   descriptionLabel?: string;
+  /**
+   * When true, the rendered table drops its shared `max-width: 720px` ceiling
+   * and stretches to fill the surrounding settings card. Applies to:
+   *   - `keyValue` fields (via the `.kv-table--full-width` modifier)
+   *   - fields with a `keywordsPath` (via the
+   *     `.setting-keywords-table--full-width` modifier)
+   * Use sparingly — only for tables whose data columns would otherwise look
+   * visually pinched (e.g. tool.database-access's allowlist surfacing long
+   * LINQPad connection names, or tool.dotnet-suite's keyword purpose column
+   * with multi-word entries). Default false.
+   */
+  fullWidth?: boolean;
 }
 
 export type SettingsSchema = Record<string, SettingsField>;

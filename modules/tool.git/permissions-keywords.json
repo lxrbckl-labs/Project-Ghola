@@ -1,5 +1,5 @@
 [
   { "keyword": "r", "purpose": "Read-only inspection (status, diff, log, blame, show, ls-files, ls-tree, etc.). Safe in all contexts. Cannot mutate the repo." },
   { "keyword": "w", "purpose": "State-modifying recoverable operations (add, commit, push, pull, fetch, checkout, switch, branch create/rename, merge, rebase non-interactive, cherry-pick, revert, tag, stash push/pop). Standard development flow." },
-  { "keyword": "d", "purpose": "Destructive operations that can lose work or rewrite history (reset --hard, push --force, branch -D, clean -fd, stash drop, rebase -i with squash/drop, filter-branch). Use only when you mean it." }
+  { "keyword": "d", "purpose": "Destructive operations that can lose work or rewrite history (reset --hard, push --force, branch -D, clean -f, stash drop, rebase -i with squash/drop, filter-branch). Use only when you mean it." }
 ]

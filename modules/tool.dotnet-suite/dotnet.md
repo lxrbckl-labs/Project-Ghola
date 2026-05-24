@@ -9,10 +9,10 @@ Per the preamble's parameter-allowlist rule, the values in `parameters.allowedCo
 `parameters.allowedCommands` is a comma-separated list of subcommands the agents may invoke as `dotnet <name>`. Parsing rules:
 
 - Comma-separated. Whitespace around each entry is trimmed. Case is folded to lowercase.
-- Each entry is the subcommand only — `build`, not `dotnet build`. A leading `dotnet ` token, if present, is stripped before comparison.
+- Each entry is the subcommand only — `build`, not `dotnet build`. A leading `dotnet ` token, if present, is stripped before comparison. Entries may be multi-word (e.g. `tool install`, `tool uninstall`) — these match the full token after `dotnet ` (so `dotnet tool install` is allowed if and only if `tool install` is in the list).
 - Order does not matter.
 - Duplicates are deduplicated silently.
-- An empty string (the default) means **no** `dotnet` commands are allowed — every `dotnet` invocation is refused. This matches the legacy behavior of this module.
+- An empty string (the default) means **no** `dotnet` commands are allowed — every `dotnet` invocation is refused. This matches the legacy behavior of this module. When the Session Manifest renders `parameters: (defaults)` instead of an explicit value, the default applies — treat it the same as an empty string: no dotnet commands are allowed.
 - The allowlist is **not** validated against a hardcoded master list of known subcommands. Whatever the user types in is trusted verbatim. If they list `whoami`, then `dotnet whoami` is permitted by this module even though it is not a real subcommand. The user owns the contents of the list.
 
 When an agent is about to run `dotnet <X>`:
@@ -22,7 +22,7 @@ When an agent is about to run `dotnet <X>`:
 3. If the set is non-empty and `X` (lowercased, trimmed) is not in it, refuse with: "Cannot run `dotnet <X>` — `<X>` is not in this module's `allowedCommands`."
 4. If `X` is in the set, proceed. Surface the run in the agent's return so TPM has an audit trail.
 
-Common safe values to consider: `build, test, restore, format` — read-only or inspection-friendly. High-risk subcommands worth omitting unless the user deliberately enables them: `ef` (database migrations), `publish` (release artifacts), `nuget` (package mutation), `tool install` / `tool uninstall` (machine state).
+Common safe values to consider: `build, test, restore` — read-only or inspection-friendly. Use-with-caution subcommands: `format` (rewrites source files according to .editorconfig; reversible but modifying), `run` (executes the app; may have DB or file-system side-effects). High-risk subcommands worth omitting unless the user deliberately enables them: `ef` (database migrations), `publish` (release artifacts), `nuget` (package mutation), `tool install` / `tool uninstall` (machine state).
 
 ### Keywords file
 
