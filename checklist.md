@@ -17,9 +17,10 @@ Sources: Project SWT feature extraction (95 features across 3 slice files), pre-
 - [x] **tool.database-access** — Read-only LINQPad SQL via project→connection allowlist.
 - [x] **tool.npm-suite** — Per-row enable/disable allowlist of npm + Angular CLI commands.
 - [x] **tool.fastpath-check** — Detects WSL fast-path; launcher cd's bash terminal into it on session start.
-- [~] **tool.lenses** — Three-lens deployment scaffolding for review/planning modes (in-flight, untracked).
+- [x] **tool.lenses** — Three-lens deployment for Review Mode (security/logic/quality) and Planning Mode (architecture/implementation/test-strategy), with `Rating: N/5` rubric and configurable lens vocabularies via keywords files.
 - [x] **tool.feedback-log** — Cross-session feedback log; TPM appends entries to a JSON file in extension global storage, Feedback tab in the settings panel exposes Yes/No/Delete triage on cards.
 - [x] **integration.atlassian-suite** — Atlassian credentials module (email, API token in SecretStorage, Jira base URL, Bitbucket workspace) plus REST integration: token validation against Jira `/myself` and Bitbucket workspace endpoints, ticket-existence and open-PR-by-branch lookups feeding the optional Source Control branch widget's button states. Includes Refresh button and streaming API state updates.
+- [x] **integration.bitbucket-pr-comments** — PR Monitor: fetch open Bitbucket PR review comments via the Atlassian Suite's AtlassianBridge, triage them with `address` ordinal grammar, dispatch SWEs in parallel to apply code fixes, generate 1-2 sentence replies (with optional CodeRabbit persona overlay) under explicit user approval, and post replies back to Bitbucket. Includes the falsely-resolved-comment scanner (off-by-default detection of comments claiming resolution that Bitbucket still flags as unresolved).
 
 ---
 
@@ -47,9 +48,9 @@ Sources: Project SWT feature extraction (95 features across 3 slice files), pre-
 
 ## Specialized workflow modes (re-port from retired Nomeda mode.\*)
 
-- [ ] **tool.review-mode** — Three-lens (security/logic/quality) deployment of SWEs against a branch, returning ranked findings.
-- [ ] **tool.planning-mode** — Three-lens (architecture/implementation/test-strategy) deployment for fresh-ticket planning from Jira AC.
-- [ ] **tool.rating-scale** — `Rating: N/5` schema (1=trivial to 5=blocker) attached to every review finding; gates posting.
+- [x] **tool.review-mode** — Three-lens (security/logic/quality) deployment of SWEs against a branch, returning ranked findings. Folded into `tool.lenses`.
+- [x] **tool.planning-mode** — Three-lens (architecture/implementation/test-strategy) deployment for fresh-ticket planning from Jira AC. Folded into `tool.lenses`.
+- [x] **tool.rating-scale** — `Rating: N/5` schema (1=trivial to 5=blocker) attached to every review finding; gates posting. Folded into `tool.lenses`.
 - [ ] **tool.review-post-bitbucket** — `post <ordinals>` verb (`post 1`, `post 1,3`, `post 2-4`, `post all`, `post all security`) to share polished findings as PR comments, with min-rating filter.
 
 ## Quality gates
