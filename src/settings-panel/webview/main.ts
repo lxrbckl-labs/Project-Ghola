@@ -2222,15 +2222,14 @@ function renderKeyValueRow(
 
   if (richShape) {
     const enTd = el('td', { class: 'kv-cell kv-cell-enabled' });
-    // Use the shared .switch/.slider toggle pattern so the Enabled column
-    // matches module-row toggles elsewhere in the panel. The hidden <input>
-    // still receives the change event and keeps space/enter keyboard
-    // semantics intact.
-    const switchLabel = el('label', {
-      class: 'switch',
-      'aria-label': `Enable ${rowKey}`,
-    });
-    const cb = el('input', { class: 'kv-enabled-input' }) as HTMLInputElement;
+    // The Enabled column defaults to a native HTML checkbox — toggles are
+    // intentionally avoided for kv-table Enabled columns project-wide.
+    // Manifests can opt into the shared .switch/.slider toggle pattern via
+    // `enabledStyle: "toggle"` when the row count is small and the heavier
+    // visual weight is desirable. In both cases the inner
+    // <input type="checkbox"> receives the change event, so keyboard
+    // semantics (space/enter) and the persist handler are identical.
+    const cb = el('input') as HTMLInputElement;
     cb.type = 'checkbox';
     cb.checked = enabledState;
     cb.addEventListener('change', () => {
@@ -2239,9 +2238,20 @@ function renderKeyValueRow(
       richDraft[rowKey] = { ...existing, enabled: cb.checked };
       persist();
     });
-    switchLabel.appendChild(cb);
-    switchLabel.appendChild(el('span', { class: 'slider' }));
-    enTd.appendChild(switchLabel);
+    if (field.enabledStyle === 'toggle') {
+      const switchLabel = el('label', {
+        class: 'switch',
+        'aria-label': `Enable ${rowKey}`,
+      });
+      cb.className = 'kv-enabled-input';
+      switchLabel.appendChild(cb);
+      switchLabel.appendChild(el('span', { class: 'slider' }));
+      enTd.appendChild(switchLabel);
+    } else {
+      cb.className = 'kv-enabled-checkbox';
+      cb.setAttribute('aria-label', `Enable ${rowKey}`);
+      enTd.appendChild(cb);
+    }
     tr.appendChild(enTd);
   }
 

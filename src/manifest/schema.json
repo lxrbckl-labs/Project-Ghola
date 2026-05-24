@@ -91,7 +91,11 @@
               "optionalEnabled": { "type": "boolean" },
               "optionalDescription": { "type": "boolean" },
               "descriptionLabel": { "type": "string" },
-              "fullWidth": { "type": "boolean" }
+              "fullWidth": { "type": "boolean" },
+              "enabledStyle": {
+                "type": "string",
+                "enum": ["toggle", "checkbox"]
+              }
             }
           }
         },

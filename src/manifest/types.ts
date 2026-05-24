@@ -140,6 +140,15 @@ export interface SettingsField {
    * with multi-word entries). Default false.
    */
   fullWidth?: boolean;
+  /**
+   * How the Enabled column renders for a `keyValue` field: `"checkbox"`
+   * (default, native HTML checkbox — the project convention for kv-table
+   * Enabled columns) or `"toggle"` (the `.switch`/`.slider` pattern matching
+   * module-row toggles, opt-in for tables where the heavier toggle weight is
+   * desirable). Only meaningful when `optionalEnabled: true`. Default
+   * `"checkbox"`.
+   */
+  enabledStyle?: 'toggle' | 'checkbox';
 }
 
 export type SettingsSchema = Record<string, SettingsField>;

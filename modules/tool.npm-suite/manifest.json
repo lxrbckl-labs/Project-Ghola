@@ -28,7 +28,8 @@
         "valueLabel": "Description",
         "optionalValue": true,
         "optionalEnabled": true,
-        "fullWidth": true
+        "fullWidth": true,
+        "enabledStyle": "checkbox"
       }
     }
   }
