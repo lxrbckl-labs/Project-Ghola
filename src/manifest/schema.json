@@ -95,7 +95,9 @@
               "enabledStyle": {
                 "type": "string",
                 "enum": ["toggle", "checkbox"]
-              }
+              },
+              "keywordsLabel": { "type": "string" },
+              "selectColumnLabel": { "type": "string" }
             }
           }
         },

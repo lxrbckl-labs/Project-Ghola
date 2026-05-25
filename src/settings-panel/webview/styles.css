@@ -927,6 +927,14 @@ button.module-row-chevron:focus-visible {
   opacity: 0.85;
 }
 
+/* Vertically center the short readonly glyph against taller adjacent cells
+   (e.g. a Description cell that wraps). The base `.kv-table td` rule sets
+   `vertical-align: top`; this override is scoped to the `.kv-cell--readonly`
+   modifier so editable value cells keep top alignment. */
+.kv-table td.kv-cell--readonly {
+  vertical-align: middle;
+}
+
 .kv-table .kv-empty-row td {
   color: var(--vscode-descriptionForeground);
   font-style: italic;

@@ -2689,7 +2689,7 @@ function appendKeywordsTable(
 
   const block = el('div', { class: 'setting-keywords' });
   const heading = el('div', { class: 'setting-keywords-heading' });
-  heading.textContent = 'Keywords';
+  heading.textContent = field.keywordsLabel ?? 'Keywords';
   block.appendChild(heading);
 
   const cacheKey = settingKeywordsCacheKey(moduleId, settingKey);
@@ -2728,7 +2728,7 @@ function appendKeywordsTable(
   const headRow = el('tr');
   if (selection) {
     const selectHead = el('th', { class: 'setting-keywords-select', scope: 'col' });
-    selectHead.textContent = 'Select';
+    selectHead.textContent = field.selectColumnLabel ?? 'Select';
     headRow.appendChild(selectHead);
   }
   const keywordHead = el('th', { scope: 'col' });

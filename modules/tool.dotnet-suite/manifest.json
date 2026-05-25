@@ -15,7 +15,8 @@
         "default": "",
         "keywordsPath": "allowed-commands-keywords.json",
         "multiSelect": true,
-        "fullWidth": true
+        "fullWidth": true,
+        "selectColumnLabel": "Enabled"
       }
     }
   }

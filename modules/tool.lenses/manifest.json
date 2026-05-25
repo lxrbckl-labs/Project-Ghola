@@ -15,7 +15,8 @@
         "default": "security, logic, quality",
         "keywordsPath": "review-lenses-keywords.json",
         "multiSelect": true,
-        "fullWidth": true
+        "fullWidth": true,
+        "selectColumnLabel": "Enabled"
       },
       "planningLenses": {
         "type": "string",
@@ -24,7 +25,8 @@
         "default": "architecture, implementation, test-strategy",
         "keywordsPath": "planning-lenses-keywords.json",
         "multiSelect": true,
-        "fullWidth": true
+        "fullWidth": true,
+        "selectColumnLabel": "Enabled"
       }
     }
   }

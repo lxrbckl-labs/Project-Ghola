@@ -149,6 +149,21 @@ export interface SettingsField {
    * `"checkbox"`.
    */
   enabledStyle?: 'toggle' | 'checkbox';
+  /**
+   * Overrides the "Keywords" subtitle that prefixes the reference table when a
+   * field declares a `keywordsPath`. Use sparingly — only when the module's
+   * domain has a clearer collective noun (e.g. "Functions" for
+   * tool.dotnet-suite's subcommand list). Default "Keywords".
+   */
+  keywordsLabel?: string;
+  /**
+   * Overrides the "Select" column header that appears as the leading checkbox
+   * column when a `keywordsPath` field is also `multiSelect: true`. Use when
+   * the override more naturally describes the action of toggling rows (e.g.
+   * "Enabled" for an allowlist semantic). Default "Select". No effect when
+   * `multiSelect` is false.
+   */
+  selectColumnLabel?: string;
 }
 
 export type SettingsSchema = Record<string, SettingsField>;
