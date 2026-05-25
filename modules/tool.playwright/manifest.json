@@ -2,7 +2,7 @@
   "id": "tool.playwright",
   "name": "Playwright",
   "version": "0.2.0",
-  "description": "Lets QA write Playwright test specs from testing procedures produced by tool.ac-to-testing; specs live outside the work repo with a shared playwright.config.ts.",
+  "description": "Lets QA write Playwright test specs from testing procedures produced by tool.ac-to-testing — specs live outside the work repo with a shared playwright.config.ts.",
   "proactive": false,
   "contributes": {
     "promptFragments": [

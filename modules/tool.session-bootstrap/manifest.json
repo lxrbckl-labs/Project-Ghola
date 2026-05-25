@@ -17,7 +17,7 @@
           "config-load": { "value": "Read swt_settings.json (or equivalent) and surface the active configuration.", "enabled": true },
           "team-allocation": { "value": "Compute performance / efficiency / QA core counts and surface the team shape.", "enabled": true },
           "branch-detection": { "value": "Detect the active git branch and base; cache for downstream proactive modules.", "enabled": true },
-          "proactive-modules": { "value": "Consult every enabled proactive module in turn (fastpath-check, obsidian-notes, session-handoff, setup-walkthrough, active session mode (mode.cd or mode.ticket-work), lenses auto-detection triggers). Each module's session-start work runs here.", "enabled": true },
+          "proactive-modules": { "value": "Consult every enabled proactive module in turn (fastpath-check, obsidian-notes, setup-walkthrough, active session mode (mode.cd or mode.ticket-work), session-handoff, lenses auto-detection triggers). Each module's session-start work runs here.", "enabled": true },
           "ready": { "value": "Emit a single 'Ready' line signaling the boot phase is complete before responding to the first user message.", "enabled": true }
         },
         "optionalValue": false,

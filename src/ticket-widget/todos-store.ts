@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { WORKSPACE_STATE_KEYS } from '../state/keys';
 
 /**
  * Persistence layer for ticket-mode TODO lists. Thin workspace-state-backed
@@ -16,8 +17,6 @@ import * as vscode from 'vscode';
  *   - `manual` — user-added via the widget. Always preserved verbatim across
  *     re-extracts (no hash, no auto-removal).
  */
-
-const TODOS_KEY = 'nomeda.ticketWork.todos';
 
 export interface TicketTodo {
   id: string;
@@ -165,7 +164,7 @@ export class TicketTodosStoreManager implements vscode.Disposable {
   }
 
   private readAll(): TicketTodosStore {
-    const raw = this.context.workspaceState.get<TicketTodosStore>(TODOS_KEY, {});
+    const raw = this.context.workspaceState.get<TicketTodosStore>(WORKSPACE_STATE_KEYS.TICKET_WORK_TODOS, {});
     if (!raw || typeof raw !== 'object') return {};
     // Defensive shallow copy of the top-level record; arrays are copied on read paths.
     const out: TicketTodosStore = {};
@@ -177,7 +176,7 @@ export class TicketTodosStoreManager implements vscode.Disposable {
   }
 
   private async writeAll(all: TicketTodosStore): Promise<void> {
-    await this.context.workspaceState.update(TODOS_KEY, all);
+    await this.context.workspaceState.update(WORKSPACE_STATE_KEYS.TICKET_WORK_TODOS, all);
   }
 }
 

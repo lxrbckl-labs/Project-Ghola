@@ -41,7 +41,7 @@ When a request implies a git operation:
 
 SWE specifically must surface every refusal to TPM in its return — do not silently work around a missing entry (no substituting `mv` for `git mv` to avoid the check, no shelling around `git` to perform a disallowed operation, no using an enabled near-neighbor command to accomplish what a disabled command would have done).
 
-## Module-disabled vs module-enabled-but-empty
+## Module-disabled vs allowlist-empty
 
 These are distinct failure modes and must use distinct messages:
 
@@ -50,7 +50,7 @@ These are distinct failure modes and must use distinct messages:
 
 Do not merge these two cases.
 
-## Protected-branches guardrail
+## Always-applied protections (regardless of allowlist)
 
 `parameters.protectedBranches` is a JSON object whose keys are protected branch names. The values are free-form descriptions the user wrote to remind themselves why each branch is protected — for policy purposes, only the keys matter. Default: `{}`. If `protectedBranches` is not present in the Session Manifest at all (because the user only overrode `allowedCommands` and never added protected branches), treat it as an empty object — no branches are protected by this module.
 

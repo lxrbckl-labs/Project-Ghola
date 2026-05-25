@@ -1,4 +1,5 @@
 import type * as vscode from 'vscode';
+import { WORKSPACE_STATE_KEYS } from '../state/keys';
 import type { NamedConfiguration } from './protocol';
 
 /**
@@ -13,28 +14,26 @@ import type { NamedConfiguration } from './protocol';
  * The store guarantees the single-default invariant: at most one entry has
  * `isDefault === true` at any time. `setDefault` zeros others atomically.
  */
-const CONFIGURATIONS_KEY = 'nomeda.configurations';
-const ACTIVE_CONFIGURATION_ID_KEY = 'nomeda.activeConfigurationId';
 
 export class ConfigurationsStore {
   constructor(private readonly memento: vscode.Memento) {}
 
   getAll(): NamedConfiguration[] {
-    const raw = this.memento.get<NamedConfiguration[]>(CONFIGURATIONS_KEY, []);
+    const raw = this.memento.get<NamedConfiguration[]>(WORKSPACE_STATE_KEYS.CONFIGURATIONS, []);
     return Array.isArray(raw) ? raw.map((c) => ({ ...c })) : [];
   }
 
   async setAll(list: NamedConfiguration[]): Promise<void> {
-    await this.memento.update(CONFIGURATIONS_KEY, list);
+    await this.memento.update(WORKSPACE_STATE_KEYS.CONFIGURATIONS, list);
   }
 
   getActiveId(): string | null {
-    const raw = this.memento.get<string | null>(ACTIVE_CONFIGURATION_ID_KEY, null);
+    const raw = this.memento.get<string | null>(WORKSPACE_STATE_KEYS.ACTIVE_CONFIGURATION_ID, null);
     return typeof raw === 'string' && raw.length > 0 ? raw : null;
   }
 
   async setActiveId(id: string | null): Promise<void> {
-    await this.memento.update(ACTIVE_CONFIGURATION_ID_KEY, id);
+    await this.memento.update(WORKSPACE_STATE_KEYS.ACTIVE_CONFIGURATION_ID, id);
   }
 
   /**

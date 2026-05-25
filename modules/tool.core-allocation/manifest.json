@@ -26,14 +26,14 @@
         "label": "Model By Difficulty",
         "description": "User-managed map of task-difficulty tier to model name. TPM selects the model per dispatch based on the assignment's declared difficulty. Defaults match the SWT convention (Haiku for low, Sonnet for medium, Opus for high). Adjust per project — e.g. drop Opus entirely for cost control, or promote everything to Opus for max quality.",
         "default": {
-          "low": { "value": "haiku" },
-          "medium": { "value": "sonnet" },
-          "high": { "value": "opus" }
+          "low": { "value": "haiku", "enabled": true },
+          "medium": { "value": "sonnet", "enabled": true },
+          "high": { "value": "opus", "enabled": true }
         },
         "keyLabel": "Difficulty",
         "valueLabel": "Model",
         "optionalValue": false,
-        "optionalEnabled": false,
+        "optionalEnabled": true,
         "fullWidth": true
       },
       "highPriorityMode": {

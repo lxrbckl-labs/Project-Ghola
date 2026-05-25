@@ -16,7 +16,19 @@ An Atlassian unified API token (generated at id.atlassian.com) works for both pr
 - Toggles visibility of the Source Control branch widget via the `showWidget` setting. When on, the widget renders in the SCM sidebar and surfaces the current branch's ticket key plus one-click links to the Jira ticket and the Bitbucket branch/PR page.
 - **Domain probes** (run by the widget on branch change, when the user presses Refresh, when a token is set or cleared — the widget subscribes to `onDidChangeValidation`, which fires after every set/clear — and when module settings are saved, e.g. `jiraBase` or `bitbucketWorkspace` change): `checkTicketExists` verifies ticket existence via the Jira token; `findOpenPrForBranch` looks up an open PR for the current branch via the Bitbucket token. These are independent of the validation probes.
 - `getTicketDetails(key)` — fetches `?fields=summary,status,description` from `${jiraBase}/rest/api/3/issue/${key}` and returns `{ exists: boolean, status?: string, summary?: string, description?: unknown (ADF JSON tree), error?: string }`. Used by `mode.ticket-work` for ticket pulls and by `tool.ac-to-testing` for AC extraction from descriptions.
+- `adfExtractAcceptanceCriteria(adf, headingMarker)` — pure helper that walks an ADF (Atlassian Document Format) JSON tree and extracts a list of acceptance-criteria items using a three-branch heuristic: first taskList in the doc, then the first list following a heading whose text matches headingMarker (case-insensitive), then the first bullet/ordered list as fallback. Returns `{ items: AcItem[], source: 'taskList' | 'ac-heading-list' | 'first-list' | 'none' }`. Used by `tool.ac-to-testing` and `mode.ticket-work`'s Ticket Widget for AC extraction.
 - The Refresh button re-runs both domain probes (`checkTicketExists` + `findOpenPrForBranch`) — it does not re-run the validation probes.
+
+## AtlassianBridge surface
+
+The `AtlassianBridge` is the host-side interface that consumer modules use to access Atlassian credentials and validation state without ever handling raw tokens themselves. Surface:
+
+- `isJiraTokenSet()`, `isBitbucketTokenSet()` — boolean checks.
+- `getJiraToken()`, `getBitbucketToken()` — token retrieval (used internally by Atlassian client helpers; agents NEVER call these directly per `tool.secrets-wrapper-pattern`).
+- `validate()`, `getLastValidation()`, `onDidChangeValidation` — probe orchestration + event.
+- `onDidChangeAtlassianTokenStatus` — event fired when token status changes.
+
+Consumed by `integration.bitbucket-pr-comments` (for Bitbucket REST writes) and the host-side branch + ticket widgets. The bridge keeps secret-pattern compliance — secrets are only ever read inside wrapper-style calls (AtlassianClient + BitbucketPrClient), never echoed back to agents.
 
 ## Parameter defaults
 

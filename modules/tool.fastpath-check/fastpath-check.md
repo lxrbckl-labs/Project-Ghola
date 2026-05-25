@@ -121,4 +121,14 @@ When the module is disabled entirely, none of this fires — no detection, no ad
 
 ## Role-Specific Notes
 
-- **TPM** — when fastpath detects a slow path AND `parameters.offerMigration` is true AND the user has not declined this session, offer the migration playbook per `parameters.migrationStrategy`. Walk the user through the chosen strategy (`clone`, `rsync`, or `ask`) plus the post-migration checks when `parameters.postMigrationChecks` is true. **NEVER** execute migration commands directly; the user runs them.
+### TPM
+
+When fastpath detects a slow path AND `parameters.offerMigration` is true AND the user has not declined this session, offer the migration playbook per `parameters.migrationStrategy`. Walk the user through the chosen strategy (`clone`, `rsync`, or `ask`) plus the post-migration checks when `parameters.postMigrationChecks` is true. **NEVER** execute migration commands directly; the user runs them.
+
+### SWE
+
+Not directly involved. This module surfaces a session-start advisory for TPM; SWE behavior is unaffected unless TPM elects to surface the migration playbook (per `tool.wsl-migrate`'s folded settings) as part of a work assignment.
+
+### QA
+
+Not directly involved. Same reasoning as SWE.

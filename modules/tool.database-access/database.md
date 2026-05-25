@@ -39,7 +39,7 @@ In the example above, SWE may query `localhost.cmms` and `mcpdevsql.MCP_Dev`. Th
 
 In the `not-installed` and `error` states the panel shows two action buttons: "Copy install instructions" (copies a configurable prompt to the clipboard) and "Configure path…" (opens the `nomeda.linqpadConnectionsPath` VS Code setting so the user can supply an explicit path to the XML file). The user must resolve the underlying problem before the dropdown will populate. In the `loading` state no action buttons are shown.
 
-## Universal rules (when module is enabled with a populated allowlist)
+## Always-applied protections (regardless of allowlist)
 
 These rules apply regardless of which connection is targeted or what the task requires.
 

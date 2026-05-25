@@ -4,14 +4,14 @@ When this module is loaded, the session is scoped to the current working directo
 
 This module is **proactive**: TPM reads it once, at session start, before responding to the user's first request. The first job is to resolve the project context — derive the project name, locate the project notes file, and surface the prior handoff on resume. The rest of the session, the module sits quietly until the user references a path outside cwd, at which point the redirect policy kicks in.
 
-This module depends on `tool.obsidian-notes` for file location — project notes live at `<vault>/<projectsSubfolder>/<cwd-basename>.md` and the vault path resolution is that module's job. It also depends on `tool.session-handoff` for the resume surfacing — the most-recent `## Session Handoff` block in the project notes file is read and summarized by that module, not by this mode directly. Both dependencies are soft: if either is disabled or degraded, this mode degrades gracefully — see "Dependency failure modes" below.
+This module depends on `tool.obsidian-notes` for file location — project notes live at `<vault>/<projectsSubfolder>/<project-name>.md` and the vault path resolution is that module's job. It also depends on `tool.session-handoff` for the resume surfacing — the most-recent `## Session Handoff` block in the project notes file is read and summarized by that module, not by this mode directly. Both dependencies are soft: if either is disabled or degraded, this mode degrades gracefully — see "Dependency failure modes" below.
 
 In this version of Nomeda there is no mode-selector UI on the panel; Directory Navigation mode is active whenever this module is present in the Session Manifest. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
 
 ## What Directory Navigation mode does (at a glance)
 
 - Treats `cwd` as a bound project for the duration of the session, with a project name derived per `parameters.projectNameSource`.
-- Maintains a project notes file at `<vault>/<projectsSubfolder>/<cwd-basename>.md` — path resolution is `tool.obsidian-notes`' job, and this mode just consumes the resolved path.
+- Maintains a project notes file at `<vault>/<projectsSubfolder>/<project-name>.md` — path resolution is `tool.obsidian-notes`' job, and this mode just consumes the resolved path.
 - Resists drift — when the user references work in a different path, TPM responds per `parameters.redirectStrictness`.
 
 ## Project context resolution (session start)
@@ -58,7 +58,7 @@ What does NOT go in the project notes:
 
 Directory Navigation mode is intended to be mutually exclusive with `mode.ticket-work` and `mode.support` (when those modules ship). The three modes carve up the work-scope space — this mode is project-bound, ticket-work is ticket-bound, support is user-request-bound — and enabling two at once creates ambiguity about which scope owns the session.
 
-For now, only Directory Navigation mode exists. If a future mode is enabled alongside this one and both appear in the Session Manifest, TPM surfaces the conflict to the user once at session start: "Multiple session modes enabled — Directory Navigation and `<other>`. Ticket Work takes precedence over Directory Navigation when both are enabled (Jira-bound work is more specific than directory-bound). If both are loaded, defer Directory Navigation's project binding to Ticket Work's ticket binding and surface the conflict to the user: 'Multiple session modes enabled — Ticket Work wins; disable Directory Navigation in the Modules tab if you intended directory-bound work.'" Then proceed with this mode active and the other mode's behavior suppressed. The actual conflict-resolution policy can be revisited when other modes exist; this message is forward-compatible language to keep the session moving.
+For now, only Directory Navigation mode exists. If a future mode is enabled alongside this one and both appear in the Session Manifest, TPM surfaces the conflict to the user once at session start: "Multiple session modes enabled — Directory Navigation and `<other>`. Ticket Work takes precedence over Directory Navigation when both are enabled (Jira-bound work is more specific than directory-bound). If both are loaded, defer Directory Navigation's project binding to Ticket Work's ticket binding and surface the conflict to the user: 'Multiple session modes enabled — Ticket Work wins; disable Directory Navigation in the Modules tab if you intended directory-bound work.'" Then proceed with **Ticket Work active** and this mode's project binding suppressed. The actual conflict-resolution policy can be revisited when other modes exist; this message is forward-compatible language to keep the session moving.
 
 ## Dependency failure modes
 
