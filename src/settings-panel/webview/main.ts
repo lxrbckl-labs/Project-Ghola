@@ -70,6 +70,27 @@ interface AtlassianValidationResultMessage {
 // interface AtlassianValidateMessage { type: 'atlassianValidate'; }
 // interface AtlassianValidationStatusRequestedMessage { type: 'atlassianValidationStatusRequested'; }
 
+// ─── Merkle test-connection protocol types ──────────────────────────────────
+// Local re-declarations kept in sync with src/settings-panel/protocol.ts.
+
+interface MerkleTestResult {
+  status: 'ok' | 'error';
+  httpStatus?: number;
+  message?: string;
+  name?: string;
+  serverVersion?: string;
+  serverTime?: string;
+  testedBaseUrl: string;
+}
+
+interface MerkleTestConnectionResultMessage {
+  type: 'merkleTestConnectionResult';
+  result: MerkleTestResult | null;
+}
+
+// Webview → host send-site type (documented here, sent via postMessage):
+// interface MerkleTestConnectionMessage { type: 'merkleTestConnection'; baseUrl: string; }
+
 interface VsCodeApi {
   postMessage(msg: WebviewToHostMessage): void;
   setState(state: unknown): void;
@@ -220,6 +241,18 @@ interface UIState {
    * Re-validate). Set to true on click; cleared when a result message arrives.
    */
   atlassianValidating: boolean;
+  /**
+   * Last "Test Connection" result for the integration.merkle module, or null
+   * when no test has been run yet. Updated by 'merkleTestConnectionResult'
+   * messages. Stays cached across re-renders so the chip survives DOM
+   * rebuilds without re-running the probe.
+   */
+  merkleTestResult: MerkleTestResult | null;
+  /**
+   * True while a Merkle test-connection probe is in flight. Set to true on
+   * click; cleared when the 'merkleTestConnectionResult' message arrives.
+   */
+  merkleTesting: boolean;
   /** Feedback entries last received from the host via 'feedbackLoaded'. */
   feedbackEntries: FeedbackEntry[];
   /**
@@ -261,6 +294,8 @@ const state: UIState = {
   atlassianBitbucketTokenConfirming: false,
   atlassianValidation: null,
   atlassianValidating: false,
+  merkleTestResult: null,
+  merkleTesting: false,
   feedbackEntries: [],
   feedbackPendingNoConfirm: new Set(),
 };
@@ -334,6 +369,10 @@ function init(): void {
     }
     if (raw.type === 'atlassianValidationResult') {
       handleAtlassianValidationResult(raw as unknown as AtlassianValidationResultMessage);
+      return;
+    }
+    if (raw.type === 'merkleTestConnectionResult') {
+      handleMerkleTestConnectionResult(raw as unknown as MerkleTestConnectionResultMessage);
       return;
     }
     handleMessage(ev.data as HostToWebviewMessage);
@@ -552,6 +591,30 @@ function handleAtlassianValidationResult(msg: AtlassianValidationResultMessage):
       const fresh = renderAtlassianValidationBlock();
       fresh.id = 'atlassian-validation-block';
       validationBlock.replaceWith(fresh);
+      return;
+    }
+    render();
+  }
+}
+
+/**
+ * Handle the merkleTestConnectionResult message. Updates the cached result
+ * and clears the in-flight flag, then re-renders only the inline Merkle
+ * serverBaseUrl input wrapper when the integration.merkle detail view is
+ * open so the rest of the page keeps its scroll position.
+ */
+function handleMerkleTestConnectionResult(msg: MerkleTestConnectionResultMessage): void {
+  state.merkleTestResult = msg.result;
+  state.merkleTesting = false;
+  const isMerkleDetailOpen =
+    state.activeSection === 'modules' &&
+    state.moduleView.mode === 'detail' &&
+    state.moduleView.moduleId === 'integration.merkle';
+  if (isMerkleDetailOpen) {
+    const wrapper = document.getElementById('merkle-test-input-wrapper');
+    if (wrapper) {
+      const fresh = renderMerkleServerBaseUrlField();
+      wrapper.replaceWith(fresh);
       return;
     }
     render();
@@ -1630,6 +1693,10 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
     container.appendChild(validationBlock);
   }
 
+  // Project-Merkle module's manual "Test Connection" UI has moved inline next
+  // to the `serverBaseUrl` input itself — see `renderModuleSettingField` for
+  // the play-button + status-feedback wiring. No separate detail section here.
+
   // Feedback Logging module: render the feedback entry card UI below the
   // instructions. Scoped exclusively to this module's detail view.
   if (m.id === 'tool.feedback-log') {
@@ -1855,6 +1922,19 @@ function renderModuleSettingField(
     // Booleans theoretically could ship a keywordsPath, but the on/off shape
     // has no vocabulary to document. Still render if present — the agent reads
     // the same file, so the table keeps host + agent views in sync.
+    appendKeywordsTable(wrap, moduleId, settingKey, field);
+    return wrap;
+  }
+
+  // Project-Merkle module's `serverBaseUrl` field: hardcoded inline play-button
+  // + status-feedback rendering. Anything else falls through to the generic
+  // input rendering below. Hardcoded rather than generalised because the
+  // affordance is module-specific (mirrors the atlassian-suite pattern).
+  if (moduleId === 'integration.merkle' && settingKey === 'serverBaseUrl') {
+    wrap.appendChild(renderMerkleServerBaseUrlField());
+    if (field.description) {
+      wrap.appendChild(textEl('div', field.description, 'setting-desc'));
+    }
     appendKeywordsTable(wrap, moduleId, settingKey, field);
     return wrap;
   }
@@ -3097,6 +3177,189 @@ function renderAtlassianValidationBlock(): HTMLElement {
   block.appendChild(revalidateBtn);
 
   return block;
+}
+
+/**
+ * Render the inline `serverBaseUrl` input wrapper for the integration.merkle
+ * module: text input + adjacent play-button (▶) for triggering a test probe,
+ * plus a short feedback line directly below the input. The input border
+ * reflects the latest probe outcome (green/red), is muted while the result
+ * is stale (URL edited since the last test), and reverts to the default
+ * VS Code input border before any test has run.
+ *
+ * Hardcoded for `integration.merkle::serverBaseUrl` rather than generalised:
+ * the affordance is module-specific (mirrors how atlassian-suite hardcodes
+ * its token-management slots). The play button reads the live setting on
+ * click rather than capturing it at render time, so the user can edit then
+ * probe without an intermediate save.
+ *
+ * Returned wrapper carries the id `merkle-test-input-wrapper` so the result
+ * handler can swap just this subtree on probe completion and keep scroll
+ * position stable.
+ */
+function renderMerkleServerBaseUrlField(): HTMLElement {
+  const wrapper = el('div', {
+    class: 'merkle-test-input-wrapper',
+    id: 'merkle-test-input-wrapper',
+  });
+
+  const baseUrlSetting = state.settingsValues['integration.merkle::serverBaseUrl'];
+  const currentBaseUrl =
+    typeof baseUrlSetting === 'string' && baseUrlSetting.length > 0
+      ? baseUrlSetting
+      : 'http://localhost:7423';
+
+  // Determine staleness up front so we can drive both the border class and
+  // the feedback element from one decision. Trim trailing slashes on both
+  // sides because the host trims before probing — so the echoed
+  // `testedBaseUrl` is always slash-free and the comparison must match.
+  const result = state.merkleTestResult;
+  const trimmedCurrent = currentBaseUrl.replace(/\/+$/, '');
+  const isStale =
+    result !== null && result.testedBaseUrl !== trimmedCurrent;
+
+  // ─── Row: input on the left, play button on the right. ────────────────
+  const row = el('div', { class: 'module-field-row' });
+
+  const inp = el('input', { class: 'setting-input' }) as HTMLInputElement;
+  inp.type = 'text';
+  inp.value = currentBaseUrl;
+
+  if (!state.merkleTesting && result !== null && !isStale) {
+    if (result.status === 'ok') {
+      inp.classList.add('merkle-test-input-ok');
+    } else {
+      inp.classList.add('merkle-test-input-error');
+    }
+  }
+
+  // Autosave on blur (matches the generic text-input renderer above).
+  inp.addEventListener('change', () => {
+    state.settingsValues['integration.merkle::serverBaseUrl'] = inp.value;
+    persistSettings();
+  });
+
+  // Live-edit handler: clear the success/error border the instant the user
+  // mutates the field so a stale green halo can't outlive the input it was
+  // describing. Also swaps the feedback text to the "URL changed — re-test"
+  // muted variant without re-rendering the whole detail view.
+  inp.addEventListener('input', () => {
+    inp.classList.remove('merkle-test-input-ok');
+    inp.classList.remove('merkle-test-input-error');
+    refreshMerkleTestFeedbackText(wrapper, inp.value);
+  });
+
+  row.appendChild(inp);
+
+  const playBtn = el('button', {
+    class: 'merkle-test-play-button',
+    type: 'button',
+    title: 'Test connection',
+    'aria-label': 'Test connection',
+  }) as HTMLButtonElement;
+  playBtn.textContent = state.merkleTesting ? '…' : '▶';
+  playBtn.disabled = state.merkleTesting;
+  playBtn.addEventListener('click', () => {
+    // Re-read at click time so the user can edit-and-probe without saving.
+    const latestSetting = state.settingsValues['integration.merkle::serverBaseUrl'];
+    const liveValue = inp.value;
+    const baseUrl =
+      liveValue.length > 0
+        ? liveValue
+        : typeof latestSetting === 'string' && latestSetting.length > 0
+          ? latestSetting
+          : 'http://localhost:7423';
+    state.merkleTesting = true;
+    const self = document.getElementById('merkle-test-input-wrapper');
+    if (self) {
+      const fresh = renderMerkleServerBaseUrlField();
+      self.replaceWith(fresh);
+    }
+    vscode.postMessage({
+      type: 'merkleTestConnection',
+      baseUrl,
+    } as unknown as WebviewToHostMessage);
+  });
+  row.appendChild(playBtn);
+
+  wrapper.appendChild(row);
+
+  // ─── Feedback line directly below the input. ─────────────────────────
+  const feedback = el('div', { class: 'merkle-test-feedback' });
+  applyMerkleTestFeedback(feedback, result, isStale);
+  wrapper.appendChild(feedback);
+
+  return wrapper;
+}
+
+/**
+ * Populate a `.merkle-test-feedback` element with the current probe verdict.
+ * Centralised so both the initial render and the live-edit `input` listener
+ * can drive the same text/class state without duplicating the four-way
+ * (pending / stale / ok / error) decision tree.
+ */
+function applyMerkleTestFeedback(
+  feedback: HTMLElement,
+  result: MerkleTestResult | null,
+  isStale: boolean,
+): void {
+  feedback.classList.remove(
+    'merkle-test-feedback-ok',
+    'merkle-test-feedback-error',
+    'merkle-test-feedback-pending',
+    'merkle-test-feedback-stale',
+  );
+
+  if (state.merkleTesting) {
+    feedback.classList.add('merkle-test-feedback-pending');
+    feedback.textContent = 'Testing…';
+    return;
+  }
+
+  if (result === null) {
+    // No probe has run — hide the feedback line entirely. The play button
+    // is enough of a hint on its own.
+    feedback.textContent = '';
+    feedback.classList.add('merkle-test-feedback-pending');
+    return;
+  }
+
+  if (isStale) {
+    feedback.classList.add('merkle-test-feedback-stale');
+    feedback.textContent = 'URL changed — re-test';
+    return;
+  }
+
+  if (result.status === 'ok') {
+    feedback.classList.add('merkle-test-feedback-ok');
+    feedback.textContent = result.serverVersion
+      ? `Connected — project-merkle v${result.serverVersion}`
+      : 'Connected';
+    return;
+  }
+
+  feedback.classList.add('merkle-test-feedback-error');
+  const msg = result.message ?? 'connection failed';
+  feedback.textContent = result.httpStatus
+    ? `HTTP ${result.httpStatus} — ${msg}`
+    : `Network error: ${msg}`;
+}
+
+/**
+ * Update only the feedback text in response to a live-edit `input` event,
+ * re-evaluating staleness against the new input value without touching the
+ * input element itself or its event listeners.
+ */
+function refreshMerkleTestFeedbackText(
+  wrapper: HTMLElement,
+  liveValue: string,
+): void {
+  const feedback = wrapper.querySelector<HTMLElement>('.merkle-test-feedback');
+  if (!feedback) return;
+  const trimmed = liveValue.replace(/\/+$/, '');
+  const result = state.merkleTestResult;
+  const isStale = result !== null && result.testedBaseUrl !== trimmed;
+  applyMerkleTestFeedback(feedback, result, isStale);
 }
 
 /**

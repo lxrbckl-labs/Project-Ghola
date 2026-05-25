@@ -21,6 +21,7 @@ Sources: Project SWT feature extraction (95 features across 3 slice files), pre-
 - [x] **tool.feedback-log** — Cross-session feedback log; TPM appends entries to a JSON file in extension global storage, Feedback tab in the settings panel exposes Yes/No/Delete triage on cards.
 - [x] **integration.atlassian-suite** — Atlassian credentials module (email, API token in SecretStorage, Jira base URL, Bitbucket workspace) plus REST integration: token validation against Jira `/myself` and Bitbucket workspace endpoints, ticket-existence and open-PR-by-branch lookups feeding the optional Source Control branch widget's button states. Includes Refresh button and streaming API state updates.
 - [x] **integration.bitbucket-pr-comments** — PR Monitor: fetch open Bitbucket PR review comments via the Atlassian Suite's AtlassianBridge, triage them with `address` ordinal grammar, dispatch SWEs in parallel to apply code fixes, generate 1-2 sentence replies (with optional CodeRabbit persona overlay) under explicit user approval, and post replies back to Bitbucket. Includes the falsely-resolved-comment scanner (off-by-default detection of comments claiming resolution that Bitbucket still flags as unresolved).
+- [x] **integration.merkle** — Connect Nomeda agents to a running Project-Merkle deployment over its MCP endpoint; configurable serverBaseUrl + defaultTeamName + defaultPasscode + verifyOnConnect; agent flow covers verify → join → long-poll → post → exit on session_closed; references Merkle's `scripts/agent-loop.mjs` for sustained-presence deployment.
 
 ---
 

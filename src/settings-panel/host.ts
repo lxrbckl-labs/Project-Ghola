@@ -329,6 +329,9 @@ export class SettingsPanel implements vscode.Disposable {
         // stay routed through the single command path.
         await vscode.commands.executeCommand('nomeda.atlassianSuite.validateToken');
         break;
+      case 'merkleTestConnection':
+        await this.runMerkleTestConnection(msg.baseUrl);
+        break;
       case 'openExternal': {
         // Only allow https: URLs — reject http: and any other scheme.
         let parsed: URL;
@@ -1088,6 +1091,125 @@ export class SettingsPanel implements vscode.Disposable {
       .get<string>('linqpadInstallPrompt', '');
     await vscode.env.clipboard.writeText(promptText);
     vscode.window.showInformationMessage('LINQPad install prompt copied to clipboard');
+  }
+
+  // ─── Merkle test-connection probe ─────────────────────────────────────
+
+  /**
+   * Run a manual "Test Connection" probe against `${baseUrl}/api/health` and
+   * post the outcome back to the webview as `merkleTestConnectionResult`.
+   *
+   * Fail-closed at each stage: empty url, network error, non-200 response,
+   * unparseable body, or wrong `name` field all produce a `status: 'error'`
+   * payload. The 8s `AbortController` timeout mirrors the
+   * `bitbucket-pr-client` request envelope so a wedged Merkle server can't
+   * hang the settings panel indefinitely.
+   *
+   * No credentials touch this path — Merkle's health endpoint is
+   * unauthenticated by design.
+   */
+  private async runMerkleTestConnection(rawBaseUrl: unknown): Promise<void> {
+    if (typeof rawBaseUrl !== 'string' || rawBaseUrl.trim() === '') {
+      this.post({
+        type: 'merkleTestConnectionResult',
+        result: {
+          status: 'error',
+          message: 'serverBaseUrl is empty',
+          testedBaseUrl: '',
+        },
+      });
+      return;
+    }
+    // Trim trailing slash so both `http://host:7423` and `http://host:7423/`
+    // build the same health URL. Other path components are left intact.
+    const baseUrl = rawBaseUrl.trim().replace(/\/+$/, '');
+    const healthUrl = `${baseUrl}/api/health`;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(healthUrl, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (response.status !== 200) {
+        this.post({
+          type: 'merkleTestConnectionResult',
+          result: {
+            status: 'error',
+            httpStatus: response.status,
+            message: `HTTP ${response.status}`,
+            testedBaseUrl: baseUrl,
+          },
+        });
+        return;
+      }
+      const text = await response.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        this.post({
+          type: 'merkleTestConnectionResult',
+          result: {
+            status: 'error',
+            httpStatus: 200,
+            message: 'Response was not JSON',
+            testedBaseUrl: baseUrl,
+          },
+        });
+        return;
+      }
+      const body = (parsed ?? {}) as {
+        name?: unknown;
+        version?: unknown;
+        time?: unknown;
+      };
+      const name = typeof body.name === 'string' ? body.name : undefined;
+      const version = typeof body.version === 'string' ? body.version : undefined;
+      const time = typeof body.time === 'string' ? body.time : undefined;
+      if (name !== 'project-merkle') {
+        this.post({
+          type: 'merkleTestConnectionResult',
+          result: {
+            status: 'error',
+            httpStatus: 200,
+            message: `Endpoint responded but identifies as "${name ?? 'unknown'}", not project-merkle`,
+            testedBaseUrl: baseUrl,
+          },
+        });
+        return;
+      }
+      this.post({
+        type: 'merkleTestConnectionResult',
+        result: {
+          status: 'ok',
+          httpStatus: 200,
+          name,
+          serverVersion: version,
+          serverTime: time,
+          testedBaseUrl: baseUrl,
+        },
+      });
+    } catch (err) {
+      // Network-layer failure (timeout, DNS, connection refused). Use the
+      // error message verbatim — none of these paths carry credentials.
+      const message =
+        (err as Error).name === 'AbortError'
+          ? 'Request timed out after 8s'
+          : (err as Error).message || 'network error';
+      this.post({
+        type: 'merkleTestConnectionResult',
+        result: {
+          status: 'error',
+          message,
+          testedBaseUrl: baseUrl,
+        },
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ─── Atlassian Suite token status ─────────────────────────────────────
