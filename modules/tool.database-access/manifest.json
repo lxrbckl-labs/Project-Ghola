@@ -3,6 +3,7 @@
   "name": "Database Access",
   "version": "0.3.10",
   "description": "Read-only SQL access for SWE via an allowlisted set of connections.",
+  "proactive": false,
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "database.md" }

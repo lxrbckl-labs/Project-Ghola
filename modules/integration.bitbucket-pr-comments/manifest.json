@@ -3,6 +3,7 @@
   "name": "PR Monitor",
   "version": "0.3.0",
   "description": "Owns the Bitbucket PR review-comment workflow — addressing inbound comments via the address ordinal grammar, posting Review Mode findings outbound via the post ordinal grammar, optionally logging every comment to a persistent JSON file for downstream learning, and reusing Atlassian Suite credentials.",
+  "proactive": false,
   "author": "aarbuckle",
   "contributes": {
     "promptFragments": [
@@ -19,6 +20,7 @@
       "coderabbitReplyPersona": {
         "type": "string",
         "label": "CodeRabbit Reply Persona",
+        "default": "",
         "description": "Optional persona or voice instruction layered on top of the Reply Instruction when the parent comment author is CodeRabbit. Leave blank to use the Reply Instruction unchanged for CodeRabbit replies."
       },
       "flagFalselyResolved": {

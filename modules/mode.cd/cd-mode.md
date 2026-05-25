@@ -50,15 +50,23 @@ What lives in the project notes:
 
 What does NOT go in the project notes:
 
-- Per-ticket implementation details — that is `mode.ticket-work`'s job when that module ships. This mode is project-level, not ticket-level, and mixing the two pollutes both.
+- Per-ticket implementation details — that is `mode.ticket-work`'s domain. This mode is project-level, not ticket-level, and mixing the two pollutes both.
 - SWE return messages in raw form — TPM consolidates them into one of the sections above (usually Sessions or Decisions) per the universal TPM-only write discipline.
 - Cross-project discussions — when the user pivots to talking about another project mid-session, that discussion stays in session memory only. The exception mirrors `tool.obsidian-notes`: if a discovery genuinely belongs in the other project's notes, write it to THAT project's file as a standalone note, and keep the current project's file focused on its own scope.
 
 ## Mutual exclusion with other modes
 
-Directory Navigation mode is intended to be mutually exclusive with `mode.ticket-work` and `mode.support` (when those modules ship). The three modes carve up the work-scope space — this mode is project-bound, ticket-work is ticket-bound, support is user-request-bound — and enabling two at once creates ambiguity about which scope owns the session.
+Directory Navigation mode is intended to be mutually exclusive with `mode.ticket-work` and `mode.support`. The three modes carve up the work-scope space — Directory Navigation is project-bound, Ticket Work is ticket-bound, Support is multi-app-bound — and enabling two at once creates ambiguity about which scope owns the session.
 
-For now, only Directory Navigation mode exists. If a future mode is enabled alongside this one and both appear in the Session Manifest, TPM surfaces the conflict to the user once at session start: "Multiple session modes enabled — Directory Navigation and `<other>`. Ticket Work takes precedence over Directory Navigation when both are enabled (Jira-bound work is more specific than directory-bound). If both are loaded, defer Directory Navigation's project binding to Ticket Work's ticket binding and surface the conflict to the user: 'Multiple session modes enabled — Ticket Work wins; disable Directory Navigation in the Modules tab if you intended directory-bound work.'" Then proceed with **Ticket Work active** and this mode's project binding suppressed. The actual conflict-resolution policy can be revisited when other modes exist; this message is forward-compatible language to keep the session moving.
+Precedence: ticket-work > support > cd (most specific wins).
+
+If `mode.cd` and `mode.ticket-work` both appear in the Session Manifest, Ticket Work takes precedence — Jira-bound work is more specific than directory-bound. TPM surfaces the conflict once: "Multiple session modes enabled — Ticket Work wins; disable Directory Navigation if you intended directory-bound work." Then proceeds with Ticket Work active and this mode suppressed.
+
+If `mode.cd` and `mode.support` both appear in the Session Manifest, Support takes precedence — multi-app routing subsumes directory binding. TPM surfaces the conflict once: "Multiple session modes enabled — Support wins; disable Directory Navigation to avoid conflicting path bindings." Then proceeds with Support active and this mode suppressed.
+
+If all three are enabled, Ticket Work wins (most specific). Support and Directory Navigation are both suppressed. TPM surfaces the full conflict once.
+
+Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
 
 ## Dependency failure modes
 

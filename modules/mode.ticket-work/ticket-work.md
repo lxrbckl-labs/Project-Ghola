@@ -6,7 +6,7 @@ This module is **proactive**: TPM reads it once, at session start, before respon
 
 This module depends on `integration.atlassian-suite` for the ticket pull — `checkTicketExists` is the existing Jira helper exposed by that module (it calls `GET ${jiraBase}/rest/api/3/issue/${key}` under the hood), and credentials, base URL, and the token come from that integration. It also depends on `tool.obsidian-notes` for file location — per-ticket notes live at `<vault>/<ProjectName>/<TicketNumber>.md` and the vault path resolution is that module's job. And it depends on `tool.session-handoff` for the resume surfacing — the most-recent `## Session Handoff` block in the per-ticket notes file is read and summarized by that module, not by this mode directly. All three dependencies are soft: if any of them is disabled or degraded, this mode degrades gracefully — see "Dependency failure modes" below.
 
-In this version of Nomeda there is no mode-selector UI on the panel; Ticket Work mode is active whenever this module is present in the Session Manifest. Ticket Work is mutually exclusive with `mode.cd` (and with `mode.support` when that module ships) — only one session mode is active at a time. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
+In this version of Nomeda there is no mode-selector UI on the panel; Ticket Work mode is active whenever this module is present in the Session Manifest. Ticket Work is mutually exclusive with `mode.cd` and `mode.support` — only one session mode is active at a time. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
 
 ## What Ticket Work mode does (at a glance)
 
@@ -127,9 +127,17 @@ What does NOT go in the per-ticket notes:
 
 ## Mutual exclusion with other modes
 
-Ticket Work mode is intended to be mutually exclusive with `mode.cd` and with `mode.support` (when that module ships). The three modes carve up the work-scope space — ticket-work is ticket-bound, Directory Navigation is project-bound, support is user-request-bound — and enabling two at once creates ambiguity about which scope owns the session.
+Ticket Work mode is intended to be mutually exclusive with `mode.cd` and `mode.support`. The three modes carve up the work-scope space — Ticket Work is ticket-bound, Support is multi-app-bound, Directory Navigation is project-bound — and enabling two at once creates ambiguity about which scope owns the session.
 
-If both `mode.ticket-work` and `mode.cd` appear in the Session Manifest, TPM surfaces the conflict to the user once at session start: "Multiple session modes enabled — Ticket Work and Directory Navigation. Ticket Work takes precedence over Directory Navigation when both are enabled — Jira-bound work is more specific than directory-bound. Surface the conflict to the user once at session start: 'Multiple session modes enabled — Ticket Work wins; disable Directory Navigation in the Modules tab if you intended directory-bound work.' Forward-compatible with mode.support — when it ships, the precedence order will need a third tier." Then proceed with Ticket Work active and the Directory Navigation behavior suppressed.
+Precedence: ticket-work > support > cd (most specific wins).
+
+If `mode.ticket-work` and `mode.cd` both appear in the Session Manifest, Ticket Work takes precedence — Jira-bound work is more specific than directory-bound. TPM surfaces the conflict once: "Multiple session modes enabled — Ticket Work wins; disable Directory Navigation if you intended directory-bound work." Then proceeds with Ticket Work active and Directory Navigation suppressed.
+
+If `mode.ticket-work` and `mode.support` both appear in the Session Manifest, Ticket Work takes precedence — single-ticket focus is more specific than multi-app support. TPM surfaces the conflict once: "Multiple session modes enabled — Ticket Work wins; disable Support if you intended multi-app support work." Then proceeds with Ticket Work active and Support suppressed.
+
+If all three are enabled, Ticket Work wins (most specific). Support and Directory Navigation are both suppressed. TPM surfaces the full conflict once.
+
+Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
 
 ## Dependency failure modes
 

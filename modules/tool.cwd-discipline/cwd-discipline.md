@@ -26,7 +26,7 @@ Per `parameters.onRedirectMidSession`, the user can verbally redirect the sessio
 
 ### Mode bindings
 
-Per `parameters.treatModeBindingsAsExceptions`, an active session mode that binds the agent to a specific path implicitly extends cwd discipline to include the bound path. `mode.cd` binds to a project directory at session start; `mode.support` (future) pivots between mapped app paths during a support session. When the parameter is on, the bound path is treated as a transparent exception for the duration of the mode; when off, the user must add each mode-bound path to `parameters.allowedExceptionPaths` manually.
+Per `parameters.treatModeBindingsAsExceptions`, an active session mode that binds the agent to a specific path implicitly extends cwd discipline to include the bound path. `mode.cd` binds to a project directory at session start; `mode.support` pivots between mapped app paths during a support session. When the parameter is on, the bound path is treated as a transparent exception for the duration of the mode; when off, the user must add each mode-bound path to `parameters.allowedExceptionPaths` manually.
 
 ### Read-only git
 

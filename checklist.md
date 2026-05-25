@@ -55,11 +55,11 @@ Sources: Project SWT feature extraction (95 features across 3 slice files), pre-
 
 ## External integrations
 
-- [x] **tool.pr-resolution-by-branch** — Bitbucket REST lookup of the open PR for the current branch (via `integration.atlassian-suite`'s `findOpenPrForBranch`), powering the PR button's URL in the Branch Widget.
+- [x] **tool.pr-resolution-by-branch** — Bitbucket REST lookup of the open PR for the current branch, powering the PR button's URL in the Branch Widget. Folded into `integration.atlassian-suite` (provides the `findOpenPrForBranch` helper) and consumed by `mode.ticket-work` (widget PR button).
 
 ## Session modes
 
-- [ ] **mode.support** — Multi-app team support session; pivots between mapped app repos within one session.
+- [x] **mode.support** — Multi-app team support session; pivots between mapped app repos within one session; configurable appMap (keyValue with optionalValue per-app) + scriptLanguage (sql/csharp) + appScriptOverrides (per-app language override) + investigationLenses (default reproduction/code-path/regression) + pivotBehavior (accept/confirm/refuse) + knowledgeFilePerApp; proactive session-start app resolution surfaces mapped/unmapped/stale state; 3-lens parallel SWE dispatch for investigations; mid-session pivoting per configured behavior; optional Obsidian Support/<APP>.md knowledge files; mutual exclusivity with mode.cd and mode.ticket-work (ticket-work wins precedence ties).
 
 ## Mode auto-detection
 

@@ -192,7 +192,7 @@ On every write, TPM checks the existing log file and prunes entries older than `
 
 ### Sibling-Module Interaction
 
-`tool.qa-pr-learning` (to be built) is the canonical downstream consumer of this log. It reads (does not write) the log path and uses entries as training signal for QA review patterns. This module never reads the log back — it is a write-only producer from this module's perspective.
+`tool.qa-pr-learning` is the canonical downstream consumer of this log. It reads (does not write) the log path and uses entries as training signal for QA review patterns. This module never reads the log back — it is a write-only producer from this module's perspective.
 
 ## Role-Specific Notes
 

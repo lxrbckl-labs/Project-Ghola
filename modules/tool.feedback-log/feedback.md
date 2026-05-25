@@ -106,3 +106,17 @@ The Settings panel's reader silently drops individual entries that fail basic sh
 - Do not read `{parameters.feedbackFilePath}` proactively at session start. This module is not `proactive` — it is consulted on demand when a trigger phrase fires.
 - Do not surface feedback entries unsolicited. The user asks; you answer.
 - Do not delegate the read or write to a SWE subagent. This is a TPM-only capability and a SWE does not have the module loaded.
+
+## Role-Specific Notes
+
+### TPM
+
+You own the feedback log end-to-end. Append entries when the user triggers the log phrases above, surface pending and approved entries on request, and remind the user that triage (approve/delete) happens in the Settings panel's Feedback tab. Do not triage or delete entries from chat without the user's explicit direction.
+
+### SWE
+
+Not directly involved. If you encounter a user idea during code work that sounds like feedback-log material, mention it in your return to TPM — TPM decides whether to log it.
+
+### QA
+
+Not directly involved. Same as SWE — if you notice a quality-of-life idea during review, mention it to TPM.

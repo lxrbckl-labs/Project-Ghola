@@ -127,7 +127,7 @@ When fastpath detects a slow path AND `parameters.offerMigration` is true AND th
 
 ### SWE
 
-Not directly involved. This module surfaces a session-start advisory for TPM; SWE behavior is unaffected unless TPM elects to surface the migration playbook (per `tool.wsl-migrate`'s folded settings) as part of a work assignment.
+Not directly involved. This module surfaces a session-start advisory for TPM; SWE behavior is unaffected unless TPM elects to surface the migration playbook as part of a work assignment.
 
 ### QA
 
