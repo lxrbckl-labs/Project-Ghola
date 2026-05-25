@@ -15,15 +15,9 @@ The Session Manifest lists enabled modules with `id`, `contentPath`, and
 when a task hits a module's domain. Module content is **not** inlined at
 compose time.
 
-**Final five modules (post-pivot):**
-- `core.preamble` — structural preamble (hardcoded in composer, not a fragment contribution)
-- `core.tpm` — TPM role + universal hard rules
-- `core.swe` — SWE role + universal hard rules + inlined workflow modes
-- `core.qa` — QA role + universal hard rules
-- `tool.fastpath-check` — proactive WSL fast-path detection (opt-in, `proactive: true`)
-
-Cores (`core.preamble`, `core.tpm`, `core.swe`, `core.qa`) are **enabled by default**.
-`tool.fastpath-check` is **opt-in** — users toggle it on in the Modules tab.
+**Two-layer prompt architecture:**
+- **Cores** (`prompts/cores/`): `preamble.md`, `tpm.md`, `swe.md`, `qa.md` — hardcoded in the composer, always present, cannot be toggled.
+- **Modules** (`modules/`): toggleable in the Modules tab. Includes `tool.*`, `mode.*`, and `integration.*` namespaces. See `modules/` for the full set.
 
 Retired modules (do not recreate): `reference.hello-nomeda`, `tool.wsl-migrate`,
 `mode.preview`, `mode.edge-case-hunt`, `mode.review`, `mode.planning`.
@@ -34,9 +28,8 @@ Retired modules (do not recreate): `reference.hello-nomeda`, `tool.wsl-migrate`,
 - **Dev:** `npm run dev` — runs esbuild watcher concurrently; press F5 in VS Code
   to launch the Extension Development Host
 - **F5 preLaunchTask:** `"npm: build"` — defined in `.vscode/tasks.json`
-- **tasks.json** invokes builds via `wsl npm run build` / `wsl npm run watch` so
-  WSL's Linux esbuild binary is used (Windows-side VS Code preLaunch otherwise
-  fails on missing `@esbuild/win32-x64`)
+- **tasks.json** runs `npm run build` / `npm run watch` as shell commands with
+  `cwd: ${workspaceFolder}` — no `wsl` prefix needed (project runs in Remote-WSL)
 - **Fast iteration:** `Ctrl+R` inside the dev host reloads the extension after a
   rebuild; `Nomeda: Reload Modules` re-discovers modules without a full reload
 
@@ -51,6 +44,4 @@ Retired modules (do not recreate): `reference.hello-nomeda`, `tool.wsl-migrate`,
    inline module content into composed prompts.
 5. `PromptFragment.section` and `order` fields are **retired** — do not add them
    to manifests or types.
-6. Orphaned files `src/state/watcher.ts` and `src/status-bar.ts` are pending
-   user deletion; do not modify or re-wire them.
-7. Use ASCII quotes (`'` and `"`) in TypeScript / JavaScript source — never smart quotes (U+2018, U+2019, U+201C, U+201D); smart quotes break esbuild parsing. Run `bash scripts/check-smart-quotes.sh` to verify.
+6. Use ASCII quotes (`'` and `"`) in TypeScript / JavaScript source — never smart quotes (U+2018, U+2019, U+201C, U+201D); smart quotes break esbuild parsing. Run `bash scripts/check-smart-quotes.sh` to verify.
