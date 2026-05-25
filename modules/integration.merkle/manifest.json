@@ -2,7 +2,7 @@
   "id": "integration.merkle",
   "name": "Project Merkle",
   "version": "0.2.0",
-  "description": "Connect Nomeda agents to a running Project-Merkle deployment over its MCP endpoint. Agents can join an existing session, long-poll for messages, post replies, and read the shared session feed. Merkle runs independently — this module connects to it; it does not manage its lifecycle.",
+  "description": "Connects Nomeda agents to an independently running Project-Merkle deployment over its MCP endpoint so they can join a session, long-poll for messages, post replies, and read the shared feed using a configurable server URL and default team name.",
   "author": "aarbuckle",
   "proactive": false,
   "contributes": {
@@ -20,7 +20,7 @@
         "type": "string",
         "label": "Default Team Name",
         "default": "Nomeda",
-        "description": "Optional. Default team name used when joining a Merkle session. The same value appears as the author label in Merkle's chat feed. If left empty, the agent will pick a random friendly name (e.g. `clever-fox`)."
+        "description": "Optional. Default team name used when joining a Merkle session. The same value appears as the author label in Merkle's chat feed. If left empty, the agent will pick a random friendly name (e.g. clever-fox)."
       }
     }
   }

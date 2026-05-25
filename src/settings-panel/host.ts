@@ -9,6 +9,7 @@ import type { ModuleLoader } from '../modules/loader';
 import type { PromptComposer } from '../prompts/composer';
 import { syncAliasFile, validateAlias, type CliAlias } from '../session/alias-sync';
 import { resolveAgentPromptFilePath } from '../session/prompt-file';
+import { WORKSPACE_STATE_KEYS } from '../state/keys';
 import type { ConfigurationsStore } from './configurations-store';
 import {
   readLinqpadConnections,
@@ -23,8 +24,6 @@ import type {
   SettingKeywordEntry,
   WebviewToHostMessage,
 } from './protocol';
-
-const SETTINGS_KEY = 'nomeda.moduleSettings';
 
 /**
  * Module id whose Session Manifest entry receives an injected
@@ -604,7 +603,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   private postSettings(): void {
     if (!this.panel) return;
-    const values = this.context.workspaceState.get<Record<string, unknown>>(SETTINGS_KEY, {});
+    const values = this.context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
     const cfg = vscode.workspace.getConfiguration('nomeda');
     const cliCommand = cfg.get<string>('cliCommand', 'claude');
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate');
@@ -636,7 +635,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   private async saveSettings(values: Record<string, unknown>): Promise<void> {
     try {
-      await this.context.workspaceState.update(SETTINGS_KEY, values);
+      await this.context.workspaceState.update(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, values);
       this.post({ type: 'settingsSaved', ok: true });
       // Module settings changed — the modified flag may have flipped.
       this.recomputeModified();
@@ -694,7 +693,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   /** Returns the current module settings dict, keyed by `moduleId::fieldKey`. */
   private getCurrentSettings(): Record<string, Record<string, unknown>> {
-    const flat = this.context.workspaceState.get<Record<string, unknown>>(SETTINGS_KEY, {});
+    const flat = this.context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
     // Unpack `moduleId::fieldKey` → nested { moduleId: { fieldKey: value } }.
     const out: Record<string, Record<string, unknown>> = {};
     for (const [scopedKey, value] of Object.entries(flat)) {
@@ -830,14 +829,15 @@ export class SettingsPanel implements vscode.Disposable {
     }
 
     // Flatten target.settings (nested { moduleId: { fieldKey: value } }) into
-    // the `moduleId::fieldKey` shape stored in workspaceState SETTINGS_KEY.
+    // the `moduleId::fieldKey` shape stored in workspaceState under
+    // WORKSPACE_STATE_KEYS.MODULE_SETTINGS.
     const flatSettings: Record<string, unknown> = {};
     for (const [moduleId, fields] of Object.entries(target.settings)) {
       for (const [fieldKey, value] of Object.entries(fields)) {
         flatSettings[`${moduleId}::${fieldKey}`] = value;
       }
     }
-    await this.context.workspaceState.update(SETTINGS_KEY, flatSettings);
+    await this.context.workspaceState.update(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, flatSettings);
 
     await this.configurations.setActiveId(id);
     this.recomputeModified();

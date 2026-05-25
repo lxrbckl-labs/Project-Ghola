@@ -2,6 +2,8 @@
 
 When this module is loaded, the session has two parallel-lens dispatch workflows available: **Review Mode** (read-only analysis of a colleague's branch) and **Planning Mode** (analyze a fresh ticket and return plan fragments). Both follow the same dispatch shape: TPM deploys one SWE per lens, all in parallel, then aggregates the returns. Every agent reads this same fragment; role-specific framing is collected at the end.
 
+This module is **proactive**: TPM consults it at session start when the auto-detection triggers are enabled (per `parameters.autoKickReviewOnColleagueBranch` and `parameters.autoKickPlanningOnFreshBranch`) to inspect git state and potentially auto-kick Review Mode or Planning Mode before responding to the user's first request.
+
 Per the preamble's parameter-allowlist rule, the values in `parameters.reviewLenses` and `parameters.planningLenses` are the only authorized lens names for this session. The full vocabulary for each is documented in a companion keywords file (`review-lenses-keywords.json` and `planning-lenses-keywords.json` in this module's root). Read them for context, but never dispatch or assume a lens that isn't actually present in the matching parameter.
 
 ## Configurable lens sets
@@ -24,6 +26,61 @@ The two parameters are independent: an empty `reviewLenses` does not block Plann
 ### Keywords files
 
 Every keyword listed in `review-lenses-keywords.json` and `planning-lenses-keywords.json` is documented for your reference — but only the keywords ACTUALLY PRESENT in the matching parameter are authorized for this session. The full tables exist so TPM can tell the user what to enable when a task would benefit from a lens they haven't included (e.g. "this codebase has frontend churn — consider adding `accessibility` to `reviewLenses` in the Modules tab"). Never silently dispatch a lens that isn't in the parameter, even if the keywords file lists it.
+
+## Session-Start Auto-Detection Triggers
+
+At session start — before TPM responds to the user's first request — TPM inspects git state to decide whether to auto-kick Review Mode or Planning Mode without waiting for the user to ask. There are two independent triggers, each gated by its own setting (`parameters.autoKickReviewOnColleagueBranch`, `parameters.autoKickPlanningOnFreshBranch`). Both default off; nothing fires on a fresh install until the user opts in.
+
+### Review trigger
+
+When `parameters.autoKickReviewOnColleagueBranch` is true, TPM runs the following read-only commands at session start:
+
+```
+git log <base>..HEAD --format='%ae'   # authors of branch commits
+git config user.email                  # current user
+```
+
+It then applies this decision table:
+
+- **No commits ahead of base** — trigger does not fire (the planning trigger may pick this up instead).
+- **All commits by current user** — author mode; trigger does not fire.
+- **All commits by someone else** — fire: announce `Detected a review session — N commits by <author> on \`<branch>\`. Deploying lens-driven review.` and immediately dispatch the security/logic/quality lens trio per the Review Mode section below.
+- **Mixed authors** — behavior per `parameters.mixedAuthorBehavior`:
+  - `ask` — prompt the user to confirm whether this is a review session or their own work, then act on the answer.
+  - `skip` — silently treat the branch as author-mode and do not kick Review Mode.
+  - `kick` — treat any colleague commit as a review trigger and kick immediately.
+
+### Planning trigger
+
+When `parameters.autoKickPlanningOnFreshBranch` is true, TPM runs:
+
+```
+git rev-list --count <base>..HEAD     # commits ahead of base
+```
+
+If the count is `0`, TPM announces `Fresh branch detected — 0 commits ahead of \`<base>\`. Deploying lens-driven planning.` and immediately dispatches the architecture/implementation/test-strategy lens trio per the Planning Mode section below.
+
+### Base branch resolution
+
+TPM uses `parameters.triggerBaseBranch` (default `main`) as `<base>` in both trigger queries. If the branch named in that setting does not exist locally, TPM falls back to `git merge-base` inference and surfaces what it used (e.g. "triggerBaseBranch `main` not found locally — inferred base via merge-base"). If inference also fails, TPM surfaces the failure and skips both triggers for the session — it does not crash and does not block whatever the user wanted to do.
+
+### Trigger precedence
+
+The planning trigger and the review trigger are mutually exclusive in effect because they key on different git states (0 commits ahead vs. N colleague commits ahead). They cannot both fire in the same session under normal git. If both settings are on and somehow both conditions appear to apply (a logic error or an unusual git state), the planning trigger wins — fresh-branch state is more specific than mixed-author state.
+
+### What the triggers do NOT do
+
+The triggers are pure git-state observers plus a dispatch into the existing lens flows. Specifically, they do **not** modify the repo, do **not** run dotnet or build commands, and do **not** communicate with Jira or Bitbucket.
+
+### Opt-in nature
+
+Both triggers default OFF so fresh installs do not auto-kick lens dispatches without the user's deliberate opt-in. This mirrors the convention from `tool.fastpath-check`: a proactive observer is loud only when the user has explicitly opted in to its behavior.
+
+### Module-disabled vs feature-disabled
+
+- When `tool.lenses` is disabled, neither trigger runs.
+- When `tool.lenses` is enabled but both `autoKickReviewOnColleagueBranch` and `autoKickPlanningOnFreshBranch` are false, the triggers are silent — manual Review/Planning mode requests still work exactly as before.
+- When a trigger is enabled but the git state does not match its condition, the trigger silently does not fire — no announcement, no dispatch.
 
 ## Review Mode
 
@@ -156,13 +213,15 @@ Each fragment follows the template above (Files likely affected / Key decisions 
 - Deduplicate Files-likely-affected entries.
 - Collect all Open questions into a single bulleted list at the top of the plan — they often block work and the user needs to see them first.
 
-## Role-specific notes
+## Role-Specific Notes
 
 The body above applies identically to every agent. The notes below are short framings for how each role uses the policy.
 
 ### TPM
 
 You are the dispatcher: read `parameters.reviewLenses` or `parameters.planningLenses` for the requested mode and decide what to assign. Name the lens in each SWE assignment; do not delegate the choice of lens to the SWE. If the Session Manifest shows `parameters: (defaults)`, the user has not overridden the module — use the factory defaults (`reviewLenses: security, logic, quality` / `planningLenses: architecture, implementation, test-strategy`) and dispatch normally. If the relevant parameter is an explicit empty string, surface that to the user instead of dispatching — the user owns the lens set. After fan-in, do the aggregation work yourself (rating filter for Review, fragment merge for Planning) before surfacing anything to the user.
+
+At session start, after reading the proactive modules' content, run the auto-detection trigger checks per the Session-Start Auto-Detection Triggers section above. If a trigger fires, dispatch the lens trio immediately and announce per the templates in that section — do not wait for the user to ask. If both trigger settings are off, or the git state matches neither condition, proceed normally.
 
 ### SWE
 

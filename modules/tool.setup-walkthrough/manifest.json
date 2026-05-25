@@ -1,0 +1,53 @@
+{
+  "id": "tool.setup-walkthrough",
+  "name": "Setup Walkthrough",
+  "version": "0.1.0",
+  "description": "Agent-driven first-time setup playbook that walks new Nomeda users through Obsidian, Atlassian credentials, default module selection, and the SCM-sidebar widgets.",
+  "proactive": true,
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "setup-walkthrough.md" }
+    ],
+    "settings": {
+      "autoOfferOnFreshInstall": {
+        "type": "boolean",
+        "label": "Auto-Offer On Fresh Install",
+        "description": "When on, TPM detects fresh-install state at session start and offers the walkthrough proactively. When off, the user must explicitly ask (walk me through setup). On is the typical default for new users.",
+        "default": true
+      },
+      "stages": {
+        "type": "keyValue",
+        "label": "Stages",
+        "description": "User-managed list of walkthrough stages. Each entry is a stage name plus what TPM covers in that stage. Default seeds match the core Nomeda setup; reorder, add, disable individual stages without removing them.",
+        "default": {
+          "obsidian": { "value": "Confirm or set the Obsidian vault path. Walk through tool.obsidian-notes' auto-discovery toggle and the projectsSubfolder convention.", "enabled": true },
+          "atlassian": { "value": "Walk through integration.atlassian-suite credential setup — Jira email, API token in SecretStorage, Jira base URL, Bitbucket workspace.", "enabled": true },
+          "modules-default-set": { "value": "Tour the Modules tab. Highlight which modules are default-enabled and which are opt-in. Suggest the typical-workflow toggles based on whether the user does ticket work, PR review, or both.", "enabled": true },
+          "scm-widgets": { "value": "Point out the Branch Widget and Ticket Widget in the Source Control sidebar. Explain when each appears (Atlassian Suite enabled / Ticket Work mode + ticket id set).", "enabled": true },
+          "first-session": { "value": "Suggest a low-stakes first session — open a small ticket in Ticket Work mode, watch the AC extract into todos, run the pre-PR trio on a real change. The user learns by doing, not by reading.", "enabled": true }
+        },
+        "optionalValue": false,
+        "optionalEnabled": true,
+        "fullWidth": true
+      },
+      "freshInstallSignal": {
+        "type": "string",
+        "label": "Fresh Install Signal",
+        "description": "How TPM detects fresh-install state. no-prior-handoff treats the absence of any Session Handoff blocks in the Obsidian vault (or the vault not being resolved) as fresh-install. empty-feedback-log treats an empty feedback log as the signal. always-offer offers the walkthrough at every session start regardless (useful for testing). manual-only never auto-offers — only fires on explicit ask. Default no-prior-handoff is reliable when tool.obsidian-notes is enabled.",
+        "default": "no-prior-handoff"
+      },
+      "paceMode": {
+        "type": "string",
+        "label": "Pace Mode",
+        "description": "How TPM walks through the stages. interactive walks one stage at a time, waiting for user input or completion before moving on. linear walks all stages in one long output; user reads through and acts as needed. self-paced surfaces the full stage list and lets the user pick which to do first. Default interactive is the most-supportive for first-time users.",
+        "default": "interactive"
+      },
+      "completionTracking": {
+        "type": "boolean",
+        "label": "Completion Tracking",
+        "description": "When on, TPM records which stages the user completed (or skipped) so the walkthrough isn't re-offered on subsequent sessions. When off, the walkthrough re-offers based purely on the freshInstallSignal each session. On is recommended; off is for testing the walkthrough repeatedly.",
+        "default": true
+      }
+    }
+  }
+}

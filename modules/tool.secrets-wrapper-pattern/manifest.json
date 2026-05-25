@@ -1,0 +1,53 @@
+{
+  "id": "tool.secrets-wrapper-pattern",
+  "name": "Secrets Wrapper Pattern",
+  "version": "0.1.0",
+  "description": "Codifies the never-read-secrets-directly pattern — agents invoke wrapper scripts that source credentials at call time without exposing the values.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "secrets-wrapper-pattern.md" }
+    ],
+    "settings": {
+      "enforcePattern": {
+        "type": "boolean",
+        "label": "Enforce Pattern",
+        "description": "Master switch for the secrets-wrapper pattern. When on, agents refuse to read environment variables matching the configured secret patterns or to read the configured secret file paths. When off, the rule is informational only and agents may access secrets directly. Off is rarely correct.",
+        "default": true
+      },
+      "secretEnvPatterns": {
+        "type": "string",
+        "label": "Secret Env Patterns",
+        "description": "Comma-separated list of glob patterns identifying environment variables agents must NEVER read or echo. Matched case-insensitively against env var names. Add team-specific patterns; remove patterns that fire on false positives (e.g. a public API key that genuinely is not secret).",
+        "default": "*_TOKEN, *_SECRET, *_KEY, *_PASSWORD, *_PASS, *_CREDENTIAL"
+      },
+      "secretFilePaths": {
+        "type": "string",
+        "label": "Secret File Paths",
+        "description": "Comma-separated list of file path patterns agents must NEVER read directly. Wrapper scripts may read them on the agent's behalf. Environment variables in entries (e.g. ${SWT_SECRETS_PATH}) are expanded at runtime. Glob support is the same as Cwd Discipline's Allowed Exception Paths.",
+        "default": "${SWT_SECRETS_PATH}, ~/.netrc, ~/.aws/credentials, ~/.ssh/id_*, ~/.config/gh/hosts.yml"
+      },
+      "approvedWrappers": {
+        "type": "keyValue",
+        "label": "Approved Wrappers",
+        "description": "User-managed list of wrapper scripts agents may invoke to access secret-protected resources. Each entry is a script path plus a one-line description of what the wrapper handles. Wrappers source the secret at call time and never expose the value in their stdout. Add project-specific wrappers as the ecosystem grows.",
+        "default": {
+          "${SWT_DIR}/scripts/bb-curl.sh": { "value": "Bitbucket REST wrapper — sources BITBUCKET_TOKEN at call time", "enabled": true },
+          "${SWT_DIR}/scripts/lprun-query.sh": { "value": "LINQPad query wrapper — sources DB credentials via the configured connection", "enabled": true },
+          "scripts/clipboard-read.ps1": { "value": "Windows clipboard helper — no secrets but listed for consistency", "enabled": true }
+        },
+        "keyLabel": "Wrapper",
+        "valueLabel": "Description",
+        "optionalValue": false,
+        "optionalEnabled": true,
+        "fullWidth": true
+      },
+      "onViolation": {
+        "type": "string",
+        "label": "On Violation",
+        "description": "How agents respond when they would otherwise read a secret-shaped env var, file path, or echo a secret value. refuse blocks the action and surfaces the violation. log-only allows the action but emits a warning. ask prompts the user to confirm. Default refuse is the safest discipline.",
+        "default": "refuse"
+      }
+    }
+  }
+}

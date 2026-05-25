@@ -66,7 +66,17 @@ Include the exact query you ran, the connection name you targeted (the **value**
 
 If you are unsure whether a query is read-only, whether a connection name is on the allowlist, or what the host's query runner path is — ask TPM rather than guessing.
 
-## Role-specific notes
+## Module-disabled vs allowlist-empty
+
+These are distinct failure modes:
+
+- **Module disabled** (no `tool.database-access` in the Session Manifest): the universal hard rules apply with no database-specific protections — no LINQPad invocations are sanctioned by this module, and agents fall back to whatever universal posture exists. Surface to TPM if the user appears to expect database-aware behavior.
+- **Module enabled but `allowlist` empty**: the agent must refuse every LINQPad query attempt with: "Cannot run query against the database — this module's `allowlist` has no connection entries, so all DB operations are refused. Add a connection in the Modules tab or run the query manually."
+- **Module enabled, connection requested not in allowlist**: refuse with: "Cannot query `<connection>` — it is not in this module's `allowlist`. Add it in the Modules tab if you need it for this session."
+
+Do not merge these cases.
+
+## Role-Specific Notes
 
 The body above applies identically to every agent. The notes below are short framings for how each role uses the policy.
 

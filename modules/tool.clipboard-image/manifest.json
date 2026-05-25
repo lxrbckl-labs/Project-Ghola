@@ -1,0 +1,44 @@
+{
+  "id": "tool.clipboard-image",
+  "name": "Clipboard Image",
+  "version": "0.1.0",
+  "description": "Reads images from the Windows clipboard via a PowerShell helper so TPM can pass user screenshots to Claude Vision.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "clipboard-image.md" }
+    ],
+    "settings": {
+      "scriptPath": {
+        "type": "string",
+        "label": "Script Path",
+        "description": "Filesystem path to the PowerShell helper that reads the clipboard image and writes it to a temp file. Default points at the bundled script. Customize when the helper lives outside the extension install path (e.g. a workspace-local copy) — the path is resolved relative to the repo root if not absolute. The helper is expected to print the absolute path of the written temp file as its only stdout line.",
+        "default": "scripts/clipboard-read.ps1"
+      },
+      "tempFileDir": {
+        "type": "string",
+        "label": "Temp File Directory",
+        "description": "Directory the PowerShell helper writes clipboard images into. Empty defers to the OS default temp directory (typically %TEMP% on Windows or /tmp on WSL). Override for projects where temp files should land in a specific area for cleanup or sandboxing. The helper invokes the configured directory; no path translation happens here.",
+        "default": ""
+      },
+      "autoReadOnTriggerPhrase": {
+        "type": "boolean",
+        "label": "Auto-Read On Trigger Phrase",
+        "description": "When on, TPM proactively runs the helper when the user says any phrase matching the Trigger Phrases list. When off, TPM only runs the helper when the user explicitly asks. On is the typical default for users who paste screenshots into the conversation by reference rather than attachment.",
+        "default": true
+      },
+      "triggerPhrases": {
+        "type": "string",
+        "label": "Trigger Phrases",
+        "description": "Comma-separated list of substring patterns that TPM watches for in user turns to auto-run the clipboard helper. Matched case-insensitively. Add team-specific phrases; remove patterns that fire on false positives. Has no effect when Auto-Read On Trigger Phrase is off.",
+        "default": "look at my clipboard, check my clipboard, check this screenshot, see my clipboard, here is a screenshot, paste my screenshot, image in my clipboard"
+      },
+      "includePathInSweAssignments": {
+        "type": "boolean",
+        "label": "Include Path In SWE Assignments",
+        "description": "When on, TPM includes the absolute path of any clipboard image read this session in SWE assignment text when the assignment's task is informed by what the screenshot showed. When off, TPM describes the screenshot's content in prose only and does not pass the path. On lets the SWE re-read the image if a visual confirmation is needed; off keeps SWE assignments path-free at the cost of forcing TPM to be the only visual interpreter.",
+        "default": true
+      }
+    }
+  }
+}

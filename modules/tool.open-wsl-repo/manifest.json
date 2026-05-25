@@ -1,0 +1,44 @@
+{
+  "id": "tool.open-wsl-repo",
+  "name": "Open WSL Repo",
+  "version": "0.1.0",
+  "description": "Resolves a name or partial path to a WSL-native repo and surfaces the command to open it in Windows VS Code.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "open-wsl-repo.md" }
+    ],
+    "settings": {
+      "searchRoots": {
+        "type": "string",
+        "label": "Search Roots",
+        "description": "Comma-separated list of directories under which TPM searches for a matching repo name. First match wins. Add or trim to match your conventions; if all your repos live under one root, set just that one.",
+        "default": "~/projects, ~/src, ~/code, ~/workspace"
+      },
+      "fuzzyMatch": {
+        "type": "boolean",
+        "label": "Fuzzy Match",
+        "description": "When on, TPM treats the user's input as a partial match against directory basenames (case-insensitive substring). When off, requires an exact basename match. On is the typical default for ergonomic navigation.",
+        "default": true
+      },
+      "openCommand": {
+        "type": "string",
+        "label": "Open Command",
+        "description": "Command TPM surfaces for opening the resolved path. code uses the Windows VS Code via the WSL code shim. code-insiders for VS Code Insiders. cursor for the Cursor editor. Set to any command name that accepts a path arg. The command itself runs in the user's shell after they confirm.",
+        "default": "code"
+      },
+      "triggerPhrases": {
+        "type": "string",
+        "label": "Trigger Phrases",
+        "description": "Comma-separated list of substring patterns TPM watches for. Matched case-insensitively. Tune to fit phrasing patterns.",
+        "default": "open repo, open in vscode, take me to, open project, switch to repo"
+      },
+      "onMultipleMatches": {
+        "type": "string",
+        "label": "On Multiple Matches",
+        "description": "When the fuzzy match returns multiple candidates. ask presents the list and lets the user pick. first silently takes the first match (by search-root order). refuse responds with ambiguous match — be more specific. Default ask is the safest.",
+        "default": "ask"
+      }
+    }
+  }
+}

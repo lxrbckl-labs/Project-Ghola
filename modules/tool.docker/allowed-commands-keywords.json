@@ -1,0 +1,18 @@
+[
+  { "keyword": "ps", "purpose": "List running containers." },
+  { "keyword": "images", "purpose": "List local images." },
+  { "keyword": "logs", "purpose": "Tail container logs." },
+  { "keyword": "inspect", "purpose": "Inspect container or image metadata." },
+  { "keyword": "exec", "purpose": "Execute a command in a running container." },
+  { "keyword": "build", "purpose": "Build an image from a Dockerfile. Side effect: writes to local image store." },
+  { "keyword": "pull", "purpose": "Pull an image from a registry." },
+  { "keyword": "push", "purpose": "Push an image to a registry. Side effect: writes to remote registry." },
+  { "keyword": "run", "purpose": "Run a new container. May have side effects (volumes, networks, ports)." },
+  { "keyword": "stop", "purpose": "Stop a running container." },
+  { "keyword": "rm", "purpose": "Remove a container. Destructive." },
+  { "keyword": "rmi", "purpose": "Remove a local image. Destructive." },
+  { "keyword": "compose up", "purpose": "Start the compose stack defined by docker-compose.yml." },
+  { "keyword": "compose down", "purpose": "Stop and remove the compose stack." },
+  { "keyword": "compose logs", "purpose": "Tail compose service logs." },
+  { "keyword": "compose ps", "purpose": "List compose services." }
+]

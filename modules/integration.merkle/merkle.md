@@ -70,7 +70,7 @@ Environment variables consumed by the script:
 - **Heartbeat via long-poll is mandatory for sustained presence.** Quiet gaps >5 minutes mark the participant as `disconnected` server-side (auto-recovers on the next call, but generates feed noise).
 - **The MCP server must exist before agents try to use it.** Nomeda does not start or stop Merkle. Connection errors from `join_session` (refused, timeout, non-200) surface to the user as a one-sentence error pointing at `parameters.serverBaseUrl`.
 
-## Role-specific notes
+## Role-Specific Notes
 
 ### TPM
 

@@ -1,4 +1,4 @@
-# npm Suite
+# NPM Suite
 
 When this module is loaded, the work repo is treated as an npm + Angular CLI codebase. This module grants `npm` and `ng` CLI capability through a user-managed command allowlist and applies built-in protections on top of the universal hard rules — they extend them, they never relax them. Every agent reads this same fragment; role-specific framing is collected at the end.
 
@@ -59,7 +59,7 @@ These are distinct failure modes and must use distinct messages:
 
 Do not merge these two cases.
 
-## Role-specific notes
+## Role-Specific Notes
 
 The body above applies identically to every agent. The notes below are short framings for how each role uses the policy.
 

@@ -1,0 +1,47 @@
+{
+  "id": "tool.session-bootstrap",
+  "name": "Session Bootstrap",
+  "version": "0.1.0",
+  "description": "Orchestrates the session-start sequence — config load, team allocation, branch detection, proactive-module consultation, ready signal — and renders the user-facing boot diagnostics.",
+  "proactive": true,
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "session-bootstrap.md" }
+    ],
+    "settings": {
+      "steps": {
+        "type": "keyValue",
+        "label": "Steps",
+        "description": "User-managed list of session-start steps TPM runs in order before responding to the first user message. Each entry is a step name plus a one-line description of what the step does. Default seeds match the SWT 5-step convention. Reorder by editing the kv-table; add custom steps for project-specific boot work; disable individual steps without deleting them.",
+        "default": {
+          "config-load": { "value": "Read swt_settings.json (or equivalent) and surface the active configuration.", "enabled": true },
+          "team-allocation": { "value": "Compute performance / efficiency / QA core counts and surface the team shape.", "enabled": true },
+          "branch-detection": { "value": "Detect the active git branch and base; cache for downstream proactive modules.", "enabled": true },
+          "proactive-modules": { "value": "Consult every enabled proactive module in turn (fastpath-check, obsidian-notes, session-handoff, setup-walkthrough, active session mode (mode.cd or mode.ticket-work), lenses auto-detection triggers). Each module's session-start work runs here.", "enabled": true },
+          "ready": { "value": "Emit a single 'Ready' line signaling the boot phase is complete before responding to the first user message.", "enabled": true }
+        },
+        "optionalValue": false,
+        "optionalEnabled": true,
+        "fullWidth": true
+      },
+      "outputFormat": {
+        "type": "string",
+        "label": "Output Format",
+        "description": "Format for the user-facing boot diagnostics line(s). swt-style emits [swt] check step-name — detail per step, matching the SWT precedent. compact emits a single line summarizing the full boot phase. silent emits nothing (steps still run, but the user sees only TPM's first response). Default swt-style is the most informative.",
+        "default": "swt-style"
+      },
+      "failureBehavior": {
+        "type": "string",
+        "label": "Failure Behavior",
+        "description": "How TPM responds when a step fails (e.g., a proactive module errors, config file is missing). warn-and-continue emits a warning marker for the failed step and proceeds with subsequent steps. halt stops the boot sequence and refuses to respond until the user addresses the failure. retry-once attempts the failed step a second time before falling back to warn-and-continue. Default warn-and-continue keeps sessions usable in degraded states.",
+        "default": "warn-and-continue"
+      },
+      "includeTimings": {
+        "type": "boolean",
+        "label": "Include Timings",
+        "description": "When on, each step's elapsed time is appended to the boot diagnostics line (e.g. [swt] check proactive-modules — 312ms). Useful for diagnosing slow boots. When off, no timings are shown. Off is the typical default for normal use; turn on temporarily when investigating slow startups.",
+        "default": false
+      }
+    }
+  }
+}

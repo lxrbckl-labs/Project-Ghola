@@ -1,0 +1,48 @@
+{
+  "id": "tool.cwd-discipline",
+  "name": "Cwd Discipline",
+  "version": "0.1.0",
+  "description": "Enforces that agents stay in the user's current working directory by default, with explicit exceptions for notes, settings, mode-driven bindings, and user redirects.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "cwd-discipline.md" }
+    ],
+    "settings": {
+      "enforceDiscipline": {
+        "type": "boolean",
+        "label": "Enforce Discipline",
+        "description": "Master switch for the stay-in-cwd discipline. When on, agents refuse to operate on paths outside cwd unless one of the configured exceptions applies. When off, agents may freely read/write any path the OS permits. Off is rarely correct outside controlled environments.",
+        "default": true
+      },
+      "allowedExceptionPaths": {
+        "type": "keyValue",
+        "label": "Allowed Exception Paths",
+        "description": "User-managed list of absolute paths or path patterns agents are permitted to access even when they sit outside cwd. Each entry is a path plus a one-line rationale. Add project-specific exceptions (e.g. a shared config dir, a downstream service repo); leave default seeds in place for the typical Obsidian/settings/script paths.",
+        "default": {
+          "${SWT_OBSIDIAN_PATH}/**": { "value": "Obsidian vault writes via tool.obsidian-notes", "enabled": true },
+          "${SWT_SETTINGS_PATH}": { "value": "Unified settings file at the SWT settings path", "enabled": true },
+          "${SWT_SECRETS_PATH}": { "value": "Read-only access to the secrets file (never logged or echoed)", "enabled": true },
+          "${SWT_DIR}/scripts/**": { "value": "Bundled SWT helper scripts (lprun-query, clipboard-read, etc.)", "enabled": true }
+        },
+        "keyLabel": "Path",
+        "valueLabel": "Rationale",
+        "optionalValue": false,
+        "optionalEnabled": true,
+        "fullWidth": true
+      },
+      "onRedirectMidSession": {
+        "type": "string",
+        "label": "On Redirect Mid-Session",
+        "description": "How TPM responds when the user verbally redirects the session to a different path mid-session (let's look at /other/path). accept treats the new path as in-scope for the remainder of the session without challenge. confirm prompts the user to confirm the redirect once before treating the path as in-scope. refuse blocks the redirect entirely and requires the user to disable cwd discipline. Default accept matches the existing universal posture.",
+        "default": "accept"
+      },
+      "treatModeBindingsAsExceptions": {
+        "type": "boolean",
+        "label": "Treat Mode Bindings As Exceptions",
+        "description": "When on, an active session mode that binds the agent to a specific path (mode.cd binds to a project dir; mode.support binds per-app) implicitly extends cwd discipline to include the bound path. When off, mode bindings do not relax cwd discipline and the user must add each mode-bound path to Allowed Exception Paths manually. On is the typical default; off is for projects that want strict cwd-only.",
+        "default": true
+      }
+    }
+  }
+}

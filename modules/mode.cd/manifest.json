@@ -1,0 +1,38 @@
+{
+  "id": "mode.cd",
+  "name": "Directory Navigation",
+  "version": "0.1.0",
+  "description": "Scopes the session strictly to the current working directory as a named project, resisting drift to other paths and surfacing the project's latest handoff on resume.",
+  "proactive": true,
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "cd-mode.md" }
+    ],
+    "settings": {
+      "redirectStrictness": {
+        "type": "string",
+        "label": "Redirect Strictness",
+        "description": "Controls how TPM responds when the user references a path outside the bound project's cwd. Set to ask to confirm before treating the new path as in-scope (the SWT default), hard-block to refuse any redirect until this mode is disabled, or soft-warn to warn once and proceed. Higher strictness keeps the session focused on the bound project; lower strictness reduces friction at the cost of drift.",
+        "default": "ask"
+      },
+      "projectNoteSections": {
+        "type": "string",
+        "label": "Project Note Sections",
+        "description": "Comma-separated list of top-level sections the project notes file should contain, in the order TPM writes them when creating or updating the file. Trim entries you do not use or extend with custom sections to taste. Note that Session Handoff in this list is the heading the tool.session-handoff module manages — Directory Navigation mode ensures the heading exists but defers the writing of that block to that module.",
+        "default": "Project Overview, Sessions, Decisions, Open Questions, Session Handoff"
+      },
+      "autoCreateNotesFile": {
+        "type": "boolean",
+        "label": "Auto Create Notes File",
+        "description": "When on, TPM auto-creates the project notes file at the vault's projects subfolder keyed by the cwd basename on first run if it does not exist. When off, TPM only reads existing files and surfaces a one-line notice when the project has no notes yet. Leave on for low-friction onboarding; turn off if you prefer to create project notes files by hand.",
+        "default": true
+      },
+      "projectNameSource": {
+        "type": "string",
+        "label": "Project Name Source",
+        "description": "Controls how TPM derives the project name at session start. Set to cwd-basename to use the cwd's directory name (the SWT default and the predictable choice), or git-remote to use the basename of the current git remote origin when the cwd is a git repo. When git-remote is set and the cwd is not a git repo or the remote lookup fails, TPM falls back to cwd-basename silently.",
+        "default": "cwd-basename"
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tool.docker",
+  "name": "Docker",
+  "version": "0.2.0",
+  "description": "Grants agents docker and docker-compose CLI capability through an allowlist, plus protections for Dockerfile and docker-compose.yml.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "docker.md" }
+    ],
+    "settings": {
+      "allowedCommands": {
+        "type": "string",
+        "label": "Allowed Docker Subcommands",
+        "description": "Comma-separated list of docker subcommands the agents may run. Entries are the subcommand only (e.g. ps, images, logs). Multi-word entries are supported for nested commands (e.g. compose up, compose down). Default empty means no docker commands allowed.",
+        "default": "",
+        "keywordsPath": "allowed-commands-keywords.json",
+        "multiSelect": true,
+        "fullWidth": true,
+        "selectColumnLabel": "Enabled"
+      },
+      "wslEngineGuide": {
+        "type": "boolean",
+        "label": "WSL Engine Guide",
+        "description": "When on, TPM surfaces the native Docker Engine install steps for WSL2 Ubuntu when the user appears to be on WSL but no docker binary is reachable. When off, TPM silently assumes docker is configured. On is the typical default for WSL users.",
+        "default": true
+      },
+      "engineSocketCheck": {
+        "type": "boolean",
+        "label": "Engine Socket Check",
+        "description": "When on, TPM verifies the Docker daemon socket is reachable (typically /var/run/docker.sock or the user's DOCKER_HOST) before attempting any docker invocation. When off, TPM tries the command and lets it fail. On surfaces clearer error messages; off shaves a probe per invocation.",
+        "default": true
+      }
+    }
+  }
+}

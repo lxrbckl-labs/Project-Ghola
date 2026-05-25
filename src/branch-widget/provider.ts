@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { AtlassianBridge } from '../extension';
 import { AtlassianClient } from '../integration/atlassian-client';
+import { WORKSPACE_STATE_KEYS } from '../state/keys';
 import {
   buildBitbucketBranchUrl,
   buildTicketUrl,
@@ -8,15 +9,6 @@ import {
   extractBitbucketWorkspace,
   extractTicketKey,
 } from './url-builder';
-
-/**
- * Workspace-state key under which the Settings panel persists flattened
- * module settings as `{ "moduleId::fieldKey": value }`. Mirrors the constant
- * in `src/settings-panel/host.ts` and `src/session/launcher.ts`; we duplicate
- * it here (rather than importing) because the provider sits one directory
- * below and a cross-cut import would force a wider refactor.
- */
-const MODULE_SETTINGS_KEY = 'nomeda.moduleSettings';
 
 /** Module id this widget draws its configuration from. */
 const ATLASSIAN_MODULE_ID = 'integration.atlassian-suite';
@@ -512,7 +504,7 @@ export class BranchWidgetProvider implements vscode.WebviewViewProvider {
    * Jira base for URL construction even on first load.
    */
   private readModuleSetting<T>(fieldKey: string, defaultValue: T): T {
-    const flat = this.context.workspaceState.get<Record<string, unknown>>(MODULE_SETTINGS_KEY, {});
+    const flat = this.context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
     const v = flat[`${ATLASSIAN_MODULE_ID}::${fieldKey}`];
     if (typeof v === typeof defaultValue && v !== null) {
       // For string fields, prefer the host resolver when the stored value is

@@ -1,7 +1,7 @@
 {
   "id": "tool.fastpath-check",
   "name": "Fast Path Check",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "description": "Advises TPM at session start when the workspace lives on a slow /mnt/c/... path so the user can move to a WSL-native location for faster I/O.",
   "proactive": true,
   "contributes": {
@@ -19,6 +19,24 @@
         "type": "boolean",
         "label": "Workspace Repository Resolution",
         "description": "Opens the terminal in your repo's matching subdirectory under Fast Path Directory when it exists. Falls back to the Fast Path Directory itself when there's no match or this is off.",
+        "default": true
+      },
+      "offerMigration": {
+        "type": "boolean",
+        "label": "Offer Migration",
+        "description": "When on, TPM offers to walk the user through migrating the workspace from /mnt/c/... to ~/projects/... when a slow path is detected. When off, TPM only emits the original detect-and-advise message without offering the migration playbook. On is the typical default for users who want help with the move.",
+        "default": true
+      },
+      "migrationStrategy": {
+        "type": "string",
+        "label": "Migration Strategy",
+        "description": "Strategy TPM uses for the migration playbook. clone uses git clone of the remote into the new path (cleanest; works for tracked-only state). rsync uses rsync to copy the working tree including uncommitted changes (preserves dirty state, slower). ask prompts the user to choose per migration. Default clone is the typical safe choice when the working tree is committed.",
+        "default": "clone"
+      },
+      "postMigrationChecks": {
+        "type": "boolean",
+        "label": "Post-Migration Checks",
+        "description": "When on, TPM walks the user through post-migration sanity checks (npm install in the new path, run build, confirm git remote, confirm uncommitted changes preserved if rsync was used). When off, migration ends after the copy step. On is recommended.",
         "default": true
       }
     }

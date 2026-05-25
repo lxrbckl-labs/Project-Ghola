@@ -56,7 +56,7 @@ These are distinct failure modes and must use distinct messages:
 
 Do not merge these two cases.
 
-## Role-specific notes
+## Role-Specific Notes
 
 The body above applies identically to every agent. The notes below are short framings for how each role uses the policy.
 

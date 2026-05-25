@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
 import type { ModuleHandle } from '../modules/handle';
+import { WORKSPACE_STATE_KEYS } from '../state/keys';
 import { formatBanner } from './banner';
 import { resolveAgentPromptFilePath } from './prompt-file';
 
@@ -15,9 +16,6 @@ import { resolveAgentPromptFilePath } from './prompt-file';
  * user's hardware, surface this as a configurable setting in a follow-up.
  */
 const CLI_BOOT_DELAY_MS = 3000;
-
-/** Workspace-state key where the panel persists flat `moduleId::fieldKey` values. */
-const MODULE_SETTINGS_KEY = 'nomeda.moduleSettings';
 
 /** Module id whose enablement gates the WSL fast-path `cd`. */
 const FASTPATH_MODULE_ID = 'tool.fastpath-check';
@@ -238,7 +236,7 @@ export class SessionLauncher {
    * stay in sync without depending on the panel.
    */
   private readModuleSetting(moduleId: string, fieldKey: string): unknown {
-    const flat = this.workspaceState.get<Record<string, unknown>>(MODULE_SETTINGS_KEY, {});
+    const flat = this.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
     return flat[`${moduleId}::${fieldKey}`];
   }
 

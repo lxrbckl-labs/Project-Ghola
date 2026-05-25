@@ -959,8 +959,17 @@ function renderModuleRow(m: ModuleSummary): HTMLElement {
     textZone.appendChild(textEl('div', m.description, 'desc'));
   }
   // Agent badges below description — shows which agents this module targets.
-  const rowBadges = renderAgentBadges(m.targets ?? []);
+  // Proactive pill (when set) renders as a sibling inside this same row so the
+  // list view mirrors the detail view's badge layout / spacing / treatment.
+  const rowBadges =
+    renderAgentBadges(m.targets ?? []) ??
+    (m.proactive ? el('div', { class: 'agent-badges' }) : null);
   if (rowBadges) {
+    if (m.proactive) {
+      const pill = el('span', { class: 'proactive-pill' });
+      pill.textContent = 'Proactive';
+      rowBadges.appendChild(pill);
+    }
     textZone.appendChild(rowBadges);
   }
   row.appendChild(textZone);
@@ -1587,21 +1596,23 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
   );
   container.appendChild(header);
 
-  // Proactive pill — small badge near the top.
-  if (m.proactive) {
-    const pill = el('span', { class: 'proactive-pill' });
-    pill.textContent = 'Proactive';
-    container.appendChild(pill);
-  }
-
   // Description block.
   if (m.description) {
     container.appendChild(textEl('div', m.description, 'desc'));
   }
 
   // Agent-target badge row — at-a-glance summary of which agents this module impacts.
-  const agentBadges = renderAgentBadges(m.contributes?.promptFragments ?? []);
+  // The Proactive pill (when set) renders as a sibling inside this same row so all
+  // module badges share one layout / spacing / visual treatment.
+  const agentBadges =
+    renderAgentBadges(m.contributes?.promptFragments ?? []) ??
+    (m.proactive ? el('div', { class: 'agent-badges' }) : null);
   if (agentBadges) {
+    if (m.proactive) {
+      const pill = el('span', { class: 'proactive-pill' });
+      pill.textContent = 'Proactive';
+      agentBadges.appendChild(pill);
+    }
     container.appendChild(agentBadges);
   }
 

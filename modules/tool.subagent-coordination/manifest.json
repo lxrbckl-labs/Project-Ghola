@@ -1,0 +1,44 @@
+{
+  "id": "tool.subagent-coordination",
+  "name": "Subagent Coordination",
+  "version": "0.1.0",
+  "description": "Codifies the file-ownership statements and parallel-SWE dispatch discipline TPM uses to coordinate concurrent subagents without collisions.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "subagent-coordination.md" }
+    ],
+    "settings": {
+      "requireFileOwnership": {
+        "type": "boolean",
+        "label": "Require File Ownership",
+        "description": "When on, TPM MUST include explicit file-ownership statements in every parallel SWE assignment (e.g. SWE-1 owns src/auth/; SWE-2 owns src/api/; disjoint). When off, parallel dispatches are allowed without ownership declarations (NOT recommended — risks file-collision). On is the safer default.",
+        "default": true
+      },
+      "allowSharedFileWrites": {
+        "type": "boolean",
+        "label": "Allow Shared File Writes",
+        "description": "When on, multiple parallel SWEs may be assigned the same file. When off, file ownership is strictly disjoint — at most one SWE writes any given file per dispatch. Off prevents merge conflicts; on is for rare cases where multiple SWEs genuinely need to coordinate edits to one file (and the user has approved the risk).",
+        "default": false
+      },
+      "lensAutoMergeBelowCores": {
+        "type": "number",
+        "label": "Lens Auto-Merge Below Cores",
+        "description": "When the lens-driven workflows (Review Mode, Planning Mode via tool.lenses) would require more concurrent SWEs than the configured performance + efficiency cores allow, TPM auto-merges lens count down to fit. This setting is the threshold below which auto-merge kicks in (e.g. 3 means: if available cores < 3, merge lenses). Default 3 matches the canonical security/logic/quality and architecture/implementation/test-strategy trios.",
+        "default": 3
+      },
+      "coordinationStyle": {
+        "type": "string",
+        "label": "Coordination Style",
+        "description": "How TPM splits work across parallel SWEs. split-by-file assigns each SWE a distinct file or directory (cleanest, lowest collision risk). split-by-module assigns each SWE a distinct module folder (good for module-shaped work). split-by-feature assigns each SWE a distinct feature thread (acceptable when features map cleanly to file boundaries). Default split-by-file is the safest.",
+        "default": "split-by-file"
+      },
+      "reportCollisions": {
+        "type": "boolean",
+        "label": "Report Collisions",
+        "description": "When on, TPM reports any file-collision warning it observes during parallel dispatch (e.g. two SWEs both modified the same file despite ownership declaration). When off, collisions are silently merged or the latter write wins. On is the safer default; off only for fully-controlled scripted workflows.",
+        "default": true
+      }
+    }
+  }
+}

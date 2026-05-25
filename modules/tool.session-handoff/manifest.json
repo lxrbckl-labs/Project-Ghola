@@ -1,0 +1,38 @@
+{
+  "id": "tool.session-handoff",
+  "name": "Session Handoff",
+  "version": "0.1.0",
+  "description": "Captures structured session wrap-ups in the project or ticket notes and surfaces the latest one when TPM resumes.",
+  "proactive": true,
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "session-handoff.md" }
+    ],
+    "settings": {
+      "wrapUpTrigger": {
+        "type": "string",
+        "label": "Wrap Up Trigger",
+        "description": "Controls when TPM proposes writing a session handoff. Set to manual to only act on explicit user signals like wrap up, we are done, or ttyl. Set to auto-on-quiet to also let TPM proactively propose a handoff when the conversation appears to have gone stale. Either way, TPM always proposes before writing — it never persists a handoff silently.",
+        "default": "manual"
+      },
+      "surfaceOnResume": {
+        "type": "boolean",
+        "label": "Surface On Resume",
+        "description": "When on, TPM reads the active notes file at session start, locates the most-recent Session Handoff block, and tells the user where the previous session left off before responding to the first request. When off, no resume surfacing happens but wrap-up writes still work normally per the Wrap Up Trigger. Turn off if you prefer to drive resumes yourself.",
+        "default": true
+      },
+      "sectionsToInclude": {
+        "type": "string",
+        "label": "Sections To Include",
+        "description": "Comma-separated list of sub-sections written under each Session Handoff block, in the order listed. Trim to drop sections you never use (e.g. remove blockers if your work rarely has them) or extend to add custom ones. Order in this list is the order TPM writes the sections.",
+        "default": "completed, in-progress, pending, decisions, blockers"
+      },
+      "dateFormat": {
+        "type": "string",
+        "label": "Date Format",
+        "description": "Format string for the date shown in each Session Handoff heading. Default YYYY-MM-DD is ISO-style and groups by day. Use YYYY-MM-DD HH:MM if you want finer granularity when multiple handoffs land on the same date.",
+        "default": "YYYY-MM-DD"
+      }
+    }
+  }
+}

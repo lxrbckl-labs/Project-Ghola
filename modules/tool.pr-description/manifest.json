@@ -1,0 +1,44 @@
+{
+  "id": "tool.pr-description",
+  "name": "PR Description",
+  "version": "0.1.0",
+  "description": "Generates a PR description from session changes, strictly two sentences, plain language, no double-dashes, ticket-aware when ticket-work mode is active.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "pr-description.md" }
+    ],
+    "settings": {
+      "maxSentences": {
+        "type": "number",
+        "label": "Max Sentences",
+        "description": "Hard cap on the length of the generated PR description. Two sentences is the team default that keeps descriptions scannable and forces TPM to compress instead of ramble. Raise it for projects where richer context is expected; lower it (to 1) for terse-style teams.",
+        "default": 2
+      },
+      "format": {
+        "type": "string",
+        "label": "Format",
+        "description": "Template shape for the generated description. ticket-then-what-then-why prepends the ticket id when ticket-work mode is active and writes one sentence describing what changed followed by one sentence on impact. what-then-why omits the ticket prefix entirely (useful for unscoped or CD-mode work). bullet uses one short paragraph plus a 2-3 bullet change summary, more verbose but easier for reviewers to skim. The agent always respects the Max Sentences cap regardless of format.",
+        "default": "ticket-then-what-then-why"
+      },
+      "bannedTokens": {
+        "type": "string",
+        "label": "Banned Tokens",
+        "description": "Comma-separated list of token sequences that must NEVER appear in the generated description. The default forbids ASCII double-dashes (which CodeRabbit flags), em-dash-with-hyphen-prefix, and the common '-- ' misuse. The agent scans every draft for these tokens and rewrites them before presenting the result to the user.",
+        "default": "--, -—, -- "
+      },
+      "includeChangeSummary": {
+        "type": "boolean",
+        "label": "Include Change Summary",
+        "description": "When on, the generated description appends a short bullet-list of the most significant files changed. Useful for reviewers who want at-a-glance file context before diving into the diff. Off keeps the description strictly to the configured Max Sentences. Has no effect when Format is bullet (which already includes the summary by construction).",
+        "default": false
+      },
+      "autoOfferOnSignal": {
+        "type": "boolean",
+        "label": "Auto-Offer On Signal",
+        "description": "When on, TPM proactively offers to generate a PR description after the pre-PR checklist completes (or when the user signals PR readiness without running the checklist). When off, TPM only generates the description when the user explicitly asks. On is the typical flow where the description is the next gesture after the checklist passes.",
+        "default": true
+      }
+    }
+  }
+}

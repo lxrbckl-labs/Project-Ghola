@@ -548,7 +548,7 @@ button.module-row-chevron:focus-visible {
   font-size: 13px;
 }
 
-.module-detail .proactive-pill {
+.proactive-pill {
   display: inline-block;
   align-self: flex-start;
   padding: 2px 8px;

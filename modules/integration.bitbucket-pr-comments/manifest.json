@@ -1,8 +1,8 @@
 {
   "id": "integration.bitbucket-pr-comments",
   "name": "PR Monitor",
-  "version": "0.1.14",
-  "description": "Fetch open Bitbucket PR review comments, triage them, deploy SWEs to fix the code, and post generated replies. Depends on integration.atlassian-suite for credentials.",
+  "version": "0.3.0",
+  "description": "Owns the Bitbucket PR review-comment workflow — addressing inbound comments via the address ordinal grammar, posting Review Mode findings outbound via the post ordinal grammar, optionally logging every comment to a persistent JSON file for downstream learning, and reusing Atlassian Suite credentials.",
   "author": "aarbuckle",
   "contributes": {
     "promptFragments": [
@@ -26,6 +26,61 @@
         "label": "Flag Falsely-Resolved Comments",
         "default": true,
         "description": "When on, the agent scans PR comments whose body claims the issue is resolved (e.g., 'resolved', 'fixed', 'done') but which Bitbucket still marks as unresolved, and surfaces them for review. It does not auto-resolve anything."
+      },
+      "postOrdinalsEnabled": {
+        "type": "boolean",
+        "label": "Post Ordinals Enabled",
+        "default": true,
+        "description": "Enables the post <ordinals> verb for publishing selected SWE Review Mode findings as inline Bitbucket PR comments. When off, the inbound address <ordinals> verb still works but outbound posting is refused. On is the typical setting for active code reviewers who want a one-step publish for triaged findings."
+      },
+      "postPolishPrompt": {
+        "type": "string",
+        "label": "Post Polish Prompt",
+        "multiline": true,
+        "default": "Polish this SWE finding into a 1-2 sentence professional PR comment. Drop hedging language, keep the specific file:line reference, and avoid double-dashes.",
+        "description": "The instruction TPM applies when polishing a raw SWE finding into a PR-ready comment. Default produces concise, file-line-anchored comments without hedging or double-dashes. Customize per-team to match reviewer conventions (more formal, less formal, specific tone)."
+      },
+      "minRatingToPost": {
+        "type": "number",
+        "label": "Min Rating To Post",
+        "default": 1,
+        "description": "Minimum Rating field a SWE Review Mode finding must carry to be posted. Findings rated below this threshold are excluded from post all and post all <lens> selections; they can still be posted by explicit ordinal. Default 1 includes everything. Raise to 3 to filter to should-fix-or-worse, or 4 to filter to critical-only."
+      },
+      "postCommentLocation": {
+        "type": "string",
+        "label": "Post Comment Location",
+        "default": "inline-when-possible",
+        "description": "Where the comment lands on the PR. inline-when-possible places the comment at the file:line cited in the finding when one is parseable, falling back to the PR overview otherwise. inline-only refuses to post if no file:line is parseable. overview-only always posts to the PR overview, useful for summary-level findings that don't anchor cleanly. Default favors inline placement to keep reviewer context."
+      },
+      "requireUserApproval": {
+        "type": "boolean",
+        "label": "Require User Approval",
+        "default": true,
+        "description": "When on, TPM presents the polished findings for user approval before posting (the user types ok, revise N: <change>, or cancel). When off, TPM posts immediately after polishing — faster but no safety gate. On is strongly recommended; the off path exists only for scripted bulk workflows."
+      },
+      "logCommentsEnabled": {
+        "type": "boolean",
+        "label": "Log Comments Enabled",
+        "default": false,
+        "description": "Enables persistent logging of every PR comment fetched during the address or post workflow to a JSON file. Useful as historical data for downstream consumers (e.g. tool.qa-pr-learning, manual review). Off keeps comments in session memory only. Default off so first-run installs do not silently accumulate data."
+      },
+      "logFilePath": {
+        "type": "string",
+        "label": "Log File Path",
+        "default": "pr-comment-log.json",
+        "description": "Filesystem path the comment log is written to. Relative paths resolve to the extension's globalStorageUri (the same location tool.feedback-log uses). Absolute paths are used verbatim. The log is append-only — TPM never edits prior entries."
+      },
+      "logRetentionDays": {
+        "type": "number",
+        "label": "Log Retention Days",
+        "default": 90,
+        "description": "How many days of comment entries to retain in the log. Entries older than this are pruned on the next write. Set to 0 to disable pruning entirely (the log grows unbounded). Default 90 covers a quarter of review history."
+      },
+      "logIncludeReplies": {
+        "type": "boolean",
+        "label": "Log Include Replies",
+        "default": true,
+        "description": "When on, the log captures replies the agent POSTS in addition to the source comments it READS. When off, only inbound comments are logged. On gives the fullest training signal; off is preferred if you want the log to be a pure record of WHAT colleagues said."
       }
     }
   }

@@ -1,0 +1,62 @@
+{
+  "id": "tool.playwright",
+  "name": "Playwright",
+  "version": "0.2.0",
+  "description": "Lets QA write Playwright test specs from testing procedures produced by tool.ac-to-testing; specs live outside the work repo with a shared playwright.config.ts.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "qa", "contentPath": "playwright.md" }
+    ],
+    "settings": {
+      "specsDir": {
+        "type": "string",
+        "label": "Specs Dir",
+        "description": "Directory under which Playwright specs are written. Per-project subdir is created as needed (e.g. ~/.nomeda/tests/CMMS-1234/). Specs persist across sessions for re-running. Customize for projects with team-shared spec locations.",
+        "default": "~/.nomeda/tests"
+      },
+      "configTemplate": {
+        "type": "string",
+        "label": "Config Template",
+        "description": "Shape of the generated playwright.config.ts. base-url-env emits a config that reads BASE_URL from env (recommended for dev/staging/prod re-use). hardcoded-localhost emits a config with localhost:3000 hardcoded (simpler, single-environment). minimal emits the bare-minimum config and lets the user customize. Default base-url-env matches the standard SWT pattern.",
+        "default": "base-url-env"
+      },
+      "autoOfferOnProcedures": {
+        "type": "boolean",
+        "label": "Auto-Offer On Procedures",
+        "description": "When on, QA proactively offers to write Playwright specs whenever fresh testing procedures from tool.ac-to-testing are added to the ticket notes. When off, QA only writes specs on explicit request. On is the typical flow; off is for projects with strict manual-test conventions.",
+        "default": true
+      },
+      "specPerProcedure": {
+        "type": "boolean",
+        "label": "Spec Per Procedure",
+        "description": "When on, QA generates one spec file per TP (TP-1.spec.ts, TP-2.spec.ts, etc.). When off, QA consolidates all TPs into a single spec file per ticket. On is preferred for parallel execution and isolated failures; off is preferred for compact spec sets.",
+        "default": true
+      },
+      "includeSetupTeardown": {
+        "type": "boolean",
+        "label": "Include Setup Teardown",
+        "description": "When on, every generated spec includes beforeAll/afterAll hooks scaffolded for common needs (browser context init, baseline data setup, cleanup). When off, specs are pure test() blocks with no shared setup. On is the safer default; off is for teams that handle setup centrally.",
+        "default": true
+      },
+      "edgeProfileAuth": {
+        "type": "boolean",
+        "label": "Edge Profile Auth",
+        "description": "When on, generated Playwright specs use Microsoft Edge's persistent user profile for Azure AD authentication, avoiding programmatic login. When off, specs use Playwright's default browser context (no SSO). On is required for testing apps behind Azure AD; off is fine for unauthenticated apps.",
+        "default": false
+      },
+      "edgeProfilePath": {
+        "type": "string",
+        "label": "Edge Profile Path",
+        "description": "Path to the Edge user profile directory used for auth context. Empty defers to the OS-default Edge profile (typically %LOCALAPPDATA%/Microsoft/Edge/User Data on Windows). Customize for users with a dedicated test-only Edge profile. Has no effect when Edge Profile Auth is off.",
+        "default": ""
+      },
+      "authChannelOverride": {
+        "type": "string",
+        "label": "Auth Channel Override",
+        "description": "Playwright browser channel used for auth-context specs. msedge uses installed Microsoft Edge with the persistent profile. msedge-beta or msedge-dev for non-stable channels. Has no effect when Edge Profile Auth is off. Default msedge is the typical channel for Azure AD scenarios.",
+        "default": "msedge"
+      }
+    }
+  }
+}

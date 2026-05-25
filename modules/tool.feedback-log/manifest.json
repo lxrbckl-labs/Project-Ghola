@@ -2,7 +2,7 @@
   "id": "tool.feedback-log",
   "name": "Feedback Logging",
   "version": "0.1.5",
-  "description": "Lets TPM capture quick user feedback / ideas to a persistent JSON log the user later triages in the Settings panel. Opt-in. The `feedbackFilePath` parameter exposed to the agent is injected at runtime by the extension from `context.globalStorageUri` — it is not a user-editable setting and does not appear in the Modules tab.",
+  "description": "Opt-in module that lets TPM capture quick user feedback or ideas to a persistent JSON log (path injected at runtime from the extension's global storage URI) the user later triages in the Settings panel.",
   "proactive": false,
   "contributes": {
     "promptFragments": [

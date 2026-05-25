@@ -1,0 +1,44 @@
+{
+  "id": "tool.conversational-settings",
+  "name": "Conversational Settings",
+  "version": "0.1.0",
+  "description": "Lets users edit module settings via natural language; TPM parses the request, identifies the target setting, and proposes the change or applies it when write infrastructure is available.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "conversational-settings.md" }
+    ],
+    "settings": {
+      "enableDetection": {
+        "type": "boolean",
+        "label": "Enable Detection",
+        "description": "Master switch for natural-language settings detection. When on, TPM watches user turns for phrases that match settings-edit intent. When off, the user must edit settings directly via the Modules tab. On is the typical default for ergonomics.",
+        "default": true
+      },
+      "triggerPhrases": {
+        "type": "string",
+        "label": "Trigger Phrases",
+        "description": "Comma-separated list of substring patterns that suggest a settings-edit intent. Matched case-insensitively. Tune for false-positive avoidance — phrases like set and change are broad and may trigger on non-settings contexts; the fuzzy-match step downstream usually filters those out.",
+        "default": "turn on, turn off, enable, disable, set, change, raise, lower, switch, flip, toggle, update setting, configure"
+      },
+      "applicationMode": {
+        "type": "string",
+        "label": "Application Mode",
+        "description": "How TPM responds to a recognized settings-edit intent. propose surfaces the exact panel edit needed (e.g., Modules tab → Database Access → toggle off) for the user to apply manually. apply attempts to apply the change directly when write infrastructure is available — falls back to propose otherwise. ask prompts the user to choose per occurrence. Default propose matches the current infrastructure (no settings-write API yet); flip to apply when that lands.",
+        "default": "propose"
+      },
+      "requireConfirmationFor": {
+        "type": "string",
+        "label": "Require Confirmation For",
+        "description": "Comma-separated list of setting categories that require explicit user confirmation before TPM proposes or applies a change. all is a sentinel that means everything; the other tags (secrets, allowlists, modes) name categories TPM recognizes per the configured manifests. Tighten this list to skip confirmation on routine settings; widen to add safety friction.",
+        "default": "all, secrets, allowlists, modes"
+      },
+      "fuzzyMatchThreshold": {
+        "type": "number",
+        "label": "Fuzzy Match Threshold",
+        "description": "Percent confidence required for TPM to act on a fuzzy-matched setting name. Default 70 is conservative; raise to 85 for strict matching (fewer false positives, more I'm not sure what setting you mean prompts); lower to 50 for permissive matching (more direct action, more risk of acting on the wrong setting).",
+        "default": 70
+      }
+    }
+  }
+}

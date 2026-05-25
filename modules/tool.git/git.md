@@ -58,7 +58,7 @@ For any push or branch-mutation operation that would target a branch whose name 
 
 If the object is empty, no branches are protected by this module — but you still must never push to or rewrite any branch the user has not explicitly authorized for this session.
 
-## Role-specific notes
+## Role-Specific Notes
 
 The body above applies identically to every agent. The notes below are short framings for how each role uses the policy.
 

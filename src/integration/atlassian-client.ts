@@ -59,6 +59,19 @@ export interface TicketCheckResult {
   status?: string;
 }
 
+/** Per-call return shape for `getTicketDetails`. Extends the `checkTicketExists`
+ *  shape with `summary` and `description`. `description` is the raw ADF JSON
+ *  tree (opaque here — the consumer in `adf-to-text.ts` walks it). `error`
+ *  carries a sanitized failure message when the request fails for a reason
+ *  other than 404 (which is reported as `exists: false`). */
+export interface TicketDetailsResult {
+  exists: boolean;
+  status?: string;
+  summary?: string;
+  description?: unknown;
+  error?: string;
+}
+
 /** Per-call return shape for `findOpenPrForBranch`. `prUrl === null` means
  *  no open PR exists for the branch (or the lookup failed — best effort). */
 export interface PrLookupResult {
@@ -83,6 +96,9 @@ interface BitbucketWorkspaceResponse {
 interface JiraIssueResponse {
   fields?: {
     status?: { name?: string };
+    summary?: string;
+    /** ADF document tree — opaque shape; walked by `adf-to-text.ts`. */
+    description?: unknown;
   };
 }
 
@@ -181,6 +197,41 @@ export class AtlassianClient {
     const body = res.body as JiraIssueResponse | undefined;
     const status = body?.fields?.status?.name;
     return { exists: true, status: typeof status === 'string' ? status : undefined };
+  }
+
+  /**
+   * `GET ${jiraBase}/rest/api/3/issue/${key}?fields=summary,status,description`.
+   * 200 → `{ exists: true }` with `status`, `summary`, and the raw ADF
+   * `description` JSON tree (opaque here — the consumer in `adf-to-text.ts`
+   * walks it). 404 → `{ exists: false }`. Any other failure (auth, network,
+   * timeout, non-2xx) → `{ exists: false, error: <sanitized message> }`.
+   * Never throws; same security and timeout contract as `checkTicketExists`.
+   */
+  async getTicketDetails(key: string): Promise<TicketDetailsResult> {
+    if (!key) return { exists: false };
+    if (!this.email || !this.jiraToken || !this.jiraBase) return { exists: false };
+
+    const url = `${this.jiraBase}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status,description`;
+    const res = await this.request(url, 'jira');
+    if (!res.ok) {
+      // `request()` only surfaces a `ProbeResult` shape — the only signal for
+      // "missing" vs. "broken" is the message prefix it built. A 404 means the
+      // ticket doesn't exist; anything else is a real failure we want to
+      // forward as a sanitized `error`.
+      const msg = res.result.message ?? '';
+      if (msg.startsWith('404')) return { exists: false };
+      return { exists: false, error: msg || 'request failed' };
+    }
+    const body = res.body as JiraIssueResponse | undefined;
+    const status = body?.fields?.status?.name;
+    const summary = body?.fields?.summary;
+    const description = body?.fields?.description;
+    return {
+      exists: true,
+      status: typeof status === 'string' ? status : undefined,
+      summary: typeof summary === 'string' ? summary : undefined,
+      description,
+    };
   }
 
   /**

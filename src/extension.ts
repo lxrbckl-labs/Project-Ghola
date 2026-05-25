@@ -1,6 +1,8 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { BranchWidgetProvider } from './branch-widget/provider';
+import { TicketWidgetProvider } from './ticket-widget/provider';
+import { TicketTodosStoreManager } from './ticket-widget/todos-store';
 import { registerCommands } from './commands';
 import { AtlassianClient } from './integration/atlassian-client';
 import { BitbucketPrClient } from './integration/bitbucket-pr-client';
@@ -10,24 +12,13 @@ import { PromptComposer } from './prompts/composer';
 import { SessionLauncher } from './session/launcher';
 import { ConfigurationsStore } from './settings-panel/configurations-store';
 import { SettingsPanel } from './settings-panel/host';
-
-/**
- * Workspace-state key under which the panel persists flattened module
- * settings as `{ "moduleId::fieldKey": value }`. Mirrors the constant in
- * `src/settings-panel/host.ts`; duplicated here so activation can read the
- * `integration.atlassian-suite::showWidget` value without depending on the
- * panel being open.
- */
-const MODULE_SETTINGS_KEY = 'nomeda.moduleSettings';
+import { SET_CONTEXT_KEYS, WORKSPACE_STATE_KEYS } from './state/keys';
 
 /** Module id whose `showWidget` field gates the SCM branch-widget view. */
 const ATLASSIAN_MODULE_ID = 'integration.atlassian-suite';
 
 /** Field on `integration.atlassian-suite` that toggles the SCM branch widget. */
 const ATLASSIAN_SHOW_WIDGET_KEY = 'showWidget';
-
-/** VS Code context key consumed by the SCM view's `when` clause in package.json. */
-const ATLASSIAN_WIDGET_CONTEXT_KEY = 'nomeda.atlassianSuite.widgetEnabled';
 
 /**
  * SecretStorage keys for the per-product Atlassian API tokens. Jira and
@@ -49,14 +40,6 @@ const ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY = 'nomeda.atlassianSuite.bitbucketTok
  * stay untouched. Do NOT convert this comment back into a `const`; an
  * unused declaration would trip `noUnusedLocals`.
  */
-
-/**
- * Workspace-state key under which the most recent `AtlassianValidationResult`
- * is persisted. Per-workspace by design — different workspaces may target
- * different Jira/Bitbucket instances and a stale result from one workspace
- * should never bleed into another.
- */
-const ATLASSIAN_LAST_VALIDATION_KEY = 'nomeda.atlassianSuite.lastValidation';
 
 /**
  * Outcome of a single end-to-end Atlassian credential probe. Each product can
@@ -143,6 +126,30 @@ export function activate(context: vscode.ExtensionContext): void {
       'tool.npm-suite',
       'tool.database-access',
       'tool.lenses',
+      'tool.pre-pr-checklist',
+      'tool.pr-description',
+      'tool.regression-scan',
+      'tool.ac-to-testing',
+      'tool.mid-session-bootstrap',
+      'tool.untrusted-jira',
+      'tool.statusline',
+      'tool.clipboard-image',
+      'tool.cross-ticket-isolation',
+      'tool.cwd-discipline',
+      'tool.secrets-wrapper-pattern',
+      'tool.qa-pr-learning',
+      'tool.session-bootstrap',
+      'tool.conversational-settings',
+      'tool.setup-walkthrough',
+      'tool.docker',
+      'tool.open-wsl-repo',
+      'tool.playwright',
+      'tool.ssh-access',
+      'tool.core-allocation',
+      'tool.subagent-coordination',
+      'tool.obsidian-notes',
+      'tool.session-handoff',
+      'mode.cd',
     ],
     logger,
   });
@@ -195,7 +202,7 @@ export function activate(context: vscode.ExtensionContext): void {
    * validate() even before the user has explicitly clicked Save.
    */
   const readAtlassianSetting = (fieldKey: string): string => {
-    const flat = context.workspaceState.get<Record<string, unknown>>(MODULE_SETTINGS_KEY, {});
+    const flat = context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
     const v = flat[`${ATLASSIAN_MODULE_ID}::${fieldKey}`];
     if (typeof v === 'string') return v;
     // No saved value — fall back to the manifest default so that fields shown
@@ -216,7 +223,7 @@ export function activate(context: vscode.ExtensionContext): void {
     getJiraToken: async () => context.secrets.get(ATLASSIAN_JIRA_TOKEN_SECRET_KEY),
     getBitbucketToken: async () => context.secrets.get(ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY),
     getLastValidation: () =>
-      context.workspaceState.get<AtlassianValidationResult>(ATLASSIAN_LAST_VALIDATION_KEY),
+      context.workspaceState.get<AtlassianValidationResult>(WORKSPACE_STATE_KEYS.ATLASSIAN_LAST_VALIDATION),
     onDidChangeValidation: validationEmitter.event,
     validate: async (): Promise<AtlassianValidationResult> => {
       // Two-token read happens in parallel so a slow SecretStorage call on
@@ -245,7 +252,7 @@ export function activate(context: vscode.ExtensionContext): void {
         bitbucket,
         lastCheckedAt: new Date().toISOString(),
       };
-      await context.workspaceState.update(ATLASSIAN_LAST_VALIDATION_KEY, result);
+      await context.workspaceState.update(WORKSPACE_STATE_KEYS.ATLASSIAN_LAST_VALIDATION, result);
       validationEmitter.fire(result);
       return result;
     },
@@ -370,6 +377,56 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider('nomedaBranchWidget', branchWidgetProvider),
   );
 
+  // ───── Ticket Widget ────────────────────────────────────────────────
+  const ticketTodosStore = new TicketTodosStoreManager(context);
+  context.subscriptions.push(ticketTodosStore);
+
+  // readModeSetting closure for mode.ticket-work — mirrors readAtlassianSetting pattern
+  const readTicketWorkSetting = (key: string): unknown => {
+    const flat = context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
+    const flatKey = `mode.ticket-work::${key}`;
+    if (flatKey in flat) {
+      return flat[flatKey];
+    }
+    // Fall back to manifest default
+    const handle = loader.find('mode.ticket-work');
+    const setting = handle?.manifest.contributes?.settings?.[key];
+    return setting?.default;
+  };
+
+  const ticketWidgetProvider = new TicketWidgetProvider(
+    context,
+    moduleSettingsEmitter.event,
+    loader.onDidChange,
+    atlassianBridge,
+    readTicketWorkSetting,
+    ticketTodosStore,
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('nomedaTicketWidget', ticketWidgetProvider),
+  );
+
+  // Context-key sync — show widget only when module enabled AND ticketId set
+  const syncTicketWorkWidgetContextKey = (): void => {
+    const moduleEnabled = loader.find('mode.ticket-work')?.isEnabled === true;
+    const ticketIdRaw = readTicketWorkSetting('ticketId');
+    const ticketId = typeof ticketIdRaw === 'string' && ticketIdRaw.trim() ? ticketIdRaw.trim() : '';
+    const showWidgetRaw = readTicketWorkSetting('showWidget');
+    const showWidget = typeof showWidgetRaw === 'boolean' ? showWidgetRaw : true;
+    const enabled = moduleEnabled && ticketId !== '' && showWidget;
+    void vscode.commands.executeCommand('setContext', SET_CONTEXT_KEYS.TICKET_WORK_WIDGET_ENABLED, enabled);
+  };
+
+  // Initial sync
+  syncTicketWorkWidgetContextKey();
+
+  // Re-sync on settings save (covers ticketId / showWidget changes)
+  context.subscriptions.push(moduleSettingsEmitter.event(syncTicketWorkWidgetContextKey));
+
+  // Re-sync on module enable/disable toggle
+  context.subscriptions.push(loader.onDidChange(syncTicketWorkWidgetContextKey));
+
   // Initial discovery (best-effort). After discover() resolves we apply any
   // user-flagged default configuration so the workspace boots into the same
   // preset they last marked as default. The dev-mode openSettings call below
@@ -426,8 +483,8 @@ function resolveModulesDirFn(context: vscode.ExtensionContext): () => string {
  * if the key has never been written, the widget stays hidden.
  */
 function syncAtlassianWidgetContextKey(context: vscode.ExtensionContext): void {
-  const flat = context.workspaceState.get<Record<string, unknown>>(MODULE_SETTINGS_KEY, {});
+  const flat = context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
   const raw = flat[`${ATLASSIAN_MODULE_ID}::${ATLASSIAN_SHOW_WIDGET_KEY}`];
   const enabled = typeof raw === 'boolean' ? raw : false;
-  void vscode.commands.executeCommand('setContext', ATLASSIAN_WIDGET_CONTEXT_KEY, enabled);
+  void vscode.commands.executeCommand('setContext', SET_CONTEXT_KEYS.ATLASSIAN_SUITE_WIDGET_ENABLED, enabled);
 }

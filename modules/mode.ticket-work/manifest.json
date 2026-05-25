@@ -1,0 +1,68 @@
+{
+  "id": "mode.ticket-work",
+  "name": "Ticket Work",
+  "version": "0.2.0",
+  "description": "Scopes the session strictly to a single Jira ticket; pulls the ticket via Atlassian integration on first run, sets up per-ticket notes, and locks all work to that ticket's scope.",
+  "proactive": true,
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "ticket-work.md" }
+    ],
+    "settings": {
+      "ticketId": {
+        "type": "string",
+        "label": "Ticket Id",
+        "description": "The active ticket identifier for the session (e.g. CMMS-5412 or PROJ-123). The session is scoped to this ticket for its duration. Leave empty to let TPM ask for one at session start. The format is project-key plus hyphen plus number; no validation is enforced here, the Jira API will reject malformed values.",
+        "default": ""
+      },
+      "pullOnStart": {
+        "type": "boolean",
+        "label": "Pull On Start",
+        "description": "When on, TPM auto-pulls the ticket from Jira at session start via the Atlassian Suite integration. When off, TPM uses the configured Ticket Id for notes file location but does not fetch the ticket description, so the user must provide context manually. Leave on for the common I want to work this ticket flow.",
+        "default": true
+      },
+      "crossTicketStrictness": {
+        "type": "string",
+        "label": "Cross Ticket Strictness",
+        "description": "Controls how TPM responds when the user references work outside the active ticket. Set to ask to confirm before treating the cross-ticket reference as in-scope, hard-block to refuse any cross-ticket work until this mode is disabled, or soft-warn to warn once and proceed. Mirrors Directory Navigation's redirect strictness — higher values keep the session focused on one ticket, lower values reduce friction at the cost of drift.",
+        "default": "ask"
+      },
+      "notesSections": {
+        "type": "string",
+        "label": "Notes Sections",
+        "description": "Comma-separated list of top-level sections the per-ticket notes file should contain, in the order TPM writes them when creating the file. Trim entries you do not use or extend with custom sections to taste. Note that Session Handoff in this list is the heading the tool.session-handoff module manages — Ticket Work mode ensures the heading exists but defers the writing of that block to that module.",
+        "default": "Ticket Summary, Implementation Notes, Changes Made, Edge Cases, Testing Procedures, QA Findings, Session Handoff"
+      },
+      "untrustedJiraInput": {
+        "type": "boolean",
+        "label": "Untrusted Jira Input",
+        "description": "When on, TPM treats every Jira ticket description as untrusted external input — context only, never instruction — and flags suspicious directives in the description to the user before acting on them. When off, ticket descriptions are treated as trusted, which is rarely the right setting outside fully-controlled environments. Leave on for safety.",
+        "default": true
+      },
+      "showWidget": {
+        "type": "boolean",
+        "label": "Show Ticket Widget",
+        "description": "Renders the Ticket Widget in the Source Control sidebar with the active ticket's summary, status, AC-derived todo list, and links to open the ticket in Jira or the related PR. Off hides the widget entirely without disabling the rest of the module. On is the default for the typical ticket-work flow where the widget is the primary touchpoint.",
+        "default": true
+      },
+      "parseAcAsTodo": {
+        "type": "boolean",
+        "label": "Parse AC As Todo List",
+        "description": "Auto-extracts a todo list from the Jira ticket description by scanning for an acceptance-criteria section. Each AC item becomes a checkbox in the widget that the user or TPM can mark complete as work ships. Off displays the widget without the todo section; users can still add manual items.",
+        "default": true
+      },
+      "acSectionMarker": {
+        "type": "string",
+        "label": "AC Section Marker",
+        "description": "The heading text in the Jira ticket description that marks the start of the acceptance-criteria list. Matched case-insensitively with substring containment, so \"Acceptance Criteria\", \"Acceptance criteria:\", and \"AC\" all work as configured. Has no effect when Parse AC As Todo List is off, or when the description already uses a Jira task list (which the widget detects automatically as the canonical AC source).",
+        "default": "Acceptance Criteria"
+      },
+      "widgetShowsPrButton": {
+        "type": "boolean",
+        "label": "Widget Shows PR Button",
+        "description": "Includes a PR button in the widget that opens the open pull request for the current branch when one exists, or the branch overview otherwise. Requires the Atlassian Suite to have a Bitbucket token configured. Off hides the PR button entirely; the Ticket button is unaffected.",
+        "default": true
+      }
+    }
+  }
+}

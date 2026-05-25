@@ -1,0 +1,50 @@
+{
+  "id": "tool.statusline",
+  "name": "Statusline",
+  "version": "0.1.0",
+  "description": "Renders a Nomeda status display in the VS Code status bar showing version, cumulative tokens, context-window usage, and 5-hour rolling-window usage.",
+  "proactive": false,
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "statusline.md" }
+    ],
+    "settings": {
+      "showVersion": {
+        "type": "boolean",
+        "label": "Show Version",
+        "description": "When on, the statusline includes the current Nomeda extension version (e.g. v0.42.1) so the user can confirm at a glance which build they are running. When off, the version is hidden. On is the typical default; turn off only if the line is space-constrained on a small monitor.",
+        "default": true
+      },
+      "showCumulativeTokens": {
+        "type": "boolean",
+        "label": "Show Cumulative Tokens",
+        "description": "When on, the statusline displays the total tokens consumed by the active session (input + output across all turns) as a compact number (e.g. 142k). Useful for monitoring spend and noticing runaway turns. Off hides the figure entirely.",
+        "default": true
+      },
+      "showContextPercent": {
+        "type": "boolean",
+        "label": "Show Context Percent",
+        "description": "When on, the statusline displays the fraction of the model's context window currently consumed by the conversation (e.g. 62%). Renders in red at or above the value of Red Threshold Percent as a visual warning. Off hides the figure entirely; the warning highlight only fires when this section is shown.",
+        "default": true
+      },
+      "showRollingWindowPercent": {
+        "type": "boolean",
+        "label": "Show Rolling Window Percent",
+        "description": "When on, the statusline displays the fraction of the 5-hour rolling rate-limit window consumed (e.g. 5h 41%) when that data is available from the model runtime. Renders in red at or above Red Threshold Percent. Hidden when the runtime payload does not include rolling-window data (early in a session, or accounts without a rolling-window quota).",
+        "default": true
+      },
+      "redThresholdPercent": {
+        "type": "number",
+        "label": "Red Threshold Percent",
+        "description": "The percent threshold at or above which context-window and rolling-window figures render in red. Default 85 is a soft warning matching the SWT convention. Lower it (e.g. 70) for earlier visual alerts; raise it (e.g. 95) for less aggressive coloring. Applies to both Context Percent and Rolling Window Percent when those are shown.",
+        "default": 85
+      },
+      "fallbackToVersionOnly": {
+        "type": "boolean",
+        "label": "Fallback To Version Only",
+        "description": "When on, the statusline gracefully degrades to a version-only display when the runtime payload that supplies token/context/rolling-window data is missing or unparseable. When off, all sections fall back to empty if their data source is unavailable, producing a sparse line. On preserves visibility of the Nomeda surface even in degraded states; off favors show nothing rather than incomplete data.",
+        "default": true
+      }
+    }
+  }
+}
