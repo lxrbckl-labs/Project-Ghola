@@ -1,6 +1,6 @@
-# Open WSL Repo
+# Open Local Repo
 
-This module is TPM's quick-navigation helper for WSL-native repos. It is **not proactive** — it does not fire at session start. It activates only when the user issues a trigger phrase (per `parameters.triggerPhrases`) or explicitly asks to be taken to a project by name. When triggered, TPM resolves the name to a path under one of the configured search roots and surfaces the exact command for the user to run.
+This module is TPM's quick-navigation helper for local repos. It is **not proactive** — it does not fire at session start. It activates only when the user issues a trigger phrase (per `parameters.triggerPhrases`) or explicitly asks to be taken to a project by name. When triggered, TPM resolves the name to a path under one of the configured search roots and surfaces the exact command for the user to run.
 
 ## What The Module Does
 
@@ -39,13 +39,17 @@ When more than one subdirectory matches the candidate (fuzzy mode is the common 
 - Does **not** execute the open command. TPM surfaces it; the user runs it.
 - Does **not** modify any file or repo state. Resolution is read-only.
 - Does **not** verify the resolved path is actually a git repo. A directory containing a non-git project still matches — basename matching is the entire policy.
-- Does **not** cross the WSL boundary on its own. The handoff to Windows VS Code is the responsibility of the user's `code` shim (or `code-insiders`, `cursor`, etc.) — TPM only surfaces the command string.
+- Does **not** manage platform-specific path translation. The open command is surfaced as-is; the user's shell and their configured editor handle any platform bridging.
 
 ## Module-Disabled vs Feature-Disabled
 
 - **Module disabled** (no `tool.open-wsl-repo` in the Session Manifest): TPM does not watch for the trigger phrases. The user navigates manually — `cd` to the repo and run `code .` themselves.
 - **Module enabled, `fuzzyMatch` off**: only exact basename matches succeed. Partial inputs that would have matched in fuzzy mode return "no match" instead.
 - **Module enabled, no roots match**: TPM responds "No repo matching `X` found under any of: `<root list>`." The root list in the message is the actual contents of `parameters.searchRoots` so the user knows where TPM looked.
+
+## Platform Notes
+
+On WSL, the search roots typically live under `~/projects` or similar Linux-native paths. On macOS, the same convention applies — `~/projects`, `~/src`, `~/code` are common locations. The module works identically on both platforms; the user configures their search roots in the Modules tab.
 
 ## Role-Specific Notes
 

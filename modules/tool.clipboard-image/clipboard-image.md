@@ -64,6 +64,22 @@ The bundled helper is Windows-clipboard-oriented and targets the WSL+Windows mix
 
 This module does not ship platform-specific fallbacks — the script is the platform-translation layer.
 
+On macOS, a minimal helper script that satisfies the contract:
+
+    #!/bin/bash
+    # Requires: brew install pngpaste
+    TMPFILE="$(mktemp /tmp/nomeda-clipboard-XXXXXX.png)"
+    if pngpaste "$TMPFILE" 2>/dev/null; then
+      echo "$TMPFILE"
+      exit 0
+    else
+      echo "Clipboard does not contain an image" >&2
+      rm -f "$TMPFILE"
+      exit 1
+    fi
+
+Save this as a script (e.g. `scripts/clipboard-read-mac.sh`), make it executable, and set Script Path in the Modules tab to point at it. The `pngpaste` utility is available via Homebrew (`brew install pngpaste`).
+
 ## Role-Specific Notes
 
 The body above applies identically to every agent. The notes below are short framings for how each role uses the capability.

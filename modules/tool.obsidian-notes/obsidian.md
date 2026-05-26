@@ -28,6 +28,8 @@ When `vaultPath` is empty and `autoDiscoverVault` is true, TPM does the followin
 1. Build the candidate-root list. Start with the built-in defaults and append anything in `parameters.searchRoots` (comma-separated, trimmed):
    - `~/Documents/Obsidian/`
    - `~/Obsidian/`
+   - `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/` (iCloud-synced vaults on macOS)
+   - `/Users/<user>/Documents/Obsidian/` (explicit macOS home path for non-tilde resolution)
    - `/mnt/c/Users/<user>/Documents/Obsidian/`
    - `/mnt/c/Users/<user>/Obsidian/`
    - Plus each absolute path in `parameters.searchRoots`.

@@ -39,6 +39,8 @@ In the example above, SWE may query `localhost.cmms` and `mcpdevsql.MCP_Dev`. Th
 
 In the `not-installed` and `error` states the panel shows two action buttons: "Copy install instructions" (copies a configurable prompt to the clipboard) and "Configure path…" (opens the `nomeda.linqpadConnectionsPath` VS Code setting so the user can supply an explicit path to the XML file). The user must resolve the underlying problem before the dropdown will populate. In the `loading` state no action buttons are shown.
 
+On macOS, LINQPad is not available (it requires .NET on Windows). Mac users have two options: (1) run SQL Server in Docker and use a cross-platform query tool like `sqlcmd` (Microsoft's CLI, available via Homebrew: `brew install mssql-tools`) or Azure Data Studio, configuring connection names to match the allowlist; or (2) disable this module entirely and handle database inspection outside the agent session. The module's agent-side contract (allowlist gating + SELECT-only discipline) is platform-agnostic — only the host-side connection discovery and query execution mechanism differ.
+
 ## Always-applied protections (regardless of allowlist)
 
 These rules apply regardless of which connection is targeted or what the task requires.

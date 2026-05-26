@@ -1,8 +1,8 @@
 {
   "id": "tool.open-wsl-repo",
-  "name": "Open WSL Repo",
+  "name": "Open Local Repo",
   "version": "0.1.0",
-  "description": "Resolves a name or partial path to a WSL-native repo and surfaces the command to open it in Windows VS Code.",
+  "description": "Resolves a name or partial path to a local repo under configured search roots and surfaces the command to open it in the configured editor.",
   "proactive": false,
   "contributes": {
     "promptFragments": [
@@ -24,7 +24,7 @@
       "openCommand": {
         "type": "string",
         "label": "Open Command",
-        "description": "Command TPM surfaces for opening the resolved path. code uses the Windows VS Code via the WSL code shim. code-insiders for VS Code Insiders. cursor for the Cursor editor. Set to any command name that accepts a path arg. The command itself runs in the user's shell after they confirm.",
+        "description": "Command TPM surfaces for opening the resolved path. code for VS Code, code-insiders for VS Code Insiders, cursor for the Cursor editor. Set to any command name that accepts a path argument. The command runs in the user's shell after they confirm.",
         "default": "code"
       },
       "triggerPhrases": {
