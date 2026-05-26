@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Greps test directories for references to SWE-modified classes and methods so the user knows which tests need re-running before a PR.",
   "proactive": false,
+  "category": "workflow",
+  "kind": "capability",
+  "trigger": "user-request",
+  "tier": "recommended",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "regression-scan.md" }

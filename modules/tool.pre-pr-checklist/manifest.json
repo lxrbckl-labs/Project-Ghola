@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Runs a configurable quality-gate sweep before a PR is created, flagging unintended changes, secrets, dead code, and other patterns automated PR reviewers commonly catch.",
   "proactive": false,
+  "category": "workflow",
+  "kind": "capability",
+  "trigger": "user-request",
+  "tier": "recommended",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "pre-pr-checklist.md" }

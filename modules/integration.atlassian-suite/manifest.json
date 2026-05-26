@@ -4,6 +4,10 @@
   "version": "0.1.8",
   "description": "Manages Atlassian credentials (email, Jira base URL, Bitbucket workspace, per-product API tokens in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, token validation, and the optional Source Control branch widget.",
   "proactive": false,
+  "category": "integration",
+  "kind": "capability",
+  "trigger": "event",
+  "tier": "essential",
   "contributes": {
     "promptFragments": [
       { "target": "tpm", "contentPath": "suite.md" }

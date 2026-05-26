@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Agent-driven first-time setup playbook that walks new Nomeda users through Obsidian, Atlassian credentials, default module selection, and the SCM-sidebar widgets.",
   "proactive": true,
+  "category": "workflow",
+  "kind": "capability",
+  "trigger": "session-start",
+  "tier": "optional",
   "contributes": {
     "promptFragments": [
       { "target": "tpm", "contentPath": "setup-walkthrough.md" }

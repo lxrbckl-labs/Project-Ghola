@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Gives the agents an Obsidian vault as their durable knowledge base, with TPM-only writes and optional auto-discovery of the vault location at session start.",
   "proactive": true,
+  "category": "knowledge",
+  "kind": "capability",
+  "trigger": "session-start",
+  "tier": "essential",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "obsidian.md" }

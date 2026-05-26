@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Enforces that cross-ticket discussions stay in session memory and are never written to any active ticket's notes file.",
   "proactive": false,
+  "category": "safety",
+  "kind": "convention",
+  "trigger": "always-applied",
+  "tier": "recommended",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "cross-ticket-isolation.md" }

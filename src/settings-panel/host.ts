@@ -418,6 +418,10 @@ export class SettingsPanel implements vscode.Disposable {
         proactive: h.manifest.proactive,
         contributes: h.manifest.contributes,
         targets: [...targetSet],
+        category: h.manifest.category,
+        kind: h.manifest.kind,
+        trigger: h.manifest.trigger,
+        tier: h.manifest.tier,
       };
     });
     this.post({ type: 'modulesChanged', modules });

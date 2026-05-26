@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Renders a Nomeda status display in the VS Code status bar showing version, cumulative tokens, context-window usage, and 5-hour rolling-window usage.",
   "proactive": false,
+  "category": "utility",
+  "kind": "capability",
+  "trigger": "always-applied",
+  "tier": "optional",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "statusline.md" }

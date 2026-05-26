@@ -4,6 +4,10 @@
   "version": "0.3.2",
   "description": "Grants agents controlled git capability through a per-command allowlist (each command tagged r/w/d with an independent enable toggle) plus a user-managed protected-branches guardrail.",
   "proactive": false,
+  "category": "safety",
+  "kind": "capability",
+  "trigger": "always-applied",
+  "tier": "essential",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "git.md" }

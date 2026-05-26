@@ -4,6 +4,10 @@
   "version": "0.2.0",
   "description": "Configures the parallel-lens dispatch SWE uses when TPM runs Review Mode or Planning Mode.",
   "proactive": true,
+  "category": "orchestration",
+  "kind": "capability",
+  "trigger": "session-start",
+  "tier": "essential",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "lenses.md" }

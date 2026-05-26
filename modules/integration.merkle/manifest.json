@@ -5,6 +5,10 @@
   "description": "Connects Nomeda agents to an independently running Project-Merkle deployment over its MCP endpoint so they can join a session, long-poll for messages, post replies, and read the shared feed using a configurable server URL and default team name.",
   "author": "aarbuckle",
   "proactive": false,
+  "category": "integration",
+  "kind": "capability",
+  "trigger": "event",
+  "tier": "optional",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "merkle.md" }

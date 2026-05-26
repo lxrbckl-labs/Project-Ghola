@@ -4,6 +4,10 @@
   "version": "0.3.8",
   "description": "Grants the agents dotnet CLI capability through an allowlist, plus protections for sensitive .NET config files.",
   "proactive": false,
+  "category": "safety",
+  "kind": "capability",
+  "trigger": "always-applied",
+  "tier": "recommended",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "dotnet.md" }

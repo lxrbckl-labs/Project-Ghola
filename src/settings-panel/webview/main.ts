@@ -909,7 +909,10 @@ function renderModulesList(container: HTMLElement): void {
     if (hay.includes(q)) return true;
     // Badge match: check if the query is a substring of any badge label (e.g. "tp" → "tpm").
     const badgeLabels = resolveAgentBadgeLabels(m.targets ?? []);
-    return badgeLabels.some((label) => label.includes(q));
+    if (badgeLabels.some((label) => label.includes(q))) return true;
+    // Descriptor match: search against category, kind, trigger, tier display text.
+    const descLabels = resolveDescriptorLabels(m);
+    return descLabels.some((label) => label.includes(q));
   });
 
   if (q && filtered.length === 0) {
@@ -958,18 +961,27 @@ function renderModuleRow(m: ModuleSummary): HTMLElement {
   if (m.description) {
     textZone.appendChild(textEl('div', m.description, 'desc'));
   }
-  // Agent badges below description — shows which agents this module targets.
-  // Proactive pill (when set) renders as a sibling inside this same row so the
-  // list view mirrors the detail view's badge layout / spacing / treatment.
+  // Agent badges + descriptor badges combined into one wrapping flex row below
+  // the description. The proactive pill (when set) is a sibling in that same
+  // container so all pills share one layout / spacing / visual treatment.
   const rowBadges =
     renderAgentBadges(m.targets ?? []) ??
     (m.proactive ? el('div', { class: 'agent-badges' }) : null);
-  if (rowBadges) {
-    if (m.proactive) {
-      const pill = el('span', { class: 'proactive-pill' });
-      pill.textContent = 'Proactive';
-      rowBadges.appendChild(pill);
+  if (m.proactive && rowBadges) {
+    const pill = el('span', { class: 'proactive-pill' });
+    pill.textContent = 'Proactive';
+    rowBadges.appendChild(pill);
+  }
+  // Merge descriptor spans into the same container (or create one if there were
+  // no agent badges and the module is not proactive).
+  const rowDescriptors = renderDescriptorBadges(m);
+  if (rowDescriptors) {
+    const badgeContainer = rowBadges ?? el('div', { class: 'agent-badges' });
+    while (rowDescriptors.firstChild) {
+      badgeContainer.appendChild(rowDescriptors.firstChild);
     }
+    textZone.appendChild(badgeContainer);
+  } else if (rowBadges) {
     textZone.appendChild(rowBadges);
   }
   row.appendChild(textZone);
@@ -1601,18 +1613,26 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
     container.appendChild(textEl('div', m.description, 'desc'));
   }
 
-  // Agent-target badge row — at-a-glance summary of which agents this module impacts.
-  // The Proactive pill (when set) renders as a sibling inside this same row so all
-  // module badges share one layout / spacing / visual treatment.
+  // Agent-target badge row + descriptor metadata pills — all in one wrapping
+  // flex row so the full badge summary is on a single line that wraps naturally.
   const agentBadges =
     renderAgentBadges(m.contributes?.promptFragments ?? []) ??
     (m.proactive ? el('div', { class: 'agent-badges' }) : null);
-  if (agentBadges) {
-    if (m.proactive) {
-      const pill = el('span', { class: 'proactive-pill' });
-      pill.textContent = 'Proactive';
-      agentBadges.appendChild(pill);
+  if (m.proactive && agentBadges) {
+    const pill = el('span', { class: 'proactive-pill' });
+    pill.textContent = 'Proactive';
+    agentBadges.appendChild(pill);
+  }
+  // Merge descriptor spans into the same container (or create one if there were
+  // no agent badges and the module is not proactive).
+  const detailDescriptors = renderDescriptorBadges(m);
+  if (detailDescriptors) {
+    const badgeContainer = agentBadges ?? el('div', { class: 'agent-badges' });
+    while (detailDescriptors.firstChild) {
+      badgeContainer.appendChild(detailDescriptors.firstChild);
     }
+    container.appendChild(badgeContainer);
+  } else if (agentBadges) {
     container.appendChild(agentBadges);
   }
 
@@ -1802,6 +1822,76 @@ function renderAgentBadges(
     row.appendChild(badge);
   }
   return row;
+}
+
+// ─── Descriptor badge helpers ───────────────────────────────────────────────
+
+/** Human-friendly display text for each descriptor field value. */
+function descriptorDisplayText(field: string, value: string): string {
+  if (field === 'category') {
+    if (value === 'session-mode') return 'Session Mode';
+    return value.charAt(0).toUpperCase() + value.slice(1);
+  }
+  if (field === 'kind') {
+    return value.charAt(0).toUpperCase() + value.slice(1);
+  }
+  if (field === 'trigger') {
+    const map: Record<string, string> = {
+      'session-start': 'Session Start',
+      'user-request': 'User Request',
+      'phrase-detection': 'Phrase Detection',
+      'always-applied': 'Always Applied',
+      'event': 'Event',
+    };
+    return map[value] ?? value;
+  }
+  if (field === 'tier') {
+    return value.charAt(0).toUpperCase() + value.slice(1);
+  }
+  return value;
+}
+
+/**
+ * Renders descriptor metadata pills (category, kind, trigger, tier) for a module.
+ * Returns a container div with badge spans, or null if no descriptors are present.
+ */
+function renderDescriptorBadges(m: ModuleSummary): HTMLElement | null {
+  const fields: Array<{ field: string; value: string | undefined }> = [
+    { field: 'category', value: m.category },
+    { field: 'kind', value: m.kind },
+    { field: 'trigger', value: m.trigger },
+    { field: 'tier', value: m.tier },
+  ];
+  const present = fields.filter((f) => f.value);
+  if (present.length === 0) return null;
+
+  const container = el('div', { class: 'descriptor-badges' });
+  for (const { field, value } of present) {
+    const badge = el('span', { class: `descriptor-badge descriptor-badge--${field}` });
+    badge.textContent = descriptorDisplayText(field, value!);
+    container.appendChild(badge);
+  }
+  return container;
+}
+
+/**
+ * Collects descriptor field values for a module as an array of lowercase strings,
+ * suitable for search matching.
+ */
+function resolveDescriptorLabels(m: ModuleSummary): string[] {
+  const labels: string[] = [];
+  const fields: Array<{ field: string; value: string | undefined }> = [
+    { field: 'category', value: m.category },
+    { field: 'kind', value: m.kind },
+    { field: 'trigger', value: m.trigger },
+    { field: 'tier', value: m.tier },
+  ];
+  for (const { field, value } of fields) {
+    if (value) {
+      labels.push(descriptorDisplayText(field, value).toLowerCase());
+    }
+  }
+  return labels;
 }
 
 /** Map a fragment target value to a friendly display label for multi-fragment modules. */

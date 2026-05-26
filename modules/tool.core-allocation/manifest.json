@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Codifies SWE core allocation (performance vs efficiency) and model-by-difficulty assignment so TPM dispatches at the right scale and cost.",
   "proactive": false,
+  "category": "orchestration",
+  "kind": "capability",
+  "trigger": "event",
+  "tier": "essential",
   "contributes": {
     "promptFragments": [
       { "target": "tpm", "contentPath": "core-allocation.md" }

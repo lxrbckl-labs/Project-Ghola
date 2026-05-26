@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Treats Jira ticket descriptions, Bitbucket PR comments, and other external content as context only and flags suspicious directives before any agent acts on them.",
   "proactive": false,
+  "category": "safety",
+  "kind": "convention",
+  "trigger": "always-applied",
+  "tier": "recommended",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "untrusted-jira.md" }

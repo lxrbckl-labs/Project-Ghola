@@ -4,6 +4,10 @@
   "version": "0.1.5",
   "description": "Manage the allowlist of npm and Angular CLI commands that agents may run inside this project.",
   "proactive": false,
+  "category": "safety",
+  "kind": "capability",
+  "trigger": "always-applied",
+  "tier": "optional",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "npm.md" }

@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Lets users edit module settings via natural language — TPM parses the request, identifies the target setting, and proposes the change or applies it when write infrastructure is available.",
   "proactive": false,
+  "category": "utility",
+  "kind": "capability",
+  "trigger": "phrase-detection",
+  "tier": "optional",
   "contributes": {
     "promptFragments": [
       { "target": "tpm", "contentPath": "conversational-settings.md" }

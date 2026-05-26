@@ -4,6 +4,10 @@
   "version": "0.2.0",
   "description": "Grants agents docker and docker-compose CLI capability through an allowlist, plus protections for Dockerfile and docker-compose.yml.",
   "proactive": false,
+  "category": "safety",
+  "kind": "capability",
+  "trigger": "always-applied",
+  "tier": "optional",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "docker.md" }

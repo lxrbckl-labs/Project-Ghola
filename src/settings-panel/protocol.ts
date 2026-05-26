@@ -31,6 +31,14 @@ export interface ModuleSummary {
    * Empty array when the module declares no prompt fragments.
    */
   targets: string[];
+  /** Functional domain group (safety, workflow, orchestration, integration, knowledge, session-mode, utility). */
+  category?: string;
+  /** Whether this module adds a capability or enforces a convention. */
+  kind?: string;
+  /** How the module activates (session-start, user-request, phrase-detection, always-applied, event). */
+  trigger?: string;
+  /** Onboarding priority (essential, recommended, optional). */
+  tier?: string;
 }
 
 /**

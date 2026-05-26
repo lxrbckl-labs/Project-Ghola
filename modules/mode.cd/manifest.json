@@ -4,6 +4,11 @@
   "version": "0.1.0",
   "description": "Scopes the session strictly to the current working directory as a named project, resisting drift to other paths and surfacing the project's latest handoff on resume.",
   "proactive": true,
+  "category": "session-mode",
+  "kind": "workflow",
+  "mutuallyExclusiveWith": ["mode.ticket-work", "mode.support"],
+  "trigger": "session-start",
+  "tier": "recommended",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "cd-mode.md" }

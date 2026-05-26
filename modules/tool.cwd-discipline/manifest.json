@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Enforces that agents stay in the user's current working directory by default, with explicit exceptions for notes, settings, mode-driven bindings, and user redirects.",
   "proactive": false,
+  "category": "safety",
+  "kind": "convention",
+  "trigger": "always-applied",
+  "tier": "recommended",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "cwd-discipline.md" }

@@ -4,6 +4,10 @@
   "version": "0.1.5",
   "description": "Opt-in module that lets TPM capture quick user feedback or ideas to a persistent JSON log (path injected at runtime from the extension's global storage URI) the user later triages in the Settings panel.",
   "proactive": false,
+  "category": "knowledge",
+  "kind": "capability",
+  "trigger": "event",
+  "tier": "optional",
   "contributes": {
     "promptFragments": [
       { "target": "tpm", "contentPath": "feedback.md" }

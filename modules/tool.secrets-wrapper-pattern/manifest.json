@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Codifies the never-read-secrets-directly pattern — agents invoke wrapper scripts that source credentials at call time without exposing the values.",
   "proactive": false,
+  "category": "safety",
+  "kind": "convention",
+  "trigger": "always-applied",
+  "tier": "recommended",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "secrets-wrapper-pattern.md" }

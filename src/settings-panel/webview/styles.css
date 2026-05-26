@@ -1399,6 +1399,31 @@ button.module-row-chevron:focus-visible {
   white-space: nowrap;
 }
 
+/* Container for descriptor metadata pills. Mirrors .agent-badges layout. */
+/* 2026-05-25: descriptor spans are now merged into .agent-badges so this
+   container is no longer emitted. Rule kept for reference; safe to remove. */
+/* .descriptor-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-self: flex-start;
+  margin-top: 4px;
+} */
+
+/* Individual descriptor pill — subtler than agent badges to avoid visual noise. */
+.descriptor-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: 10px;
+  white-space: nowrap;
+  border: 1px solid var(--vscode-badge-background);
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+}
+
 /* ─── Atlassian Suite token block (module detail view) ──────────────── */
 
 /* Outer wrapper — stacks both product slots vertically with a shared helper link below. */

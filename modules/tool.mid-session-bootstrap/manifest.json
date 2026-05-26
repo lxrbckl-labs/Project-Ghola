@@ -4,6 +4,11 @@
   "version": "0.1.0",
   "description": "Detects ticket-id references in conversation mid-session and offers to retroactively pull the ticket plus set up per-ticket notes.",
   "proactive": false,
+  "category": "orchestration",
+  "kind": "capability",
+  "requires": ["integration.atlassian-suite"],
+  "trigger": "phrase-detection",
+  "tier": "optional",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "mid-session-bootstrap.md" }

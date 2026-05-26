@@ -20,6 +20,36 @@
     "author": { "type": "string" },
     "entry": { "type": "string" },
     "proactive": { "type": "boolean" },
+    "category": {
+      "type": "string",
+      "enum": ["safety", "workflow", "orchestration", "integration", "knowledge", "session-mode", "utility"],
+      "description": "Functional domain group used for UI filtering and display."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["capability", "convention"],
+      "description": "Whether the module adds a positive ability ('capability') or purely constrains agent behavior ('convention')."
+    },
+    "requires": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Module IDs this module depends on. Empty array or omitted means no hard dependencies."
+    },
+    "mutuallyExclusiveWith": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Module IDs that cannot be enabled alongside this module. The panel uses this to auto-disable conflicts."
+    },
+    "trigger": {
+      "type": "string",
+      "enum": ["session-start", "user-request", "phrase-detection", "always-applied", "event"],
+      "description": "How the module activates beyond the binary proactive flag."
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["essential", "recommended", "optional"],
+      "description": "Onboarding priority — drives the setup walkthrough's recommendation order."
+    },
     "contributes": {
       "type": "object",
       "additionalProperties": false,

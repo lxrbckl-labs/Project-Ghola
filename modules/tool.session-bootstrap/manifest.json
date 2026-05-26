@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Orchestrates the session-start sequence — config load, team allocation, branch detection, proactive-module consultation, ready signal — and renders the user-facing boot diagnostics.",
   "proactive": true,
+  "category": "workflow",
+  "kind": "capability",
+  "trigger": "session-start",
+  "tier": "essential",
   "contributes": {
     "promptFragments": [
       { "target": "tpm", "contentPath": "session-bootstrap.md" }

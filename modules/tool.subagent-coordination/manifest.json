@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Codifies the file-ownership statements and parallel-SWE dispatch discipline TPM uses to coordinate concurrent subagents without collisions.",
   "proactive": false,
+  "category": "orchestration",
+  "kind": "capability",
+  "trigger": "event",
+  "tier": "essential",
   "contributes": {
     "promptFragments": [
       { "target": "tpm", "contentPath": "subagent-coordination.md" }

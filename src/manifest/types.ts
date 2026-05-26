@@ -10,6 +10,20 @@
 // the four canonical values.
 export type AgentTarget = 'tpm' | 'swe' | 'qa' | 'all' | (string & {});
 
+export type ModuleCategory =
+  | 'safety'
+  | 'workflow'
+  | 'orchestration'
+  | 'integration'
+  | 'knowledge'
+  | 'session-mode'
+  | 'utility';
+
+export type ModuleKind = 'capability' | 'convention';
+
+export type ModuleTrigger = 'session-start' | 'user-request' | 'phrase-detection' | 'always-applied' | 'event';
+export type ModuleTier = 'essential' | 'recommended' | 'optional';
+
 export interface PromptFragment {
   /** Which agent's composed prompt this fragment is appended to. */
   target: AgentTarget;
@@ -221,6 +235,18 @@ export interface ModuleManifest {
    * module's content immediately rather than on-demand.
    */
   proactive?: boolean;
+  /** Functional domain group used for UI filtering and display. */
+  category?: ModuleCategory;
+  /** Whether the module adds a positive ability ('capability') or purely constrains agent behavior ('convention'). */
+  kind?: ModuleKind;
+  /** Module IDs this module depends on. Empty array or omitted means no hard dependencies. */
+  requires?: string[];
+  /** Module IDs that cannot be enabled alongside this module. The panel uses this to auto-disable conflicts. */
+  mutuallyExclusiveWith?: string[];
+  /** How the module activates: at session start, on explicit user request, via phrase detection, passively on every relevant action, or on a specific session event. */
+  trigger?: ModuleTrigger;
+  /** Onboarding priority — drives the setup walkthrough's recommendation order. */
+  tier?: ModuleTier;
   contributes?: ContributionPoints;
 }
 

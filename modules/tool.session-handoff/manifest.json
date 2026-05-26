@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Captures structured session wrap-ups in the project or ticket notes and surfaces the latest one when TPM resumes.",
   "proactive": true,
+  "category": "workflow",
+  "kind": "capability",
+  "trigger": "event",
+  "tier": "essential",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "session-handoff.md" }

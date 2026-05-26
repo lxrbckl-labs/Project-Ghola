@@ -4,6 +4,10 @@
   "version": "0.3.10",
   "description": "Read-only SQL access for SWE via an allowlisted set of connections.",
   "proactive": false,
+  "category": "utility",
+  "kind": "capability",
+  "trigger": "always-applied",
+  "tier": "optional",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "database.md" }
