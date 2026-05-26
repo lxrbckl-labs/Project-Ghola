@@ -1,7 +1,7 @@
 {
   "id": "tool.secrets-wrapper-pattern",
   "name": "Secrets Wrapper Pattern",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Codifies the never-read-secrets-directly pattern — agents invoke wrapper scripts that source credentials at call time without exposing the values.",
   "proactive": false,
   "category": "safety",

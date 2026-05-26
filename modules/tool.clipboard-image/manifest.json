@@ -1,7 +1,7 @@
 {
   "id": "tool.clipboard-image",
   "name": "Clipboard Image",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Reads images from the Windows clipboard via a PowerShell helper so TPM can pass user screenshots to Claude Vision.",
   "proactive": false,
   "category": "utility",

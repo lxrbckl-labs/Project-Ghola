@@ -1,7 +1,7 @@
 {
   "id": "tool.fastpath-check",
   "name": "Fast Path Check",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Advises TPM at session start when the workspace lives on a slow /mnt/c/... path so the user can move to a WSL-native location for faster I/O.",
   "proactive": true,
   "category": "utility",

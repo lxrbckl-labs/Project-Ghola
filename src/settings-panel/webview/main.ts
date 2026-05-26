@@ -585,7 +585,14 @@ function handleAtlassianValidationResult(msg: AtlassianValidationResultMessage):
     state.moduleView.mode === 'detail' &&
     state.moduleView.moduleId === 'integration.atlassian-suite';
   if (isAtlassianDetailOpen) {
-    // Re-render only the validation block in place to preserve scroll position.
+    // Re-render both the token block (label colors) and the validation block in
+    // place to preserve scroll position.
+    const tokenBlock = document.getElementById('atlassian-token-block');
+    if (tokenBlock) {
+      const freshTokens = renderAtlassianTokenSlots();
+      freshTokens.id = 'atlassian-token-block';
+      tokenBlock.replaceWith(freshTokens);
+    }
     const validationBlock = document.getElementById('atlassian-validation-block');
     if (validationBlock) {
       const fresh = renderAtlassianValidationBlock();
@@ -3058,11 +3065,13 @@ function renderQaConfigBlock(): HTMLElement {
  */
 function renderAtlassianTokenSlots(): HTMLElement {
   const wrapper = el('div', { class: 'atlassian-token-slots' });
+  const validation = state.atlassianValidation;
 
   wrapper.appendChild(renderSingleTokenSlot({
     label: 'Jira API Token',
     tokenSet: state.atlassianJiraTokenSet,
     confirming: state.atlassianJiraTokenConfirming,
+    validationStatus: validation?.jira?.status,
     onSet: () => {
       vscode.postMessage({ type: 'atlassianSetJiraToken' } as unknown as WebviewToHostMessage);
     },
@@ -3077,6 +3086,7 @@ function renderAtlassianTokenSlots(): HTMLElement {
     label: 'Bitbucket API Token',
     tokenSet: state.atlassianBitbucketTokenSet,
     confirming: state.atlassianBitbucketTokenConfirming,
+    validationStatus: validation?.bitbucket?.status,
     onSet: () => {
       vscode.postMessage({ type: 'atlassianSetBitbucketToken' } as unknown as WebviewToHostMessage);
     },
@@ -3111,6 +3121,7 @@ function renderSingleTokenSlot(opts: {
   label: string;
   tokenSet: boolean;
   confirming: boolean;
+  validationStatus?: 'ok' | 'failed' | 'skipped';
   onSet: () => void;
   onClear: () => void;
   setConfirming: (v: boolean) => void;
@@ -3128,6 +3139,11 @@ function renderSingleTokenSlot(opts: {
   // Slot header (product label).
   const slotLabel = el('div', { class: 'atlassian-token-slot-label' });
   slotLabel.textContent = label;
+  if (opts.validationStatus === 'ok') {
+    slotLabel.classList.add('atlassian-token-slot-label--ok');
+  } else if (opts.validationStatus === 'failed' || opts.validationStatus === 'skipped') {
+    slotLabel.classList.add('atlassian-token-slot-label--failed');
+  }
   slot.appendChild(slotLabel);
 
   // Status line.

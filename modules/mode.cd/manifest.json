@@ -1,7 +1,7 @@
 {
   "id": "mode.cd",
   "name": "Directory Navigation",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Scopes the session strictly to the current working directory as a named project, resisting drift to other paths and surfacing the project's latest handoff on resume.",
   "proactive": true,
   "category": "session-mode",

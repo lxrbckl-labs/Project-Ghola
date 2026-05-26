@@ -1,7 +1,7 @@
 {
   "id": "tool.session-bootstrap",
   "name": "Session Bootstrap",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Orchestrates the session-start sequence — config load, team allocation, branch detection, proactive-module consultation, ready signal — and renders the user-facing boot diagnostics.",
   "proactive": true,
   "category": "workflow",

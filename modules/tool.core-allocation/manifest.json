@@ -1,7 +1,7 @@
 {
   "id": "tool.core-allocation",
   "name": "Core Allocation",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Codifies SWE core allocation (performance vs efficiency) and model-by-difficulty assignment so TPM dispatches at the right scale and cost.",
   "proactive": false,
   "category": "orchestration",

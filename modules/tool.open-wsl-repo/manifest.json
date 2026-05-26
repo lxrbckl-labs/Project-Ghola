@@ -1,7 +1,7 @@
 {
   "id": "tool.open-wsl-repo",
   "name": "Open Local Repo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Resolves a name or partial path to a local repo under configured search roots and surfaces the command to open it in the configured editor.",
   "proactive": false,
   "category": "utility",

@@ -13,7 +13,6 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished",
-    "onView:nomedaBranchWidget",
     "onView:nomedaTicketWidget"
   ],
   "contributes": {
@@ -152,13 +151,6 @@
     },
     "views": {
       "scm": [
-        {
-          "type": "webview",
-          "id": "nomedaBranchWidget",
-          "name": "Nomeda Branch Widget",
-          "icon": "$(git-branch)",
-          "when": "nomeda.atlassianSuite.widgetEnabled"
-        },
         {
           "type": "webview",
           "id": "nomedaTicketWidget",

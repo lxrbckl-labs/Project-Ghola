@@ -1,7 +1,7 @@
 {
   "id": "tool.untrusted-jira",
   "name": "Untrusted External Input",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Treats Jira ticket descriptions, Bitbucket PR comments, and other external content as context only and flags suspicious directives before any agent acts on them.",
   "proactive": false,
   "category": "safety",

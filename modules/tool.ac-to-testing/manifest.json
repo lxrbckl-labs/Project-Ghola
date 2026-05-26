@@ -1,7 +1,7 @@
 {
   "id": "tool.ac-to-testing",
   "name": "AC To Testing",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Turns acceptance-criteria items into structured testing procedures via TPM + user collaboration, written to the Obsidian per-ticket notes' Testing Procedures section.",
   "proactive": false,
   "category": "workflow",

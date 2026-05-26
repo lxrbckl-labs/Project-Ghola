@@ -1,8 +1,8 @@
 {
   "id": "integration.atlassian-suite",
   "name": "Atlassian Suite",
-  "version": "0.1.8",
-  "description": "Manages Atlassian credentials (email, Jira base URL, Bitbucket workspace, per-product API tokens in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, token validation, and the optional Source Control branch widget.",
+  "version": "0.2.0",
+  "description": "Manages Atlassian credentials (email, Jira base URL, Bitbucket workspace, per-product API tokens in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, and token validation.",
   "proactive": false,
   "category": "integration",
   "kind": "capability",
@@ -22,7 +22,7 @@
       "jiraBase": {
         "type": "string",
         "label": "Jira Base URL",
-        "description": "Base URL the branch widget combines with the extracted ticket key to form Jira ticket links: <jiraBase>/browse/<KEY>. Trailing slashes are stripped automatically. Change this if your Atlassian instance lives at a non-default domain.",
+        "description": "Base URL used to form Jira ticket links: <jiraBase>/browse/<KEY>. Trailing slashes are stripped automatically. Change this if your Atlassian instance lives at a non-default domain.",
         "default": "https://herzog.atlassian.net"
       },
       "bitbucketWorkspace": {
@@ -30,12 +30,6 @@
         "label": "Bitbucket Workspace",
         "description": "Bitbucket Cloud workspace slug used as a fallback when the local repo's git remote URL cannot be parsed. Normally auto-detected from origin's URL; this value only takes effect when auto-detection fails.",
         "default": "herzog-technologies"
-      },
-      "showWidget": {
-        "type": "boolean",
-        "label": "Show Branch Widget",
-        "description": "Toggles visibility of the Nomeda Branch Widget in the Source Control sidebar. When on, the widget extracts the ticket key from the current branch name and offers one-click links to the Jira ticket and Bitbucket branch/PR page. When off, the widget is fully hidden from the SCM container.",
-        "default": false
       }
     }
   }

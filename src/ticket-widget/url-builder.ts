@@ -1,7 +1,6 @@
 /**
- * Pure URL/ticket-key helpers for the Source Control branch widget. Kept free
- * of any `vscode` import so the logic is trivial to reason about in isolation
- * and easy to swap in unit tests if/when a test harness lands.
+ * Pure URL/ticket-key helpers. Kept free of any `vscode` import so the logic
+ * is trivial to reason about in isolation.
  */
 
 /** Extract the first ticket key (e.g. CMMS-2650) from a branch name. */
@@ -25,8 +24,7 @@ export function buildTicketUrl(key: string | null, jiraBase: string): string | n
  *   - HTTPS with embedded user: `https://user@bitbucket.org/workspace/repo.git`
  *
  * Returns `null` when the URL is missing, malformed, or not a Bitbucket Cloud
- * remote. Shared by `buildBitbucketBranchUrl` (renders the fallback branch URL)
- * and the SCM widget provider (passes the slug into the live PR-lookup API).
+ * remote.
  */
 export function extractBitbucketRepoSlug(remoteUrl: string | null | undefined): string | null {
   if (!remoteUrl) return null;
@@ -45,9 +43,7 @@ export function extractBitbucketRepoSlug(remoteUrl: string | null | undefined): 
 /**
  * Extract the Bitbucket workspace slug from a remote URL. Same URL shapes as
  * `extractBitbucketRepoSlug`. Returns null when the URL is missing or
- * malformed. Used by the SCM widget provider to feed the workspace into the
- * Bitbucket pull-request lookup API when the user has not separately set the
- * `bitbucketWorkspace` module setting.
+ * malformed.
  */
 export function extractBitbucketWorkspace(remoteUrl: string | null | undefined): string | null {
   if (!remoteUrl) return null;
@@ -64,13 +60,8 @@ export function extractBitbucketWorkspace(remoteUrl: string | null | undefined):
 }
 
 /**
- * Build the Bitbucket Cloud branch URL.
- *
- * Parses `remoteUrl` to extract workspace + repo via the shared helpers above.
- *
- * If parsing fails and `fallbackWorkspace` is set, returns null — a URL built
- * without a repo slug is a guaranteed 404, so no URL is better than a broken
- * one. Returns null when no usable URL can be constructed.
+ * Build the Bitbucket Cloud branch URL. Parses `remoteUrl` to extract
+ * workspace + repo. Returns null when no usable URL can be constructed.
  */
 export function buildBitbucketBranchUrl(
   remoteUrl: string | null | undefined,
@@ -85,9 +76,6 @@ export function buildBitbucketBranchUrl(
     return `https://bitbucket.org/${workspace}/${repo}/branch/${encodeURIComponent(branch)}`;
   }
 
-  // Fallback: we have a workspace but no repo slug — a URL without the slug
-  // is a guaranteed 404, so return null to let the consumer hide/disable the
-  // button rather than send the user to a broken link.
   if (fallbackWorkspace) {
     return null;
   }

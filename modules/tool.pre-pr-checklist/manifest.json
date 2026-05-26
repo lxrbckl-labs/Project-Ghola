@@ -1,7 +1,7 @@
 {
   "id": "tool.pre-pr-checklist",
   "name": "Pre-PR Checklist",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Runs a configurable quality-gate sweep before a PR is created, flagging unintended changes, secrets, dead code, and other patterns automated PR reviewers commonly catch.",
   "proactive": false,
   "category": "workflow",

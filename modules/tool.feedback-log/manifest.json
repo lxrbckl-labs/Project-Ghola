@@ -1,7 +1,7 @@
 {
   "id": "tool.feedback-log",
   "name": "Feedback Logging",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Opt-in module that lets TPM capture quick user feedback or ideas to a persistent JSON log (path injected at runtime from the extension's global storage URI) the user later triages in the Settings panel.",
   "proactive": false,
   "category": "knowledge",

@@ -1460,6 +1460,14 @@ button.module-row-chevron:focus-visible {
   color: var(--vscode-foreground);
 }
 
+.atlassian-token-slot-label--ok {
+  color: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.atlassian-token-slot-label--failed {
+  color: var(--vscode-testing-iconFailed, #f14c4c);
+}
+
 /* Status line — dimmed, inline next to the label. */
 .atlassian-token-status {
   font-size: 12px;

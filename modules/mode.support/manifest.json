@@ -1,7 +1,7 @@
 {
   "id": "mode.support",
   "name": "Support",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Scopes the session to multi-app team support work — resolves app names to local repo paths, dispatches parallel investigation lenses, and allows mid-session pivots between apps.",
   "proactive": true,
   "category": "session-mode",

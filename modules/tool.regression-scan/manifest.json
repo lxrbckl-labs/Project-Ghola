@@ -1,7 +1,7 @@
 {
   "id": "tool.regression-scan",
   "name": "Regression Scan",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Greps test directories for references to SWE-modified classes and methods so the user knows which tests need re-running before a PR.",
   "proactive": false,
   "category": "workflow",

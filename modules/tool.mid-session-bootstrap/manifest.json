@@ -1,7 +1,7 @@
 {
   "id": "tool.mid-session-bootstrap",
   "name": "Mid-Session Bootstrap",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Detects ticket-id references in conversation mid-session and offers to retroactively pull the ticket plus set up per-ticket notes.",
   "proactive": false,
   "category": "orchestration",

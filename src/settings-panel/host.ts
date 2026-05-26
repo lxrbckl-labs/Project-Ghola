@@ -76,7 +76,7 @@ export class SettingsPanel implements vscode.Disposable {
     private readonly atlassianBridge: AtlassianBridge,
     /**
      * Emitter the host fires after every successful module-settings save (and
-     * after batch preset application). Signals the branch widget provider and
+     * after batch preset application). Signals the ticket widget provider and
      * the context-key sync in `extension.ts` to re-pull updated settings.
      */
     private readonly moduleSettingsEmitter: vscode.EventEmitter<void>,
@@ -646,7 +646,7 @@ export class SettingsPanel implements vscode.Disposable {
       this.postConfigurations();
       // Broadcast fresh composed prompts after settings change per architecture spec.
       this.broadcastComposedPrompts();
-      // Signal branch widget + context-key sync that module settings changed.
+      // Signal ticket widget + context-key sync that module settings changed.
       this.moduleSettingsEmitter.fire();
     } catch (err) {
       this.post({ type: 'settingsSaved', ok: false, error: (err as Error).message });
@@ -850,7 +850,7 @@ export class SettingsPanel implements vscode.Disposable {
     this.postSettings();
     this.postConfigurations();
     this.broadcastComposedPrompts();
-    // Signal branch widget + context-key sync that settings changed via preset application.
+    // Signal ticket widget + context-key sync that settings changed via preset application.
     this.moduleSettingsEmitter.fire();
   }
 

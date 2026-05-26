@@ -1,7 +1,7 @@
 {
   "id": "tool.statusline",
   "name": "Statusline",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Renders a Nomeda status display in the VS Code status bar showing version, cumulative tokens, context-window usage, and 5-hour rolling-window usage.",
   "proactive": false,
   "category": "utility",

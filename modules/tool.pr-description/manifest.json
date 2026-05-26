@@ -1,7 +1,7 @@
 {
   "id": "tool.pr-description",
   "name": "PR Description",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Generates a PR description from session changes, strictly two sentences, plain language, no double-dashes, ticket-aware when ticket-work mode is active.",
   "proactive": false,
   "category": "workflow",

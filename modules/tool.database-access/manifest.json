@@ -1,7 +1,7 @@
 {
   "id": "tool.database-access",
   "name": "Database Access",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Read-only SQL access for SWE via an allowlisted set of connections.",
   "proactive": false,
   "category": "utility",

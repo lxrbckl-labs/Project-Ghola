@@ -1,7 +1,7 @@
 {
   "id": "tool.dotnet-suite",
   "name": "Dotnet Suite",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Grants the agents dotnet CLI capability through an allowlist, plus protections for sensitive .NET config files.",
   "proactive": false,
   "category": "safety",

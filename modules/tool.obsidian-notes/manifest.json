@@ -1,7 +1,7 @@
 {
   "id": "tool.obsidian-notes",
   "name": "Obsidian Notes",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Gives the agents an Obsidian vault as their durable knowledge base, with TPM-only writes and optional auto-discovery of the vault location at session start.",
   "proactive": true,
   "category": "knowledge",

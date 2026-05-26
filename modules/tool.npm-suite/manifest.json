@@ -1,7 +1,7 @@
 {
   "id": "tool.npm-suite",
   "name": "NPM Suite",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Manage the allowlist of npm and Angular CLI commands that agents may run inside this project.",
   "proactive": false,
   "category": "safety",

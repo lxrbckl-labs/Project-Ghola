@@ -1,7 +1,7 @@
 /**
  * Atlassian REST client. Single source of truth for the Jira + Bitbucket Cloud
  * endpoints the extension needs to validate credentials and probe ticket / PR
- * existence for the SCM branch widget.
+ * existence for the SCM ticket widget.
  *
  * Security contract — read before extending:
  *   - The constructor receives `email` + (optionally) `jiraToken` and

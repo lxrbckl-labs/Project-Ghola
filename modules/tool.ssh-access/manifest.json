@@ -1,7 +1,7 @@
 {
   "id": "tool.ssh-access",
   "name": "SSH Access",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Grants agents SSH capability through a per-host allowlist with command-pattern guardrails for remote execution.",
   "proactive": false,
   "category": "safety",

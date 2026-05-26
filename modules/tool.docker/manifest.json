@@ -1,7 +1,7 @@
 {
   "id": "tool.docker",
   "name": "Docker",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Grants agents docker and docker-compose CLI capability through an allowlist, plus protections for Dockerfile and docker-compose.yml.",
   "proactive": false,
   "category": "safety",

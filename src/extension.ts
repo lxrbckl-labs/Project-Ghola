@@ -1,6 +1,5 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { BranchWidgetProvider } from './branch-widget/provider';
 import { TicketWidgetProvider } from './ticket-widget/provider';
 import { TicketTodosStoreManager } from './ticket-widget/todos-store';
 import { registerCommands } from './commands';
@@ -14,11 +13,8 @@ import { ConfigurationsStore } from './settings-panel/configurations-store';
 import { SettingsPanel } from './settings-panel/host';
 import { SET_CONTEXT_KEYS, WORKSPACE_STATE_KEYS } from './state/keys';
 
-/** Module id whose `showWidget` field gates the SCM branch-widget view. */
+/** Module id for the atlassian-suite integration. */
 const ATLASSIAN_MODULE_ID = 'integration.atlassian-suite';
-
-/** Field on `integration.atlassian-suite` that toggles the SCM branch widget. */
-const ATLASSIAN_SHOW_WIDGET_KEY = 'showWidget';
 
 /**
  * SecretStorage keys for the per-product Atlassian API tokens. Jira and
@@ -187,9 +183,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const validationEmitter = new vscode.EventEmitter<AtlassianValidationResult>();
   context.subscriptions.push(validationEmitter);
 
-  // Emitter the host fires whenever module-settings change. The branch widget
-  // subscribes so it can re-pull `jiraBase` / `bitbucketWorkspace` after a
-  // save, and we also use it locally to re-sync the widget context key.
+  // Emitter the host fires whenever module-settings change. The ticket widget
+  // subscribes so it can re-pull settings after a save, and we also use it
+  // locally to re-sync the widget context key.
   const moduleSettingsEmitter = new vscode.EventEmitter<void>();
   context.subscriptions.push(moduleSettingsEmitter);
 
@@ -265,11 +261,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const bitbucketPrClient = new BitbucketPrClient(atlassianBridge, readAtlassianSetting);
   void bitbucketPrClient;
 
-  // Initial context-key sync from the persisted `showWidget` value. Runs
-  // before discovery so the SCM view's `when` clause resolves correctly on
-  // the first frame; the module-settings emitter re-syncs on every save.
-  syncAtlassianWidgetContextKey(context);
-
   const panel = new SettingsPanel(
     context,
     loader,
@@ -282,14 +273,6 @@ export function activate(context: vscode.ExtensionContext): void {
     logger,
   );
   context.subscriptions.push(panel);
-
-  // Re-sync the widget context key on every module-settings change. The
-  // panel fires `moduleSettingsEmitter` after every successful save; we
-  // re-read showWidget and update the context key so the SCM view appears
-  // or disappears without a reload.
-  context.subscriptions.push(
-    moduleSettingsEmitter.event(() => syncAtlassianWidgetContextKey(context)),
-  );
 
   // Register the five Atlassian token commands. All are user-discoverable
   // from the Command Palette (declared in package.json) and can also be
@@ -361,21 +344,6 @@ export function activate(context: vscode.ExtensionContext): void {
     resolveModulesDir,
     logger,
   });
-
-  // Source Control sidebar widget. Renders branch / Jira / Bitbucket links and
-  // is gated by the `nomeda.atlassianSuite.widgetEnabled` context key (driven
-  // by the `integration.atlassian-suite` module's `showWidget` setting). The
-  // bridge supplies the token for live API probes and a validation-change
-  // event so the widget can refresh after a token set / clear.
-  const branchWidgetProvider = new BranchWidgetProvider(
-    context,
-    moduleSettingsEmitter.event,
-    atlassianBridge,
-    readAtlassianSetting,
-  );
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('nomedaBranchWidget', branchWidgetProvider),
-  );
 
   // ───── Ticket Widget ────────────────────────────────────────────────
   const ticketTodosStore = new TicketTodosStoreManager(context);
@@ -473,18 +441,3 @@ function resolveModulesDirFn(context: vscode.ExtensionContext): () => string {
   };
 }
 
-/**
- * Read the current `integration.atlassian-suite::showWidget` value from
- * workspaceState and push it to the `nomeda.atlassianSuite.widgetEnabled`
- * context key. Called on activation and on every module-settings save so the
- * SCM view's `when` clause reflects the toggle without a reload.
- *
- * The default (false) matches the module manifest's `showWidget` default —
- * if the key has never been written, the widget stays hidden.
- */
-function syncAtlassianWidgetContextKey(context: vscode.ExtensionContext): void {
-  const flat = context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
-  const raw = flat[`${ATLASSIAN_MODULE_ID}::${ATLASSIAN_SHOW_WIDGET_KEY}`];
-  const enabled = typeof raw === 'boolean' ? raw : false;
-  void vscode.commands.executeCommand('setContext', SET_CONTEXT_KEYS.ATLASSIAN_SUITE_WIDGET_ENABLED, enabled);
-}

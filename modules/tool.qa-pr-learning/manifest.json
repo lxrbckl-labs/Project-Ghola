@@ -1,7 +1,7 @@
 {
   "id": "tool.qa-pr-learning",
   "name": "QA PR Learning",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Lets QA learn from the persistent PR-comment log to surface team-specific review patterns during its own reviews.",
   "proactive": false,
   "category": "knowledge",

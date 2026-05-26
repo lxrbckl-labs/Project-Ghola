@@ -1,7 +1,7 @@
 {
   "id": "tool.session-handoff",
   "name": "Session Handoff",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Captures structured session wrap-ups in the project or ticket notes and surfaces the latest one when TPM resumes.",
   "proactive": true,
   "category": "workflow",

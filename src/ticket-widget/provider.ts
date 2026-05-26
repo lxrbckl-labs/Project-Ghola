@@ -8,7 +8,7 @@ import {
   buildTicketUrl,
   extractBitbucketRepoSlug,
   extractBitbucketWorkspace,
-} from '../branch-widget/url-builder';
+} from './url-builder';
 import { WORKSPACE_STATE_KEYS } from '../state/keys';
 
 /** Module id that supplies the Atlassian connection settings (jiraBase, etc.). */
@@ -109,8 +109,8 @@ type WebviewMessage =
   | { type: 'open-pr' };
 
 /**
- * Renders a per-ticket panel inside the Source Control container alongside the
- * branch widget. Surfaces the active ticket's summary + status, a button to
+ * Renders a per-ticket panel inside the Source Control container. Surfaces the
+ * active ticket's summary + status, a button to
  * open the Jira ticket, an optional button to open the associated Bitbucket
  * PR, and a TODO list seeded from the ticket's acceptance-criteria section
  * (when `parseAcAsTodo` is on) and editable with user-added manual items.
@@ -690,7 +690,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
         // Re-derive the PR URL on click. The live PR URL only lives in the
         // most-recent state push to the webview, so we either re-run the
         // probe synchronously here (expensive) or fall back to the branch
-        // URL. Mirroring the branch widget, we use the URL-builder fallback.
+        // URL via the URL-builder fallback.
         const fallbackWorkspace = this.readAtlassianStringSetting('bitbucketWorkspace', '');
         const { branch, remoteUrl } = this.readGitState();
         const branchUrl = buildBitbucketBranchUrl(remoteUrl, branch, fallbackWorkspace);

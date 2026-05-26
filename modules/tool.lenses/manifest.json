@@ -1,7 +1,7 @@
 {
   "id": "tool.lenses",
   "name": "Lenses",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Configures the parallel-lens dispatch SWE uses when TPM runs Review Mode or Planning Mode.",
   "proactive": true,
   "category": "orchestration",

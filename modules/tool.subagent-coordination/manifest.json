@@ -1,7 +1,7 @@
 {
   "id": "tool.subagent-coordination",
   "name": "Subagent Coordination",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Codifies the file-ownership statements and parallel-SWE dispatch discipline TPM uses to coordinate concurrent subagents without collisions.",
   "proactive": false,
   "category": "orchestration",
