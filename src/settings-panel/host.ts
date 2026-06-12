@@ -269,6 +269,9 @@ export class SettingsPanel implements vscode.Disposable {
       case 'openSession':
         await vscode.commands.executeCommand('nomeda.openSession');
         break;
+      case 'updateExtension':
+        await vscode.commands.executeCommand('nomeda.updateExtension');
+        break;
       case 'requestModuleDetail':
         await this.postModuleDetail(msg.moduleId);
         break;

@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
 import type { SessionLauncher } from '../session/launcher';
 import type { SettingsPanel } from '../settings-panel/host';
+import { registerUpdateExtensionCommand } from './updateExtension';
 
 export interface CommandDeps {
   loader: ModuleLoader;
@@ -44,5 +45,8 @@ export function registerCommands(
         3000,
       );
     }),
+    // Self-update: pull/rebuild/repackage/reinstall this extension from its git
+    // checkout. Implemented in updateExtension.ts; returns its own disposable.
+    registerUpdateExtensionCommand(context),
   );
 }

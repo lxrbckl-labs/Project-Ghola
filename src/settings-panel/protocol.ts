@@ -157,6 +157,7 @@ export type WebviewToHostMessage =
   | { type: 'copyNewModulePrompt' }
   | { type: 'uploadModule' }
   | { type: 'openSession' }
+  | { type: 'updateExtension' }
   | { type: 'requestModuleDetail'; moduleId: string }
   | { type: 'requestSettingKeywords'; moduleId: string; settingKey: string }
   | { type: 'updateConfiguration'; section: string; key: string; value: unknown }

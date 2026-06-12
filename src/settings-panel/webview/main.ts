@@ -313,6 +313,14 @@ const ARROW_LEFT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" heigh
 
 const PLAY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6,4 6,20 20,12"/></svg>`;
 
+// Closed 3-D parcel glyph — sits in the "Update Extension" button next to the
+// Play button on the Session launch row. Isometric package box (all faces
+// closed, no arrow, no gap), matching Mandrake's update-extension button.
+// Stroke-based with stroke="currentColor" so it themes with the surrounding
+// button-foreground color; sized 20x20 to match the Play button on this row.
+// Source geometry from Tabler Icons "package" (MIT).
+const UPDATE_EXTENSION_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5l0 9l-8 4.5l-8 -4.5l0 -9l8 -4.5"/><path d="M12 12l8 -4.5"/><path d="M12 12l0 9"/><path d="M12 12l-8 -4.5"/><path d="M16 5.25l-8 4.5"/></svg>`;
+
 // Floppy-disk save glyph. Sits in the save button next to module setting inputs;
 // fill="currentColor" so it picks up the surrounding text color.
 const SAVE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.353 1.146l1.5 1.5L15 3v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 14V2a1.5 1.5 0 0 1 1.5-1.5H13l.353.146zM2.5 1.5a.5.5 0 0 0-.5.5v12a.5.5 0 0 0 .5.5H3v-5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 .5.5v5h.5a.5.5 0 0 0 .5-.5V3.207L12.793 1.5H11v3.5a.5.5 0 0 1-.5.5h-6a.5.5 0 0 1-.5-.5V1.5H2.5zM5 1.5v3h5v-3H5zM4 14h8V9.5H4V14z"/></svg>`;
@@ -768,12 +776,24 @@ function renderGeneral(wrapper: HTMLElement): void {
   }) as HTMLButtonElement;
   sessionBtn.innerHTML = PLAY_ICON_SVG;
   sessionBtn.addEventListener('click', () => vscode.postMessage({ type: 'openSession' }));
+
+  // Update Extension button — sits beside the Play button at the far right of
+  // the launch row. Delegates to the nomeda.updateExtension command on the host.
+  const updateBtn = el('button', {
+    class: 'icon-button framed',
+    type: 'button',
+    'aria-label': 'Update Extension',
+    title: 'Update the Nomeda extension: pull latest from the remote repository, rebuild, reinstall, and reload.',
+  }) as HTMLButtonElement;
+  updateBtn.innerHTML = UPDATE_EXTENSION_ICON_SVG;
+  updateBtn.addEventListener('click', () => vscode.postMessage({ type: 'updateExtension' }));
   // Alias registry editor — lives above the launch row so the user defines
   // aliases first, then picks one from the dropdown to launch.
   wrapper.appendChild(renderAliasEditor());
   wrapper.appendChild(el('hr', { class: 'section-divider' }));
 
   launchRow.appendChild(sessionBtn);
+  launchRow.appendChild(updateBtn);
   wrapper.appendChild(launchRow);
 
   // Custom settings sections placed in 'general' from any module.

@@ -15,9 +15,24 @@ npm run install-local
 
 `npm run install-local` builds the extension, packages a `nomeda.vsix`, and installs it globally with `--force`. This installs Nomeda **once** for your whole editor — it then works in **every** repo you open. You do not install it per-repo, and the bundled modules travel inside the extension.
 
-If the `code` CLI is not on your PATH, run `npm run package` to produce `nomeda.vsix`, then install it from the Extensions panel: click the "..." menu -> "Install from VSIX..." and select the generated file.
+If the `code` CLI is not on your PATH, run `npm run package` to produce `nomeda.vsix`, then install it from the Extensions panel: click the "..." menu -> "Install from VSIX..." and select the generated file. To put `code` on your PATH under Remote-WSL, open the command palette in VS Code and run **Shell Command: Install 'code' command in PATH**.
+
+After installing, reload VS Code (`Ctrl+Shift+P` -> "Developer: Reload Window"). Then run **Nomeda: Open Settings** from the command palette to open the panel — the **Session** tab has the Play button (Open Session) and the **Update Extension** button next to it. The extension is `local.nomeda`; modules are bundled into the VSIX, so it works in any repo you open.
 
 ## Updating
+
+### In-app update (easy path)
+
+Open the Settings Panel, go to the **Session** tab, and click **Update Extension**. You can also run `Nomeda: Update Extension` from the command palette. This runs `scripts/reinstall.sh`, which fetches the upstream remote, compares the installed version against the remote `package.json`, skips if already up to date, otherwise `git pull --ff-only`, rebuilds, repackages, and reinstalls — then offers to reload the window.
+
+Prerequisites for in-app update:
+
+- The repo was cloned and `npm ci` was run (Node 20+ and npm required).
+- The `code` CLI is on your PATH.
+- A git upstream is configured.
+- **`nomeda.repoPath` setting** — set this to the absolute path of your `Project-Nomeda` clone. This is required when running an installed VSIX (the extension cannot infer the repo location). If the setting is empty and the extension is running directly from the dev checkout, it falls back to detecting the extension's own directory.
+
+### Manual update (fallback)
 
 Pull the latest source and re-run the local install:
 
@@ -28,7 +43,16 @@ npm run install-local
 
 ### How updates propagate
 
-There is no marketplace and no auto-update. A `git push` updates the source repository only — it does not touch anyone's already-installed extension. Agent instructions (the `prompts/cores/*.md` and module `.md` files) are snapshotted into the VSIX at package time and read from the installed copy at session-compose time. To receive instruction or code changes, run `git pull` then `npm run install-local`, which repackages and reinstalls the extension. Maintainers should bump the `version` in `package.json` on meaningful changes so users can tell when they are running a stale build.
+There is no marketplace. A `git push` updates the source repository only — it does not touch anyone's already-installed extension. Agent instructions (the `prompts/cores/*.md` and module `.md` files) are snapshotted into the VSIX at package time and read from the installed copy at session-compose time. To receive instruction or code changes, use the in-app **Update Extension** button or run `git pull` then `npm run install-local` manually. Updates are detected by version number — maintainers must bump `version` in `package.json` on meaningful changes for the in-app updater (and users) to see that a newer build is available.
+
+## Troubleshooting
+
+- **`code` not found.** The `install-local` and update scripts use the `code` CLI to install the VSIX. If it is missing, install it via **Shell Command: Install 'code' command in PATH** (see Installation), or use the `npm run package` + Install-from-VSIX fallback.
+- **Extension installs but never activates ("stuck on loading").** On a corporate or proxied network, watch the `npm ci` output for esbuild / native-binary download failures: a partial install leaves the build with no compiled output, so the packaged `.vsix` has no entry point. Re-run the install on a working network so the build actually produces `dist/extension.js`.
+- **`vsce` warnings during `npm run package`.** Packaging warnings (e.g. missing repository field) are non-fatal — the `nomeda.vsix` still installs.
+- **Update reports "already up to date" but you expected changes.** Updates are keyed on the `version` in `package.json`; a maintainer must bump it for the updater to act. See [How updates propagate](#how-updates-propagate).
+- **In-app update fails to find the repo.** When running an installed VSIX, set `nomeda.repoPath` to the absolute path of your clone (see [In-app update](#in-app-update-easy-path)).
+- **Changes not visible after an update.** Reload the window (`Ctrl+Shift+P` -> "Developer: Reload Window") — the update prompt offers this for you on success.
 
 ## Status
 
