@@ -19,6 +19,8 @@ If the `code` CLI is not on your PATH, run `npm run package` to produce `nomeda.
 
 After installing, reload VS Code (`Ctrl+Shift+P` -> "Developer: Reload Window"). Then run **Nomeda: Open Settings** from the command palette to open the panel — the **Session** tab has the Play button (Open Session) and the **Update Extension** button next to it. The extension is `local.nomeda`; modules are bundled into the VSIX, so it works in any repo you open.
 
+**Note:** If you plan to use the in-app **Update Extension** button, set the `nomeda.repoPath` setting to the absolute path of your `Project-Nomeda` clone (VS Code Settings -> search "nomeda.repoPath"). This is required when running an installed VSIX — the extension cannot infer the repo location on its own. Set it in **User** settings (not workspace settings) so it applies in every repo and is not accidentally committed as a machine-specific path. See [In-app update](#in-app-update-easy-path) for full details.
+
 ## Updating
 
 ### In-app update (easy path)

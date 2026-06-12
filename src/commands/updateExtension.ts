@@ -87,6 +87,23 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
     return;
   }
 
+  // The INSTALLED extension's version is the correct left-hand side of the
+  // update check: context.extensionPath now ships a VERSION file. We read it
+  // here and hand it to the script via NOMEDA_INSTALLED_VERSION so the script
+  // compares installed-vs-remote (the install can lag) rather than
+  // clone-vs-remote (the maintainer's clone is never behind its own push).
+  let installedVersion: string | undefined;
+  try {
+    installedVersion = fs
+      .readFileSync(path.join(context.extensionPath, 'VERSION'), 'utf8')
+      .trim();
+  } catch {
+    installedVersion = context.extension?.packageJSON?.version;
+  }
+  if (installedVersion !== undefined && installedVersion === '') {
+    installedVersion = undefined;
+  }
+
   updating = true;
   const channel = vscode.window.createOutputChannel('Nomeda Update');
   channel.clear();
@@ -109,6 +126,7 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
           // shell sources the user's profile so those resolve.
           const child = spawn('bash', ['-lc', `bash ${shellQuote(scriptPath)}`], {
             cwd: repoRoot,
+            env: { ...process.env, NOMEDA_INSTALLED_VERSION: installedVersion ?? '' },
           });
           child.stdout.on('data', (chunk: Buffer) => {
             const text = chunk.toString();

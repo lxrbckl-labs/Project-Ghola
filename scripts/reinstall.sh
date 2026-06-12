@@ -83,28 +83,40 @@ if [ "$LOCAL_ONLY" -eq 0 ]; then
     exit 1
   fi
 
+  # INSTALLED version: the version of the extension build currently installed in
+  # VS Code, passed in by the "Nomeda: Update Extension" command (which reads it
+  # from the installed extension's VERSION file). Empty when the script is run
+  # directly from the terminal — that's fine; see the gate below.
+  INSTALLED_VERSION="$(printf '%s' "${NOMEDA_INSTALLED_VERSION:-}" | tr -d '[:space:]')"
+
   # LOCAL version: the working-tree VERSION file (REPO_ROOT is the clone root
-  # where VERSION lives; cwd is REPO_ROOT).
+  # where VERSION lives; cwd is REPO_ROOT). Drives the pull decision only.
   LOCAL_VERSION="$(tr -d '[:space:]' < ./VERSION 2>/dev/null || true)"
 
-  echo "[ext] remote=$REMOTE_VERSION local=${LOCAL_VERSION:-unknown} upstream=$UPSTREAM"
+  echo "[ext] installed=${INSTALLED_VERSION:-unknown} remote=$REMOTE_VERSION local=$LOCAL_VERSION upstream=$UPSTREAM"
 
-  # If the working-tree VERSION already matches the remote, there is nothing to
-  # do — the source is current.
-  if [ -n "$LOCAL_VERSION" ] && [ "$LOCAL_VERSION" = "$REMOTE_VERSION" ]; then
+  # Update-needed gate: the correct comparison is INSTALLED-vs-REMOTE. Only
+  # short-circuit as up-to-date when we actually know the installed version AND
+  # it equals remote. When INSTALLED_VERSION is empty (a direct CLI run with no
+  # env var), do NOT short-circuit — running the script by hand means install.
+  if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" = "$REMOTE_VERSION" ]; then
     echo "[ext] ALREADY_UP_TO_DATE"
-    echo "[ext] already at remote version $REMOTE_VERSION; nothing to update"
+    echo "[ext] Already up to date (installed v$INSTALLED_VERSION matches remote) - nothing to install."
     exit 0
   fi
 
-  # Update needed: the working tree is behind the remote VERSION. Fast-forward
-  # pull, then rebuild/repackage/reinstall below.
-  echo "[ext] update needed: local=${LOCAL_VERSION:-unknown} -> remote=$REMOTE_VERSION"
-  if ! git pull --ff-only >/dev/null 2>&1; then
-    echo "[ext] ERROR: git pull --ff-only failed (resolve manually or run with --local)" >&2
-    exit 1
+  # Pull gate: only pull when the CLONE's working tree is actually behind the
+  # remote VERSION. The clone — not the install — is what a pull updates.
+  if [ "$LOCAL_VERSION" != "$REMOTE_VERSION" ]; then
+    echo "[ext] update needed: local=${LOCAL_VERSION:-unknown} -> remote=$REMOTE_VERSION"
+    if ! git pull --ff-only >/dev/null 2>&1; then
+      echo "[ext] ERROR: git pull --ff-only failed (resolve manually or run with --local)" >&2
+      exit 1
+    fi
+    echo "[ext] pulled to remote version $REMOTE_VERSION"
+  else
+    echo "[ext] clone already at remote version $REMOTE_VERSION - skipping pull"
   fi
-  echo "[ext] pulled to remote version $REMOTE_VERSION"
 fi
 
 # ── Install dependencies + build ────────────────────────────────────────────
