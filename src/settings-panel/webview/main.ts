@@ -311,7 +311,7 @@ const CHEVRON_RIGHT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" he
 
 const ARROW_LEFT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.5 7.5h-9.79l3.65-3.65-.71-.7L1.5 8l5.15 5.15.71-.7-3.65-3.65H13.5v-1.3z"/></svg>`;
 
-const PLAY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6,4 6,20 20,12"/></svg>`;
+const PLAY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><polygon points="7,5 7,19 19,12"/></svg>`;
 
 // Closed 3-D parcel glyph — sits in the "Update Extension" button next to the
 // Play button on the Session launch row. Isometric package box (all faces
@@ -671,25 +671,33 @@ function render(): void {
 }
 
 function renderRail(): HTMLElement {
-  const rail = el('aside', { class: 'rail' });
-  rail.appendChild(railHeader('General'));
+  // Horizontal top header (tab strip). Session and Modules form the General
+  // group; a vertical divider plus a non-clickable "Agents" label precede the
+  // TPM/SWE/QA tabs. The 'sub' indent that the Agents items used in the sidebar
+  // is dropped since indentation has no meaning in a row.
+  const rail = el('nav', { class: 'rail' });
   rail.appendChild(railItem('general', 'Session'));
   rail.appendChild(railItem('modules', 'Modules'));
-  rail.appendChild(railHeader('Agents'));
-  rail.appendChild(railItem('agents:tpm', 'TPM', true));
-  rail.appendChild(railItem('agents:swe', 'SWE', true));
-  rail.appendChild(railItem('agents:qa', 'QA', true));
+  rail.appendChild(railDivider());
+  rail.appendChild(railGroupLabel('Agents'));
+  rail.appendChild(railItem('agents:tpm', 'TPM'));
+  rail.appendChild(railItem('agents:swe', 'SWE'));
+  rail.appendChild(railItem('agents:qa', 'QA'));
   return rail;
 }
 
-function railHeader(text: string): HTMLElement {
-  const e = el('div', { class: 'rail-section' });
-  e.textContent = text;
-  return e;
+function railDivider(): HTMLElement {
+  return el('div', { class: 'rail-divider', 'aria-hidden': 'true' });
 }
 
-function railItem(id: SectionId, label: string, sub = false): HTMLElement {
-  const cls = `rail-item${sub ? ' sub' : ''}${state.activeSection === id ? ' active' : ''}`;
+function railGroupLabel(text: string): HTMLElement {
+  const label = el('span', { class: 'rail-group-label', 'aria-hidden': 'true' });
+  label.textContent = text;
+  return label;
+}
+
+function railItem(id: SectionId, label: string): HTMLElement {
+  const cls = `rail-item${state.activeSection === id ? ' active' : ''}`;
   const btn = el('button', { class: cls });
   btn.textContent = label;
   btn.addEventListener('click', () => setSection(id));
@@ -721,31 +729,28 @@ function renderGeneral(wrapper: HTMLElement): void {
   wrapper.appendChild(textEl('h1', 'Session'));
   wrapper.appendChild(textEl('p', 'Configure the command that launches your Nomeda agent team, then start a session.', 'subtitle'));
 
-  // Horizontal divider between the header and the settings content.
-  wrapper.appendChild(el('hr', { class: 'section-divider' }));
-
-  // Three-column launch row: [CLI Command] [Initiation Command] [Configuration] [▶]
-  // Each column is a label-above-input field; the play button sits at the far right.
+  // Launch row: [Package] [CLI Alias] [Initiation Command] [Configuration] [Play]
+  // Package sits at the far left, Play at the far right, with the three
+  // label-above-input fields between them. Built first, then appended to the
+  // wrapper directly under the Session description (above the alias editor).
   const launchRow = el('div', { class: 'session-launch-row' });
 
   // Column 1 — CLI Alias picker. Replaces the legacy free-text `cliCommand`
   // input (now relocated below as "Fallback CLI" inside the alias editor).
   // Selecting an alias names the shell-registered Claude CLI invocation the
   // launcher should use; the empty option falls back to the legacy command.
+  // Fields carry no visible label; each control surfaces its description via a
+  // native `title` tooltip on hover — Nomeda's standard hover-help mechanism.
   const aliasField = el('div', { class: 'session-launch-field' });
-  const aliasLabel = el('label', { class: 'setting-label session-command-label' });
-  aliasLabel.textContent = 'CLI Alias';
-  aliasField.appendChild(aliasLabel);
-  aliasField.appendChild(renderAliasPickerDropdown());
-  launchRow.appendChild(aliasField);
+  const aliasPicker = renderAliasPickerDropdown();
+  aliasPicker.title = 'The Claude CLI alias used to launch this session.';
+  aliasField.appendChild(aliasPicker);
 
   // Column 2 — Initiation Command
   const sessionField = el('div', { class: 'session-launch-field' });
-  const sessionLabel = el('label', { class: 'setting-label session-command-label' });
-  sessionLabel.textContent = 'Initiation Command';
-  sessionField.appendChild(sessionLabel);
   const sessionInp = el('input', { class: 'setting-input session-command-input' }) as HTMLInputElement;
   sessionInp.type = 'text';
+  sessionInp.title = 'The trigger word sent to the CLI after it boots to start the Nomeda session.';
   sessionInp.value = state.sessionCommand;
   sessionInp.addEventListener('blur', () => {
     state.sessionCommand = sessionInp.value;
@@ -757,19 +762,17 @@ function renderGeneral(wrapper: HTMLElement): void {
     });
   });
   sessionField.appendChild(sessionInp);
-  launchRow.appendChild(sessionField);
 
   // Column 3 — Configuration dropdown
   const configField = el('div', { class: 'session-launch-field session-launch-field--config' });
-  const configLabel = el('label', { class: 'setting-label session-command-label' });
-  configLabel.textContent = 'Configuration';
-  configField.appendChild(configLabel);
-  configField.appendChild(renderConfigDropdown());
-  launchRow.appendChild(configField);
+  const configDropdown = renderConfigDropdown();
+  configDropdown.title = 'The module configuration preset applied to this session.';
+  configField.appendChild(configDropdown);
 
-  // Play button — far right of the row, aligned to the bottom of the columns.
+  // Play button — sits inline at the end of the launch row, level with the inputs.
+  // Modeled on Mandrake's .dir-row buttons: a framed 28x28 box holding the glyph.
   const sessionBtn = el('button', {
-    class: 'icon-button framed',
+    class: 'icon-button framed session-action-button session-play-button',
     type: 'button',
     'aria-label': 'Open Nomeda session',
     title: 'Open a new Nomeda session',
@@ -777,24 +780,38 @@ function renderGeneral(wrapper: HTMLElement): void {
   sessionBtn.innerHTML = PLAY_ICON_SVG;
   sessionBtn.addEventListener('click', () => vscode.postMessage({ type: 'openSession' }));
 
-  // Update Extension button — sits beside the Play button at the far right of
-  // the launch row. Delegates to the nomeda.updateExtension command on the host.
+  // Update Extension button — sits beside the Play button at the end of the row.
+  // Delegates to the nomeda.updateExtension command on the host.
   const updateBtn = el('button', {
-    class: 'icon-button framed',
+    class: 'icon-button framed session-action-button',
     type: 'button',
     'aria-label': 'Update Extension',
     title: 'Update the Nomeda extension: pull latest from the remote repository, rebuild, reinstall, and reload.',
   }) as HTMLButtonElement;
   updateBtn.innerHTML = UPDATE_EXTENSION_ICON_SVG;
   updateBtn.addEventListener('click', () => vscode.postMessage({ type: 'updateExtension' }));
-  // Alias registry editor — lives above the launch row so the user defines
-  // aliases first, then picks one from the dropdown to launch.
-  wrapper.appendChild(renderAliasEditor());
-  wrapper.appendChild(el('hr', { class: 'section-divider' }));
 
-  launchRow.appendChild(sessionBtn);
+  // Assemble the launch row in visual order: Package (far left), the three
+  // fields, then Play (far right). All five are direct children of
+  // .session-launch-row so the single row gap governs every adjacent pair
+  // uniformly; flex-wrap:nowrap keeps them on one line and flex-shrink:0 on
+  // .icon-button keeps the buttons fixed while the fields absorb any narrowing.
   launchRow.appendChild(updateBtn);
+  launchRow.appendChild(aliasField);
+  launchRow.appendChild(sessionField);
+  launchRow.appendChild(configField);
+  launchRow.appendChild(sessionBtn);
+
+  // Launch row sits directly under the Session description. The alias registry
+  // editor (its own divider) follows below it.
   wrapper.appendChild(launchRow);
+  wrapper.appendChild(el('hr', { class: 'section-divider' }));
+  wrapper.appendChild(renderAliasEditor());
+
+  // CLAUDE.md bootstrap snippet, styled like the Agents tabs' Instructions
+  // panel. Users paste it into their Claude Code CLAUDE.md / user memory.
+  wrapper.appendChild(el('hr', { class: 'section-divider' }));
+  wrapper.appendChild(renderSessionInstruction());
 
   // Custom settings sections placed in 'general' from any module.
   const customSections = state.modules
@@ -1205,6 +1222,18 @@ function renderAliasPickerDropdown(): HTMLElement {
  * command on blur / delete) posts a `saveAliases` with the full trimmed list.
  * The host owns conflict reconciliation and rc-file writeback.
  */
+/**
+ * Extract the CLAUDE_CONFIG_DIR value from an alias command for display. Honors
+ * quoting and extra leading env vars, falls back to `~/.claude`, and normalizes
+ * `$HOME`/`${HOME}` to `~`.
+ */
+function aliasConfigDir(command: string): string {
+  const m = command.match(/CLAUDE_CONFIG_DIR=(?:"([^"]*)"|'([^']*)'|(\S+))/);
+  const raw = m ? (m[1] ?? m[2] ?? m[3]) : '';
+  if (!raw) return '~/.claude';
+  return raw.replace(/^\$\{?HOME\}?(?=\/|$)/, '~');
+}
+
 function renderAliasEditor(): HTMLElement {
   const block = el('div', { class: 'alias-editor' });
 
@@ -1235,8 +1264,11 @@ function renderAliasEditor(): HTMLElement {
   const headRow = el('tr');
   const aliasHead = el('th');
   aliasHead.textContent = 'Alias';
+  const configDirHead = el('th', { class: 'kv-cell-configdir' });
+  configDirHead.textContent = 'Config Dir';
   const actionHead = el('th', { class: 'kv-actions-head' });
   headRow.appendChild(aliasHead);
+  headRow.appendChild(configDirHead);
   headRow.appendChild(actionHead);
   thead.appendChild(headRow);
   table.appendChild(thead);
@@ -1245,7 +1277,7 @@ function renderAliasEditor(): HTMLElement {
   if (state.aliases.length === 0) {
     const emptyRow = el('tr', { class: 'kv-empty-row' });
     const td = el('td');
-    td.setAttribute('colspan', '2');
+    td.setAttribute('colspan', '3');
     td.textContent = 'No aliases registered. Add one below.';
     emptyRow.appendChild(td);
     tbody.appendChild(emptyRow);
@@ -1303,6 +1335,14 @@ function renderAliasRow(a: CliAlias, index: number): HTMLElement {
   aliasTd.appendChild(aliasInp);
   tr.appendChild(aliasTd);
 
+  // Read-only derived Config Dir column. Shows the parsed CLAUDE_CONFIG_DIR
+  // path; hovering reveals the full command via the title attribute.
+  const configDirTd = el('td', { class: 'kv-cell kv-cell-configdir' });
+  const configDirSpan = el('span', { class: 'kv-configdir-text', title: a.command });
+  configDirSpan.textContent = aliasConfigDir(a.command);
+  configDirTd.appendChild(configDirSpan);
+  tr.appendChild(configDirTd);
+
   // Delete button.
   const actionTd = el('td', { class: 'kv-cell kv-cell-actions' });
   const delBtn = el('button', {
@@ -1344,15 +1384,26 @@ function renderAliasAddRow(): HTMLElement {
 
   const aliasTd = el('td', { class: 'kv-cell kv-add-cell' });
   const aliasField = el('div', { class: 'kv-add-field' });
-  const aliasLabel = el('label', { class: 'kv-add-label' });
-  aliasLabel.textContent = 'Alias name';
   const aliasInp = el('input', { class: 'setting-input kv-input' }) as HTMLInputElement;
   aliasInp.type = 'text';
   aliasInp.placeholder = 'claude-1';
-  aliasField.appendChild(aliasLabel);
+  aliasInp.title = 'Name for the new Claude CLI alias';
   aliasField.appendChild(aliasInp);
   aliasTd.appendChild(aliasField);
   tr.appendChild(aliasTd);
+
+  // Config Dir preview column — mirrors the data rows and live-updates to show
+  // the `~/.<name>` path the auto-built command would use as the user types.
+  const configDirTd = el('td', { class: 'kv-cell kv-cell-configdir' });
+  const configDirSpan = el('span', { class: 'kv-configdir-text' });
+  const updateConfigDirPreview = () => {
+    const typed = aliasInp.value.trim();
+    configDirSpan.textContent = typed.length > 0 ? `~/.${typed}` : '';
+  };
+  updateConfigDirPreview();
+  aliasInp.addEventListener('input', updateConfigDirPreview);
+  configDirTd.appendChild(configDirSpan);
+  tr.appendChild(configDirTd);
 
   const actionTd = el('td', { class: 'kv-cell kv-cell-actions kv-add-cell kv-add-cell--actions' });
   const addBtn = el('button', { class: 'primary kv-add-button', type: 'button' }) as HTMLButtonElement;
@@ -2962,6 +3013,57 @@ const AGENT_FULL_NAMES: Record<string, string> = {
   swe: 'Software Engineer',
   qa: 'Quality Assurance',
 };
+
+/**
+ * Session tab "Instruction" panel: the CLAUDE.md bootstrap snippet a user
+ * pastes into their Claude Code CLAUDE.md / user memory so the configured
+ * Initiation Command boots the Nomeda TPM. Reuses the unscoped
+ * `agent-config-header` + `pre.prompt` classes so it matches the Agents tabs.
+ * The trigger word mirrors the configured Session Command.
+ */
+function renderSessionInstruction(): HTMLElement {
+  const wrap = el('div');
+
+  const trigger = (state.sessionCommand || 'initiate').trim() || 'initiate';
+  const snippet =
+    `## Nomeda Initiation\n\n` +
+    `When I send the word \`${trigger}\` (the Nomeda Initiation Command), read the file at ` +
+    `the path in the $NOMEDA_TPM_PROMPT_FILE environment variable and adopt it as your ` +
+    `system prompt - you become the Nomeda TPM and run its startup sequence. The composed ` +
+    `SWE and QA prompts are at $NOMEDA_SWE_PROMPT_FILE and $NOMEDA_QA_PROMPT_FILE; read the ` +
+    `matching file before spawning a subagent so it boots into the right role.`;
+
+  // Header row: title on the left, copy button flush right - mirrors the
+  // module-generation copy-button pattern (icon-button + COPY_ICON_SVG).
+  const header = el('div', { class: 'agent-config-header instruction-header' });
+  const title = el('span');
+  title.textContent = 'Instruction';
+  header.appendChild(title);
+
+  const copyBtn = el('button', {
+    class: 'icon-button framed',
+    type: 'button',
+    'aria-label': 'Copy Initiation Instruction',
+    title: 'Copy Initiation Instruction',
+  }) as HTMLButtonElement;
+  copyBtn.innerHTML = COPY_ICON_SVG;
+  copyBtn.addEventListener('click', () => {
+    void navigator.clipboard.writeText(snippet);
+    const prev = copyBtn.title;
+    copyBtn.title = 'Copied';
+    window.setTimeout(() => {
+      copyBtn.title = prev;
+    }, 1200);
+  });
+  header.appendChild(copyBtn);
+  wrap.appendChild(header);
+
+  const pre = el('pre', { class: 'prompt' });
+  pre.textContent = snippet;
+  wrap.appendChild(pre);
+
+  return wrap;
+}
 
 function renderAgent(wrapper: HTMLElement, agentId: string): void {
   const h1 = el('h1');

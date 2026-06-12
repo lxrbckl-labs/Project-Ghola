@@ -71,44 +71,40 @@ if [ "$LOCAL_ONLY" -eq 0 ]; then
     exit 1
   fi
 
-  # REMOTE version: read package.json at the upstream ref without touching the
-  # working tree.
+  # REMOTE version: read the VERSION file at the upstream ref without touching
+  # the working tree. The VERSION file is the source of truth for the update
+  # signal (package.json is no longer consulted for versioning).
   REMOTE_VERSION=""
-  if REMOTE_PKG="$(git show "$UPSTREAM:package.json" 2>/dev/null)"; then
-    REMOTE_VERSION="$(printf '%s' "$REMOTE_PKG" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version" 2>/dev/null || true)"
+  if REMOTE_VERSION_RAW="$(git show "$UPSTREAM:VERSION" 2>/dev/null)"; then
+    REMOTE_VERSION="$(printf '%s' "$REMOTE_VERSION_RAW" | tr -d '[:space:]')"
   fi
   if [ -z "$REMOTE_VERSION" ]; then
-    echo "[ext] ERROR: could not read remote version from $UPSTREAM:package.json" >&2
+    echo "[ext] ERROR: could not read remote version from $UPSTREAM:VERSION" >&2
     exit 1
   fi
 
-  # INSTALLED version: ask the `code` CLI which version is currently installed.
-  INSTALLED_VERSION="$(code --list-extensions --show-versions 2>/dev/null | grep -i "^${EXT_ID}@" | sed 's/^.*@//' || true)"
+  # LOCAL version: the working-tree VERSION file (REPO_ROOT is the clone root
+  # where VERSION lives; cwd is REPO_ROOT).
+  LOCAL_VERSION="$(tr -d '[:space:]' < ./VERSION 2>/dev/null || true)"
 
-  # LOCAL repo version: the version in the working-tree package.json.
-  LOCAL_VERSION="$(node -p "require('./package.json').version" 2>/dev/null || true)"
+  echo "[ext] remote=$REMOTE_VERSION local=${LOCAL_VERSION:-unknown} upstream=$UPSTREAM"
 
-  echo "[ext] remote=$REMOTE_VERSION installed=${INSTALLED_VERSION:-none} local=${LOCAL_VERSION:-unknown} upstream=$UPSTREAM"
-
-  # If what's installed already matches the remote, there is nothing to do.
-  if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" = "$REMOTE_VERSION" ]; then
+  # If the working-tree VERSION already matches the remote, there is nothing to
+  # do — the source is current.
+  if [ -n "$LOCAL_VERSION" ] && [ "$LOCAL_VERSION" = "$REMOTE_VERSION" ]; then
     echo "[ext] ALREADY_UP_TO_DATE"
+    echo "[ext] already at remote version $REMOTE_VERSION; nothing to update"
     exit 0
   fi
 
-  # Pull ONLY when the local repo version differs from remote — i.e. the
-  # working tree is actually behind. If local already equals remote (the source
-  # is current but the INSTALLED copy is stale), skip the pull so a dirty tree
-  # can't fail `git pull --ff-only`; we just rebuild/reinstall what's here.
-  if [ "$LOCAL_VERSION" != "$REMOTE_VERSION" ]; then
-    if ! git pull --ff-only >/dev/null 2>&1; then
-      echo "[ext] ERROR: git pull --ff-only failed (resolve manually or run with --local)" >&2
-      exit 1
-    fi
-    echo "[ext] pulled to remote version $REMOTE_VERSION"
-  else
-    echo "[ext] local repo already at remote version; skipping pull"
+  # Update needed: the working tree is behind the remote VERSION. Fast-forward
+  # pull, then rebuild/repackage/reinstall below.
+  echo "[ext] update needed: local=${LOCAL_VERSION:-unknown} -> remote=$REMOTE_VERSION"
+  if ! git pull --ff-only >/dev/null 2>&1; then
+    echo "[ext] ERROR: git pull --ff-only failed (resolve manually or run with --local)" >&2
+    exit 1
   fi
+  echo "[ext] pulled to remote version $REMOTE_VERSION"
 fi
 
 # ── Install dependencies + build ────────────────────────────────────────────
@@ -160,9 +156,10 @@ echo "[ext] installing $VSIX_NAME"
 code --install-extension "$VSIX_NAME" --force
 
 # ── Report the installed version via the parseable marker line ──────────────
-VERSION="$(node -p "require('./package.json').version" 2>/dev/null || true)"
+# Version comes from the VERSION file (the source of truth), not package.json.
+VERSION="$(tr -d '[:space:]' < ./VERSION 2>/dev/null || true)"
 if [ -z "$VERSION" ]; then
-  echo "[ext] ERROR: could not read installed version from package.json" >&2
+  echo "[ext] ERROR: could not read installed version from VERSION" >&2
   exit 1
 fi
 echo "[ext] Installed: nomeda v$VERSION"

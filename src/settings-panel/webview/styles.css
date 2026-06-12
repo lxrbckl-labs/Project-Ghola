@@ -16,51 +16,71 @@ html, body {
 
 #app {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
 }
 
+/* Top header tab strip. Was a 220px left sidebar; now a full-width horizontal
+   bar above the content area. Items wrap if the panel is too narrow. */
 .rail {
-  width: 220px;
-  flex: 0 0 220px;
-  border-right: 1px solid var(--vscode-panel-border);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--vscode-panel-border);
   background: var(--vscode-sideBar-background);
-  overflow-y: auto;
-  padding: 8px 0;
+  padding: 4px 12px;
 }
 
-.rail-section {
-  padding: 8px 16px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--vscode-descriptionForeground);
+/* Subtle separator between the General group (Session, Modules) and the
+   Agents group (TPM, SWE, QA) in the horizontal bar. Negative vertical margin
+   cancels the rail's 4px top/bottom padding so the line runs edge-to-edge. */
+.rail-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: -4px 8px;
+  background: var(--vscode-panel-border);
 }
 
 .rail-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 6px 16px;
+  display: inline-block;
+  text-align: center;
+  padding: 6px 12px;
   background: transparent;
   border: none;
-  color: inherit;
+  border-bottom: 2px solid transparent;
+  color: var(--vscode-descriptionForeground);
   cursor: pointer;
   font: inherit;
+  white-space: nowrap;
 }
 
 .rail-item:hover {
   background: var(--vscode-list-hoverBackground);
 }
 
+/* Active tab: bold text as the selection indicator — no background fill or
+   underline accent. The foreground color ensures bold reads cleanly. */
 .rail-item.active {
-  background: var(--vscode-list-activeSelectionBackground);
-  color: var(--vscode-list-activeSelectionForeground);
+  color: var(--vscode-foreground);
+  font-weight: 600;
 }
 
-.rail-item.sub {
-  padding-left: 32px;
+/* Non-clickable group label for the Agents section of the tab strip. Muted,
+   uppercase, small — visually groups TPM/SWE/QA without acting as a tab. */
+.rail-group-label {
+  display: inline-block;
+  padding: 6px 4px 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
 }
 
 .content {
@@ -294,34 +314,71 @@ pre.prompt {
   margin-bottom: 6px;
 }
 
-/* Three-column launch row: [CLI Command] [Initiation Command] [Configuration] [▶].
-   Each column is a flex child that grows equally; the play button is flex-shrink:0
-   at the end. On narrow panels the row wraps so columns stack. */
+/* Single-row launch bar: [CLI Alias] [Initiation Command] [Configuration] [Play] [Package].
+   flex-wrap:nowrap keeps all five items on one line at every panel width; the three
+   field columns shrink (min-width:0 below) to absorb narrowing while the buttons stay
+   at their natural size. The fields carry no visible labels (each surfaces its
+   description via a hover title), so align-items:center vertically centres the bare
+   input/dropdown controls against the 28x28 action buttons. */
 .session-launch-row {
   display: flex;
-  align-items: flex-end;
-  gap: 16px;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
 }
 
-/* Each label-above-input column. Grows to fill equal share of the row. */
+/* Each label-above-input column. Grows to fill equal share of the row; min-width:0
+   lets the column compress below its content's intrinsic width so it never forces
+   the row to wrap or overflow on a narrow panel. */
 .session-launch-field {
   display: flex;
   flex-direction: column;
-  flex: 1 1 140px;
-  min-width: 120px;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 /* Configuration column: narrower — the dropdown doesn't need as much width. */
 .session-launch-field--config {
   flex: 0 1 200px;
-  min-width: 140px;
+  min-width: 0;
 }
 
 /* Configuration dropdown inside the launch row fills its column. */
 .session-launch-field--config .config-dropdown {
   width: 100%;
   flex: unset;
+  min-width: 0;
+}
+
+/* The label-above-input field's interactive child (text input or dropdown
+   select) must also be allowed to shrink below its intrinsic width so the
+   column can compress and the row stays on one line. */
+.session-launch-field > input,
+.session-launch-field > select {
+  min-width: 0;
+}
+
+/* Session action buttons (Play, Package): zero out the inherited framed padding
+   so the icon can occupy more of the fixed 28x28 box, then set the SVG to 26px
+   — the largest size that fits cleanly inside the 28px content area (1px border
+   each side) without clipping. Box dimensions are NOT changed here; these buttons
+   still inherit the standard 28x28 footprint from .icon-button.framed.
+   Scoped to .session-action-button so other framed buttons are unaffected. */
+button.icon-button.framed.session-action-button {
+  padding: 0;
+}
+
+button.icon-button.framed.session-action-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Play button icon is 5% smaller than the Package icon (15px vs 16px).
+   Same selector specificity as the shared rule above; placed after it so
+   source order guarantees this rule wins for .session-play-button. */
+button.icon-button.framed.session-play-button svg {
+  width: 15px;
+  height: 15px;
 }
 
 /* Input grows to fill its column. */
@@ -959,6 +1016,28 @@ button.module-row-chevron:focus-visible {
   text-align: center;
 }
 
+/* Read-only derived Config Dir column on the Claude CLI Aliases table. Takes
+   the remaining width and truncates long paths with an ellipsis — the full
+   command is available via the cell's title tooltip. */
+.kv-table .kv-cell-configdir {
+  width: auto;
+  max-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kv-configdir-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
 /* Optional Description column — opt-in per `optionalDescription: true` in the
    manifest. The renderer adds the `kv-table--with-description` modifier class
    to the `<table>` element when the column is present, which lets us swap the
@@ -1315,6 +1394,14 @@ button.module-row-chevron:focus-visible {
   font-size: 13px;
   font-weight: 500;
   color: var(--vscode-foreground);
+}
+
+/* Session tab Instruction header: title left, copy button flush right. */
+.agent-config-header.instruction-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 /* Flex row of compact [label : input] fields — three on the SWE subpage,

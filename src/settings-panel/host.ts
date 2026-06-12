@@ -190,6 +190,11 @@ export class SettingsPanel implements vscode.Disposable {
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.js'),
     );
     const nonce = this.makeNonce();
+    // Extension version from the authoritative source: the bundled VERSION file
+    // at the extension root. Falls back to package.json (via the activated
+    // extension manifest), then 'dev', so the value never renders as
+    // "undefined" when the file is missing.
+    const version = this.readBundledVersion();
     const csp = [
       `default-src 'none'`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
@@ -207,10 +212,29 @@ export class SettingsPanel implements vscode.Disposable {
     <style>${await this.loadStyles()}</style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app" data-version="${version}"></div>
     <script nonce="${nonce}" src="${scriptUri}"></script>
   </body>
 </html>`;
+  }
+
+  /**
+   * Read the bundled VERSION file (the source of truth for the extension
+   * version) from the extension root. Falls back to package.json's version,
+   * then 'dev', so the panel always holds a non-empty version string.
+   */
+  private readBundledVersion(): string {
+    try {
+      const raw = fsSync.readFileSync(
+        path.join(this.context.extensionPath, 'VERSION'),
+        'utf-8',
+      );
+      const trimmed = raw.trim();
+      if (trimmed) return trimmed;
+    } catch {
+      // fall through to package.json / 'dev'
+    }
+    return (this.context.extension?.packageJSON?.version as string | undefined) ?? 'dev';
   }
 
   private async loadStyles(): Promise<string> {

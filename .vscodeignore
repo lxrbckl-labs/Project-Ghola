@@ -10,3 +10,7 @@ modules/**/*.ts
 esbuild.config.js
 **/*.log
 .nomeda/**
+
+# VERSION is the source of truth for the extension version and is read at
+# runtime (settings panel + reinstall.sh). It must ship inside the VSIX.
+!VERSION
