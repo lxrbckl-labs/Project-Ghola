@@ -7,7 +7,7 @@
   "proactive": false,
   "category": "integration",
   "kind": "capability",
-  "trigger": "event",
+  "trigger": "user-request",
   "tier": "optional",
   "contributes": {
     "promptFragments": [

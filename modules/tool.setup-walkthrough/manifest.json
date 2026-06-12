@@ -1,13 +1,13 @@
 {
   "id": "tool.setup-walkthrough",
   "name": "Setup Walkthrough",
-  "version": "0.1.1",
-  "description": "Agent-driven first-time setup playbook that walks new Nomeda users through Obsidian, Atlassian credentials, default module selection, and the SCM-sidebar widgets.",
+  "version": "0.1.2",
+  "description": "Agent-driven first-time setup playbook that walks new Nomeda users through Obsidian, Atlassian credentials, default module selection, and the SCM-sidebar Ticket Widget.",
   "proactive": true,
   "category": "workflow",
   "kind": "capability",
   "trigger": "session-start",
-  "tier": "optional",
+  "tier": "recommended",
   "contributes": {
     "promptFragments": [
       { "target": "tpm", "contentPath": "setup-walkthrough.md" }
@@ -27,7 +27,7 @@
           "obsidian": { "value": "Confirm or set the Obsidian vault path. Walk through tool.obsidian-notes' auto-discovery toggle and the projectsSubfolder convention.", "enabled": true },
           "atlassian": { "value": "Walk through integration.atlassian-suite credential setup — Jira email, API token in SecretStorage, Jira base URL, Bitbucket workspace.", "enabled": true },
           "modules-default-set": { "value": "Tour the Modules tab. Highlight which modules are default-enabled and which are opt-in. Suggest the typical-workflow toggles based on whether the user does ticket work, PR review, or both.", "enabled": true },
-          "scm-widgets": { "value": "Point out the Branch Widget and Ticket Widget in the Source Control sidebar. Explain when each appears (Atlassian Suite enabled / Ticket Work mode + ticket id set).", "enabled": true },
+          "scm-widgets": { "value": "Point out the Ticket Widget in the Source Control sidebar. Explain when it appears (Ticket Work mode active with a ticket id set and the widget toggle on).", "enabled": true },
           "first-session": { "value": "Suggest a low-stakes first session — open a small ticket in Ticket Work mode, watch the AC extract into todos, run the pre-PR trio on a real change. The user learns by doing, not by reading.", "enabled": true }
         },
         "optionalValue": false,

@@ -19,7 +19,7 @@ export type ModuleCategory =
   | 'session-mode'
   | 'utility';
 
-export type ModuleKind = 'capability' | 'convention';
+export type ModuleKind = 'capability' | 'convention' | 'workflow';
 
 export type ModuleTrigger = 'session-start' | 'user-request' | 'phrase-detection' | 'always-applied' | 'event';
 export type ModuleTier = 'essential' | 'recommended' | 'optional';

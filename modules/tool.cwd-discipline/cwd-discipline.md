@@ -18,7 +18,7 @@ There are four categories of exception. An operation that matches ANY of them is
 
 `parameters.allowedExceptionPaths` is a user-managed map of absolute paths or path patterns to one-line rationales. An operation whose target path matches any enabled entry proceeds without challenge. The rationale is panel-only metadata — it is not passed to the agent and is not surfaced to the user during the operation — its purpose is to remind the user later why each exception was added so the list does not grow stale.
 
-The seeded defaults cover the typical SWT installation: the Obsidian vault (`${SWT_OBSIDIAN_PATH}/**`), the unified settings file (`${SWT_SETTINGS_PATH}`), the secrets file (`${SWT_SECRETS_PATH}` — read-only by convention, never logged or echoed), and the bundled SWT helper scripts (`${SWT_DIR}/scripts/**`). Add project-specific exceptions as you encounter them; remove seeds if your environment does not need them.
+The seeded defaults cover the typical installation: the Obsidian vault (`${SWT_OBSIDIAN_PATH}/**`), the unified settings file (`${SWT_SETTINGS_PATH}`), the secrets file (`${SWT_SECRETS_PATH}` — read-only by convention, never logged or echoed), and the bundled helper scripts (`${SWT_DIR}/scripts/**`). Add project-specific exceptions as you encounter them; remove seeds if your environment does not need them.
 
 ### Verbal redirect
 

@@ -60,6 +60,28 @@ export class ConfigurationsStore {
     return next;
   }
 
+  /**
+   * Append MANY configurations in a SINGLE `setAll` write (one atomic
+   * `workspaceState.update`). Generates id + createdAt for each the same way
+   * `add` does and forces `isDefault: false`. Preserves existing configs and
+   * input order, and returns the created records. Used for all-or-nothing
+   * seeding: if the write throws, no partial state is persisted.
+   */
+  async addMany(
+    items: Array<{ name: string; enabledIds: string[]; settings: Record<string, Record<string, unknown>> }>,
+  ): Promise<NamedConfiguration[]> {
+    const created: NamedConfiguration[] = items.map((item) => ({
+      id: makeId(),
+      name: item.name,
+      enabledIds: [...item.enabledIds],
+      settings: deepClone(item.settings),
+      isDefault: false,
+      createdAt: Date.now(),
+    }));
+    await this.setAll([...this.getAll(), ...created]);
+    return created;
+  }
+
   async update(id: string, patch: Partial<Omit<NamedConfiguration, 'id'>>): Promise<void> {
     const list = this.getAll();
     const idx = list.findIndex((c) => c.id === id);

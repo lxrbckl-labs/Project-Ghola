@@ -1,7 +1,7 @@
 {
   "id": "tool.session-bootstrap",
   "name": "Session Bootstrap",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Orchestrates the session-start sequence — config load, team allocation, branch detection, proactive-module consultation, ready signal — and renders the user-facing boot diagnostics.",
   "proactive": true,
   "category": "workflow",
@@ -16,9 +16,9 @@
       "steps": {
         "type": "keyValue",
         "label": "Steps",
-        "description": "User-managed list of session-start steps TPM runs in order before responding to the first user message. Each entry is a step name plus a one-line description of what the step does. Default seeds match the SWT 5-step convention. Reorder by editing the kv-table; add custom steps for project-specific boot work; disable individual steps without deleting them.",
+        "description": "User-managed list of session-start steps TPM runs in order before responding to the first user message. Each entry is a step name plus a one-line description of what the step does. Default seeds match the standard 5-step boot convention. Reorder by editing the kv-table; add custom steps for project-specific boot work; disable individual steps without deleting them.",
         "default": {
-          "config-load": { "value": "Read swt_settings.json (or equivalent) and surface the active configuration.", "enabled": true },
+          "config-load": { "value": "Read the session configuration file (or equivalent) and surface the active configuration.", "enabled": true },
           "team-allocation": { "value": "Compute performance / efficiency / QA core counts and surface the team shape.", "enabled": true },
           "branch-detection": { "value": "Detect the active git branch and base; cache for downstream proactive modules.", "enabled": true },
           "proactive-modules": { "value": "Consult every enabled proactive module in turn (fastpath-check, obsidian-notes, setup-walkthrough, active session mode (mode.cd, mode.ticket-work, or mode.support), session-handoff, lenses auto-detection triggers). Each module's session-start work runs here.", "enabled": true },
@@ -31,8 +31,8 @@
       "outputFormat": {
         "type": "string",
         "label": "Output Format",
-        "description": "Format for the user-facing boot diagnostics line(s). swt-style emits [swt] check step-name — detail per step, matching the SWT precedent. compact emits a single line summarizing the full boot phase. silent emits nothing (steps still run, but the user sees only TPM's first response). Default swt-style is the most informative.",
-        "default": "swt-style"
+        "description": "Format for the user-facing boot diagnostics line(s). detailed emits [nomeda] check step-name — detail per step. compact emits a single line summarizing the full boot phase. silent emits nothing (steps still run, but the user sees only TPM's first response). Default detailed is the most informative.",
+        "default": "detailed"
       },
       "failureBehavior": {
         "type": "string",
@@ -43,7 +43,7 @@
       "includeTimings": {
         "type": "boolean",
         "label": "Include Timings",
-        "description": "When on, each step's elapsed time is appended to the boot diagnostics line (e.g. [swt] check proactive-modules — 312ms). Useful for diagnosing slow boots. When off, no timings are shown. Off is the typical default for normal use; turn on temporarily when investigating slow startups.",
+        "description": "When on, each step's elapsed time is appended to the boot diagnostics line (e.g. [nomeda] check proactive-modules — 312ms). Useful for diagnosing slow boots. When off, no timings are shown. Off is the typical default for normal use; turn on temporarily when investigating slow startups.",
         "default": false
       }
     }

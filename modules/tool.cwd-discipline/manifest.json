@@ -1,7 +1,7 @@
 {
   "id": "tool.cwd-discipline",
   "name": "Cwd Discipline",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Enforces that agents stay in the user's current working directory by default, with explicit exceptions for notes, settings, mode-driven bindings, and user redirects.",
   "proactive": false,
   "category": "safety",
@@ -25,9 +25,9 @@
         "description": "User-managed list of absolute paths or path patterns agents are permitted to access even when they sit outside cwd. Each entry is a path plus a one-line rationale. Add project-specific exceptions (e.g. a shared config dir, a downstream service repo); leave default seeds in place for the typical Obsidian/settings/script paths.",
         "default": {
           "${SWT_OBSIDIAN_PATH}/**": { "value": "Obsidian vault writes via tool.obsidian-notes", "enabled": true },
-          "${SWT_SETTINGS_PATH}": { "value": "Unified settings file at the SWT settings path", "enabled": true },
+          "${SWT_SETTINGS_PATH}": { "value": "Unified settings file", "enabled": true },
           "${SWT_SECRETS_PATH}": { "value": "Read-only access to the secrets file (never logged or echoed)", "enabled": true },
-          "${SWT_DIR}/scripts/**": { "value": "Bundled SWT helper scripts (lprun-query, clipboard-read, etc.)", "enabled": true }
+          "${SWT_DIR}/scripts/**": { "value": "Bundled helper scripts (lprun-query, clipboard-read, etc.)", "enabled": true }
         },
         "keyLabel": "Path",
         "valueLabel": "Rationale",

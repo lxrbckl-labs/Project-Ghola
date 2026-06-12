@@ -27,7 +27,7 @@
     },
     "kind": {
       "type": "string",
-      "enum": ["capability", "convention"],
+      "enum": ["capability", "convention", "workflow"],
       "description": "Whether the module adds a positive ability ('capability') or purely constrains agent behavior ('convention')."
     },
     "requires": {

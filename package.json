@@ -56,7 +56,7 @@
         "nomeda.modulesDir": {
           "type": "string",
           "default": "modules",
-          "description": "Directory (relative to workspace root) containing Nomeda modules."
+          "description": "Optional override for the Nomeda modules directory. By default modules are loaded from the installed extension itself. Set an absolute path, or a path relative to the workspace root, to load modules from a custom location."
         },
         "nomeda.cliCommand": {
           "type": "string",
@@ -70,14 +70,26 @@
         },
         "nomeda.cliAliases": {
           "type": "array",
-          "default": [{ "alias": "claude", "command": "CLAUDE_CONFIG_DIR=$HOME/.claude command claude" }],
+          "default": [
+            {
+              "alias": "claude",
+              "command": "CLAUDE_CONFIG_DIR=$HOME/.claude command claude"
+            }
+          ],
           "items": {
             "type": "object",
             "properties": {
-              "alias": { "type": "string" },
-              "command": { "type": "string" }
+              "alias": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              }
             },
-            "required": ["alias", "command"]
+            "required": [
+              "alias",
+              "command"
+            ]
           },
           "description": "Registry of named Claude CLI aliases managed by Nomeda. Each entry is { alias, command } — the alias name (e.g. \"claude-1\") and the shell command it expands to (e.g. \"CLAUDE_CONFIG_DIR=$HOME/.claude command claude\"). Saving this list writes a Nomeda-managed block to nomeda.aliasFile (default ~/.bashrc) so the aliases are available in any new shell, and exposes the alias names in the Sessions tab dropdown for one-click selection. Edit entries here or via the Sessions tab; both surfaces stay in sync."
         },
@@ -107,13 +119,21 @@
         },
         "nomeda.swe.performanceCoresModel": {
           "type": "string",
-          "enum": ["opus", "sonnet", "haiku"],
+          "enum": [
+            "opus",
+            "sonnet",
+            "haiku"
+          ],
           "default": "opus",
           "description": "Claude model used by default when SWE-class subagents are deployed onto performance cores. Performance cores handle the critical-path task; defaulting to Opus matches the highest-difficulty work this tier typically takes on. TPM may still deviate per task — this is the default, not a hard lock."
         },
         "nomeda.swe.efficiencyCoresModel": {
           "type": "string",
-          "enum": ["opus", "sonnet", "haiku"],
+          "enum": [
+            "opus",
+            "sonnet",
+            "haiku"
+          ],
           "default": "sonnet",
           "description": "Claude model used by default when SWE-class subagents are deployed onto efficiency cores. Efficiency cores handle lower-priority side work; defaulting to Sonnet keeps cost and latency low for routine tasks. TPM may still deviate per task."
         },
@@ -126,7 +146,11 @@
         },
         "nomeda.qa.model": {
           "type": "string",
-          "enum": ["opus", "sonnet", "haiku"],
+          "enum": [
+            "opus",
+            "sonnet",
+            "haiku"
+          ],
           "default": "sonnet",
           "description": "Claude model used by default when QA subagents are deployed. QA verifies code changes through targeted reviews; defaulting to Sonnet matches medium-difficulty correctness work. TPM may still deviate per task — this is the default, not a hard lock."
         },
@@ -166,11 +190,13 @@
     "dev": "concurrently --kill-others-on-fail --names build,extension --prefix-colors yellow,cyan \"npm:watch\" \"echo Press F5 in VS Code to launch the Extension Development Host\"",
     "watch": "node esbuild.config.js --watch",
     "typecheck": "tsc --noEmit",
-    "package": "vsce package"
+    "package": "npm run build && vsce package -o nomeda.vsix",
+    "install-local": "npm run package && code --install-extension nomeda.vsix --force"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
     "concurrently": "^8.2.0",
     "esbuild": "^0.20.0",
     "typescript": "^5.4.0"

@@ -35,6 +35,28 @@ const FEEDBACK_MODULE_ID = 'tool.feedback-log';
 /** Disk schema version for the feedback log JSON file. */
 const FEEDBACK_SCHEMA_VERSION = 1;
 
+/**
+ * Return a shallow-cloned settings map with the host-injected
+ * `tool.feedback-log.feedbackFilePath` removed (and the now-empty
+ * `tool.feedback-log` entry dropped). Used only by modified-detection so the
+ * machine-specific runtime path never registers as a user-visible diff. Does
+ * not mutate the input; compose/apply/save still see the injected path.
+ */
+function withoutInjectedFeedbackPath(
+  settings: Record<string, Record<string, unknown>>,
+): Record<string, Record<string, unknown>> {
+  const feedback = settings[FEEDBACK_MODULE_ID];
+  if (!feedback || !('feedbackFilePath' in feedback)) return settings;
+  const out: Record<string, Record<string, unknown>> = { ...settings };
+  const { feedbackFilePath: _omit, ...rest } = feedback;
+  if (Object.keys(rest).length === 0) {
+    delete out[FEEDBACK_MODULE_ID];
+  } else {
+    out[FEEDBACK_MODULE_ID] = rest;
+  }
+  return out;
+}
+
 export class SettingsPanel implements vscode.Disposable {
   private panel?: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
@@ -764,8 +786,13 @@ export class SettingsPanel implements vscode.Disposable {
     const currentEnabled = this.loader.getAll().filter((h) => h.isEnabled).map((h) => h.manifest.id);
     if (!sortedEquals(currentEnabled, active.enabledIds)) return true;
 
-    const currentSettings = this.getCurrentSettings();
-    return !deepEquals(currentSettings, active.settings);
+    // Strip the host-injected `tool.feedback-log.feedbackFilePath` from BOTH
+    // sides: it is machine-specific runtime state, not user configuration, so
+    // it must never count as a diff. The strip is symmetric so a seeded preset
+    // (no stored path) and an older user config (path saved through the prior
+    // injection) both compare equal to the current runtime state when pristine.
+    const currentSettings = withoutInjectedFeedbackPath(this.getCurrentSettings());
+    return !deepEquals(currentSettings, withoutInjectedFeedbackPath(active.settings));
   }
 
   /** Recompute & cache the modified flag. */

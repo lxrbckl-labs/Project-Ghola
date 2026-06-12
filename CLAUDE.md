@@ -44,4 +44,4 @@ Retired modules (do not recreate): `reference.hello-nomeda`, `tool.wsl-migrate`,
    inline module content into composed prompts.
 5. `PromptFragment.section` and `order` fields are **retired** — do not add them
    to manifests or types.
-6. Use ASCII quotes (`'` and `"`) in TypeScript / JavaScript source — never smart quotes (U+2018, U+2019, U+201C, U+201D); smart quotes break esbuild parsing. Run `bash scripts/check-smart-quotes.sh` to verify.
+6. Use ASCII quotes (`'` and `"`) in TypeScript / JavaScript source — never smart quotes (U+2018, U+2019, U+201C, U+201D); smart quotes break esbuild parsing. Verify with: `grep -rPn '[\x{2018}\x{2019}\x{201C}\x{201D}]' --include="*.ts" --include="*.json" src/ modules/`

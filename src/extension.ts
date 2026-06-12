@@ -9,6 +9,7 @@ import { ModuleLoader } from './modules/loader';
 import { ModuleState } from './modules/state';
 import { PromptComposer } from './prompts/composer';
 import { SessionLauncher } from './session/launcher';
+import { BUILT_IN_CONFIGURATIONS, DEFAULT_ENABLED_IDS } from './settings-panel/built-in-configurations';
 import { ConfigurationsStore } from './settings-panel/configurations-store';
 import { SettingsPanel } from './settings-panel/host';
 import { SET_CONTEXT_KEYS, WORKSPACE_STATE_KEYS } from './state/keys';
@@ -43,7 +44,7 @@ const ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY = 'nomeda.atlassianSuite.bitbucketTok
  * the network failed), or `'skipped'` (a required configuration field is
  * missing so the probe was not even attempted).
  *
- * Persisted to `context.workspaceState` so the Settings panel and Branch
+ * Persisted to `context.workspaceState` so the Settings panel and Ticket
  * Widget can render a fresh-on-reload indicator without re-running the probes
  * on activation.
  *
@@ -74,7 +75,7 @@ export interface AtlassianBridge {
   isBitbucketTokenSet(): Promise<boolean>;
   /**
    * Read the stored Jira token. Intended ONLY for host-side consumers that
-   * need to construct an authenticated HTTP request (the Branch Widget
+   * need to construct an authenticated HTTP request (the Ticket Widget
    * provider and the validation routine). The returned value MUST NOT be
    * forwarded across the webview boundary or written to any log / output
    * channel.
@@ -116,37 +117,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // Cores live in prompts/cores/ and are not modules. The IDs listed here are
     // the modules enabled on first run so the session boots with the same
     // baseline capabilities the cores used to ship inline.
-    defaultEnabledIds: [
-      'tool.git',
-      'tool.dotnet-suite',
-      'tool.npm-suite',
-      'tool.database-access',
-      'tool.lenses',
-      'tool.pre-pr-checklist',
-      'tool.pr-description',
-      'tool.regression-scan',
-      'tool.ac-to-testing',
-      'tool.mid-session-bootstrap',
-      'tool.untrusted-jira',
-      'tool.statusline',
-      'tool.clipboard-image',
-      'tool.cross-ticket-isolation',
-      'tool.cwd-discipline',
-      'tool.secrets-wrapper-pattern',
-      'tool.qa-pr-learning',
-      'tool.session-bootstrap',
-      'tool.conversational-settings',
-      'tool.setup-walkthrough',
-      'tool.docker',
-      'tool.open-wsl-repo',
-      'tool.playwright',
-      'tool.ssh-access',
-      'tool.core-allocation',
-      'tool.subagent-coordination',
-      'tool.obsidian-notes',
-      'tool.session-handoff',
-      'mode.cd',
-    ],
+    defaultEnabledIds: DEFAULT_ENABLED_IDS,
     logger,
   });
   context.subscriptions.push({ dispose: () => loader.dispose() });
@@ -178,7 +149,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // for either product re-trigger `validate()`, so subscribers always see a
   // fresh result reflecting the new SecretStorage state (with the cleared
   // product's probe naturally returning `skipped` via the client). The
-  // Branch Widget and the Settings panel both subscribe to refresh their
+  // Ticket Widget and the Settings panel both subscribe to refresh their
   // indicators.
   const validationEmitter = new vscode.EventEmitter<AtlassianValidationResult>();
   context.subscriptions.push(validationEmitter);
@@ -402,6 +373,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // configuration in place.
   void loader.discover(resolveModulesDirFn(context)()).then(async (handles) => {
     logger.appendLine(`[nomeda] discovered ${handles.length} module(s)`);
+    await seedBuiltInConfigurations(context, configurationsStore, logger);
     await panel.applyDefaultOnStartup();
     if (context.extensionMode === vscode.ExtensionMode.Development) {
       vscode.commands.executeCommand('nomeda.openSettings');
@@ -432,12 +404,57 @@ export function deactivate(): void {
   // No-op; subscriptions handle cleanup.
 }
 
+/**
+ * Seed the built-in configuration presets into the store exactly once. Guarded
+ * by the `nomeda.configurations.seeded` workspace-state flag: if the flag is
+ * already truthy this is a no-op, so presets are never duplicated across
+ * launches and user-created configs are never overwritten. All presets are
+ * appended via a single `store.addMany` write, which generates each id +
+ * createdAt and forces `isDefault: false`, so none of the presets auto-applies
+ * on startup.
+ *
+ * Seeding is atomic: the presets are written in one `setAll` and the
+ * `CONFIGURATIONS_SEEDED` flag is set ONLY after that write succeeds. If the
+ * write throws, no partial state persists and the flag stays unset, so the
+ * next activation retries cleanly without duplicating presets.
+ */
+async function seedBuiltInConfigurations(
+  context: vscode.ExtensionContext,
+  store: ConfigurationsStore,
+  logger: vscode.OutputChannel,
+): Promise<void> {
+  if (context.workspaceState.get<boolean>(WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED)) return;
+  try {
+    await store.addMany(
+      BUILT_IN_CONFIGURATIONS.map((preset) => ({
+        name: preset.name,
+        enabledIds: preset.enabledIds,
+        settings: preset.settings,
+      })),
+    );
+    await context.workspaceState.update(WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED, true);
+  } catch (err) {
+    logger.appendLine(`[nomeda] built-in configuration seeding failed, will retry next activation: ${err}`);
+  }
+}
+
 function resolveModulesDirFn(context: vscode.ExtensionContext): () => string {
   return () => {
     const cfg = vscode.workspace.getConfiguration('nomeda');
-    const rel = cfg.get<string>('modulesDir') ?? 'modules';
+    const value = cfg.get<string>('modulesDir') ?? 'modules';
+    // Default path: modules ship inside the installed extension, so resolve
+    // against extensionPath. This makes the extension self-contained — it finds
+    // its bundled modules in ANY workspace the user opens, not just this repo.
+    // In the F5 dev host extensionPath is this repo, so dev keeps working.
+    if (value === 'modules') {
+      return path.join(context.extensionPath, 'modules');
+    }
+    // Explicit override: an absolute path is used as-is; a relative path points
+    // at an in-workspace modules dir (escape hatch), resolved against the open
+    // workspace root and falling back to extensionPath when no folder is open.
+    if (path.isAbsolute(value)) return value;
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? context.extensionPath;
-    return path.isAbsolute(rel) ? rel : path.join(root, rel);
+    return path.join(root, value);
   };
 }
 

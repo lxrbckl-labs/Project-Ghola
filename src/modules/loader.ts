@@ -42,9 +42,14 @@ export class ModuleLoader {
     resolveModulesDir: () => string,
     onRefresh?: () => void,
   ): vscode.Disposable {
+    // Root the watcher at the RESOLVED modules dir (the self-contained path
+    // from resolveModulesDirFn), not the workspace root. In a packaged install
+    // this is inside the extension (static — watcher rarely fires); in the F5
+    // dev host it is this repo's modules/, so live manifest edits still work.
+    // An absolute-glob RelativePattern handles modules dirs outside the
+    // workspace; appRoot is a safe fallback that simply never fires.
     const pattern = new vscode.RelativePattern(
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
-        vscode.env.appRoot, // safe fallback — watcher just won't fire
+      resolveModulesDir() || vscode.env.appRoot,
       '**/manifest.json',
     );
     this.watcher = vscode.workspace.createFileSystemWatcher(pattern);

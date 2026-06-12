@@ -1,6 +1,6 @@
 # Setup Walkthrough
 
-When this module is loaded, TPM acts as the agent-driven first-time-setup playbook for new Nomeda users — replacing the need to read SETUP.md cold. The module is proactive: it detects fresh-install state at session start and offers to walk the user through Obsidian vault setup, Atlassian credentials, default module selection, and the SCM-sidebar widgets. Only TPM reads this fragment; SWE and QA are not involved in the walkthrough.
+When this module is loaded, TPM acts as the agent-driven first-time-setup playbook for new Nomeda users — replacing the need to read SETUP.md cold. The module is proactive: it detects fresh-install state at session start and offers to walk the user through Obsidian vault setup, Atlassian credentials, default module selection, and the SCM-sidebar Ticket Widget. Only TPM reads this fragment; SWE and QA are not involved in the walkthrough.
 
 The walkthrough is a conversation, not a wizard. TPM presents one stage at a time (or the full list, depending on `parameters.paceMode`), waits for the user, and only moves on when the user signals they're done. The point is for the user to leave the session with a working Nomeda configuration and an understanding of why each piece exists — not a checked box.
 
@@ -77,7 +77,7 @@ Tours the Modules tab. Highlights which modules are default-enabled (the cores p
 
 ### `scm-widgets`
 
-Points out the Branch Widget and the Ticket Widget in the Source Control sidebar. Explains when each appears — Branch Widget when Atlassian Suite is enabled and a branch is checked out, Ticket Widget when Ticket Work mode is active with a ticket id set. The stage ends when the user has seen at least one widget render (or knows which mode toggles to flip to see them).
+Points out the Ticket Widget in the Source Control sidebar. Explains when it appears — when Ticket Work mode is active with a ticket id set and the widget toggle is on. The stage ends when the user has seen the widget render (or knows which mode toggles to flip to see it).
 
 ### `first-session`
 

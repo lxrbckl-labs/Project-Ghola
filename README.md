@@ -2,6 +2,34 @@
 
 Modular multi-agent dev team for VS Code.
 
+## Installation
+
+Prereqs: Node 20+ and npm, VS Code. Under Remote-WSL the extension installs on the WSL side — run these commands from your WSL shell.
+
+```
+git clone https://github.com/lxRbckl/Project-Nomeda.git
+cd Project-Nomeda
+npm ci
+npm run install-local
+```
+
+`npm run install-local` builds the extension, packages a `nomeda.vsix`, and installs it globally with `--force`. This installs Nomeda **once** for your whole editor — it then works in **every** repo you open. You do not install it per-repo, and the bundled modules travel inside the extension.
+
+If the `code` CLI is not on your PATH, run `npm run package` to produce `nomeda.vsix`, then install it from the Extensions panel: click the "..." menu -> "Install from VSIX..." and select the generated file.
+
+## Updating
+
+Pull the latest source and re-run the local install:
+
+```
+git pull
+npm run install-local
+```
+
+### How updates propagate
+
+There is no marketplace and no auto-update. A `git push` updates the source repository only — it does not touch anyone's already-installed extension. Agent instructions (the `prompts/cores/*.md` and module `.md` files) are snapshotted into the VSIX at package time and read from the installed copy at session-compose time. To receive instruction or code changes, run `git pull` then `npm run install-local`, which repackages and reinstalls the extension. Maintainers should bump the `version` in `package.json` on meaningful changes so users can tell when they are running a stale build.
+
 ## Status
 
 Active development — modular architecture. Wired surfaces: extension activation, settings webview (General / Modules / Agents: TPM / SWE / QA), module loader with manifest validation, prompt composer (Session Manifest shape), session terminal launcher.
@@ -33,7 +61,7 @@ Open this folder in VS Code and press F5 to launch the Extension Development Hos
 
 ## Modules
 
-By default Nomeda looks for modules under `<workspaceFolder>/modules/`. The path is configurable via `nomeda.modulesDir`.
+By default Nomeda loads its modules from the installed extension itself — they are bundled into the VSIX and are available in any repo you open. The `nomeda.modulesDir` setting is an optional override: set it to an absolute path, or a path relative to the workspace root, to load modules from a custom directory instead.
 
 Four core prompt files live in `prompts/cores/` (preamble, TPM, SWE, QA) — these define agent roles and universal hard rules, are always active, and are not toggleable. A library of toggleable modules lives in `modules/` (see that directory for the full list); modules are managed via the Modules tab and contribute prompt fragments, settings, and optional proactive session-start behavior. Most tool modules default to enabled; integrations, alternate session modes, and select tools are opt-in.
 
