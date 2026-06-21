@@ -2,7 +2,7 @@
   "name": "nomeda",
   "displayName": "Nomeda",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.0.14",
+  "version": "0.0.20",
   "publisher": "local",
   "engines": {
     "vscode": "^1.85.0"

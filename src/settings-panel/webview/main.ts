@@ -3033,34 +3033,13 @@ function renderSessionInstruction(): HTMLElement {
     `SWE and QA prompts are at $NOMEDA_SWE_PROMPT_FILE and $NOMEDA_QA_PROMPT_FILE; read the ` +
     `matching file before spawning a subagent so it boots into the right role.`;
 
-  // Header row: title on the left, copy button flush right - mirrors the
-  // module-generation copy-button pattern (icon-button + COPY_ICON_SVG).
-  const header = el('div', { class: 'agent-config-header instruction-header' });
-  const title = el('span');
-  title.textContent = 'Instruction';
-  header.appendChild(title);
-
-  const copyBtn = el('button', {
-    class: 'icon-button framed',
-    type: 'button',
-    'aria-label': 'Copy Initiation Instruction',
-    title: 'Copy Initiation Instruction',
-  }) as HTMLButtonElement;
-  copyBtn.innerHTML = COPY_ICON_SVG;
-  copyBtn.addEventListener('click', () => {
-    void navigator.clipboard.writeText(snippet);
-    const prev = copyBtn.title;
-    copyBtn.title = 'Copied';
-    window.setTimeout(() => {
-      copyBtn.title = prev;
-    }, 1200);
-  });
-  header.appendChild(copyBtn);
+  // Header: plain title. Copy is exposed by hovering the prompt body below,
+  // matching the Agents tabs' Instructions panels (makeCopyablePrompt).
+  const header = el('div', { class: 'agent-config-header' });
+  header.textContent = 'Instruction';
   wrap.appendChild(header);
 
-  const pre = el('pre', { class: 'prompt' });
-  pre.textContent = snippet;
-  wrap.appendChild(pre);
+  wrap.appendChild(makeCopyablePrompt(snippet, 'Copy Initiation Instruction'));
 
   return wrap;
 }
@@ -3099,9 +3078,7 @@ function renderAgent(wrapper: HTMLElement, agentId: string): void {
     vscode.postMessage({ type: 'getComposedPrompt', agent: agentId });
     return;
   }
-  const pre = el('pre', { class: 'prompt' });
-  pre.textContent = prompt;
-  wrapper.appendChild(pre);
+  wrapper.appendChild(makeCopyablePrompt(prompt, `Copy ${agentId.toUpperCase()} Instructions`));
 }
 
 /**
@@ -3949,6 +3926,44 @@ function textEl(tag: string, text: string, className?: string): HTMLElement {
   const e = el(tag, className ? { class: className } : undefined);
   e.textContent = text;
   return e;
+}
+
+/**
+ * Build a read-only prompt box (`pre.prompt`) wrapped in a `.prompt-wrap` whose
+ * top-right corner reveals a copy button on hover. Shared by the Agents tabs'
+ * Instructions panel and the Session tab Instruction panel so every prompt box
+ * exposes copy through the identical hover affordance. `extraClass` is appended
+ * to the inner `pre` (e.g. `fragment`); `ariaLabel` titles the copy button.
+ */
+function makeCopyablePrompt(
+  text: string,
+  ariaLabel: string,
+  extraClass?: string,
+): HTMLElement {
+  const wrap = el('div', { class: 'prompt-wrap' });
+
+  const pre = el('pre', { class: extraClass ? `prompt ${extraClass}` : 'prompt' });
+  pre.textContent = text;
+  wrap.appendChild(pre);
+
+  const copyBtn = el('button', {
+    class: 'prompt-copy icon-button',
+    type: 'button',
+    'aria-label': ariaLabel,
+    title: ariaLabel,
+  }) as HTMLButtonElement;
+  copyBtn.innerHTML = COPY_ICON_SVG;
+  copyBtn.addEventListener('click', () => {
+    void navigator.clipboard.writeText(text);
+    const prev = copyBtn.title;
+    copyBtn.title = 'Copied';
+    window.setTimeout(() => {
+      copyBtn.title = prev;
+    }, 1200);
+  });
+  wrap.appendChild(copyBtn);
+
+  return wrap;
 }
 
 init();

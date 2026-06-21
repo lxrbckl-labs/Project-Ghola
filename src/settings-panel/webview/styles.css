@@ -278,6 +278,40 @@ pre.prompt {
   overflow: auto;
 }
 
+/* Read-only prompt box with a hover-revealed copy button. The button is
+   absolutely positioned in the top-right corner inside the scroll frame and
+   stays hidden until the wrapper is hovered or the button itself is focused. */
+.prompt-wrap {
+  position: relative;
+}
+
+.prompt-wrap > .prompt-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  color: var(--vscode-input-foreground);
+  box-sizing: border-box;
+  opacity: 0;
+  transition: opacity 100ms ease-in-out;
+  pointer-events: none;
+}
+
+.prompt-wrap:hover > .prompt-copy,
+.prompt-wrap > .prompt-copy:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.prompt-wrap > .prompt-copy:hover {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
 .dot {
   display: inline-block;
   width: 8px;
@@ -1394,14 +1428,6 @@ button.module-row-chevron:focus-visible {
   font-size: 13px;
   font-weight: 500;
   color: var(--vscode-foreground);
-}
-
-/* Session tab Instruction header: title left, copy button flush right. */
-.agent-config-header.instruction-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
 }
 
 /* Flex row of compact [label : input] fields — three on the SWE subpage,

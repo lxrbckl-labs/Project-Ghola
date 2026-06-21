@@ -46,7 +46,7 @@ const BASELINE_IDS: string[] = [
  * intentionally kept identical to the "CD (Project)" preset so a new install
  * loads a coherent set that matches a visible preset.
  */
-export const DEFAULT_ENABLED_IDS: string[] = [...BASELINE_IDS, 'mode.cd'];
+export const DEFAULT_ENABLED_IDS: string[] = [...BASELINE_IDS, 'mode.cd', 'tool.team-switchboard'];
 
 /**
  * The four SWT session-mode presets, seeded in array order. All carry

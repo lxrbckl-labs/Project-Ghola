@@ -1,0 +1,48 @@
+{
+  "id": "tool.team-switchboard",
+  "name": "Team Switchboard",
+  "version": "0.1.0",
+  "description": "Enables cross-team agent communication via a shared Obsidian switchboard — a roster of active teams plus per-team inboxes; the agent heartbeats its presence and checks its inbox at session start.",
+  "proactive": true,
+  "category": "orchestration",
+  "kind": "capability",
+  "trigger": "session-start",
+  "tier": "recommended",
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "team-switchboard.md" }
+    ],
+    "settings": {
+      "commsRoot": {
+        "type": "path",
+        "label": "Comms root directory",
+        "default": "",
+        "description": "Absolute path to the shared _AgentComms/ directory. Leave empty to derive <obsidian-vault-root>/_AgentComms/ at runtime. ALL teams must point at the same absolute location for cross-team messaging to work — if even one team uses a different path, its messages land in an isolated subtree no other team will see."
+      },
+      "teamName": {
+        "type": "string",
+        "label": "Team name override",
+        "default": "",
+        "description": "The name this team registers in the roster and is addressed by in inboxes. Leave empty to auto-derive from the repo or project basename (leading 'Project-' stripped), with a #N suffix appended automatically when two sessions resolve to the same name. Set explicitly when the auto-derived name is ambiguous or you want a stable name that survives repo renames."
+      },
+      "staleAfterDays": {
+        "type": "number",
+        "label": "Roster stale threshold (days)",
+        "default": 14,
+        "description": "Roster rows whose Last active date is older than this many days are flagged as stale when listing active teams. Stale rows are never deleted — only marked so operators can see which teams have gone quiet. Reduce this value to surface inactivity sooner; increase it for teams that work in longer bursts with natural gaps."
+      },
+      "checkInboxOnBoot": {
+        "type": "boolean",
+        "label": "Check inbox on session start",
+        "default": true,
+        "description": "When on, the agent reads inbox-<team>.md and inbox-all.md at session start and surfaces a concise summary of unread messages (sender, subject, date) to the operator. When off, the agent only reads the inbox when explicitly asked — useful for sessions where inbox noise would be distracting or the operator checks manually."
+      },
+      "heartbeatOnBoot": {
+        "type": "boolean",
+        "label": "Update roster on session start",
+        "default": true,
+        "description": "When on, the agent refreshes its row in switchboard.md at session start (current focus + today's date), adding the row if this team has never registered. When off, the roster row is only updated on explicit request — useful when you want to control exactly what 'currently working on' shows or when you are running a read-only review session that should not advertise presence."
+      }
+    }
+  }
+}

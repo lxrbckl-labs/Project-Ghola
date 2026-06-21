@@ -245,6 +245,23 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(panel);
 
+  // Auto-reopen the settings panel after a window reload (e.g. the in-app
+  // "Update Extension" flow ends with workbench.action.reloadWindow, which
+  // would otherwise close the panel). VS Code persists that a panel of this
+  // viewType was open and calls back here on the next activation; we adopt the
+  // restored panel onto the same singleton SettingsPanel instance so it
+  // re-renders from current extension state. No custom getState/setState is
+  // needed — the panel content is derived from workspace/global state, not
+  // webview-local state. `onStartupFinished` in activationEvents guarantees the
+  // extension is active when restore happens.
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer('nomedaSettings', {
+      async deserializeWebviewPanel(restored: vscode.WebviewPanel): Promise<void> {
+        panel.revive(restored);
+      },
+    }),
+  );
+
   // Register the five Atlassian token commands. All are user-discoverable
   // from the Command Palette (declared in package.json) and can also be
   // invoked programmatically by the panel UI via

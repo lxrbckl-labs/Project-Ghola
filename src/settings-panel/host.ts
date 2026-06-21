@@ -155,7 +155,7 @@ export class SettingsPanel implements vscode.Disposable {
       this.panel.reveal(vscode.ViewColumn.Active);
       return;
     }
-    this.panel = vscode.window.createWebviewPanel(
+    const panel = vscode.window.createWebviewPanel(
       'nomedaSettings',
       'Nomeda Settings',
       vscode.ViewColumn.Active,
@@ -165,8 +165,43 @@ export class SettingsPanel implements vscode.Disposable {
         localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist')],
       },
     );
+    this.adoptPanel(panel);
+  }
 
-    this.panel.onDidDispose(
+  /**
+   * Adopt a webview panel that VS Code handed back when restoring a serialized
+   * 'nomedaSettings' panel after a window reload (see the
+   * `registerWebviewPanelSerializer` registration in `extension.ts`). The
+   * restored panel arrives without our webview options or HTML, so re-apply the
+   * same options the create path uses, then route it through the shared
+   * `adoptPanel` wiring so the message handler, dispose cleanup, and initial
+   * render match a freshly-created panel exactly. If a panel is already open
+   * (the user reopened it first), reveal that one and dispose the duplicate so
+   * the singleton invariant holds.
+   */
+  revive(panel: vscode.WebviewPanel): void {
+    if (this.panel) {
+      this.panel.reveal(vscode.ViewColumn.Active);
+      panel.dispose();
+      return;
+    }
+    panel.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist')],
+    };
+    this.adoptPanel(panel);
+  }
+
+  /**
+   * Shared post-creation wiring used by both `open()` (fresh panel) and
+   * `revive()` (panel restored by the serializer). Tracks the singleton,
+   * attaches the dispose cleanup and message handler, and renders the HTML so
+   * the two entry points never drift.
+   */
+  private adoptPanel(panel: vscode.WebviewPanel): void {
+    this.panel = panel;
+
+    panel.onDidDispose(
       () => {
         this.panel = undefined;
       },
@@ -174,7 +209,7 @@ export class SettingsPanel implements vscode.Disposable {
       this.disposables,
     );
 
-    this.panel.webview.onDidReceiveMessage(
+    panel.webview.onDidReceiveMessage(
       (msg: WebviewToHostMessage) => this.handle(msg),
       null,
       this.disposables,
