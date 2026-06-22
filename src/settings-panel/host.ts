@@ -157,7 +157,7 @@ export class SettingsPanel implements vscode.Disposable {
     }
     const panel = vscode.window.createWebviewPanel(
       'nomedaSettings',
-      'Nomeda Settings',
+      'Nomeda',
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -243,7 +243,7 @@ export class SettingsPanel implements vscode.Disposable {
   <head>
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="${csp}" />
-    <title>Nomeda Settings</title>
+    <title>Nomeda</title>
     <style>${await this.loadStyles()}</style>
   </head>
   <body>
