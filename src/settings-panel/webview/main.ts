@@ -783,12 +783,15 @@ function renderGeneral(wrapper: HTMLElement): void {
   // Update Extension button — sits beside the Play button at the end of the row.
   // Delegates to the nomeda.updateExtension command on the host.
   const updateBtn = el('button', {
-    class: 'icon-button framed session-action-button',
+    class: 'icon-button framed session-action-button update-extension-btn',
     type: 'button',
-    'aria-label': 'Update Extension',
+    'aria-label': `Update Extension (current version ${root.dataset.version || 'dev'})`,
     title: 'Update the Nomeda extension: pull latest from the remote repository, rebuild, reinstall, and reload.',
   }) as HTMLButtonElement;
-  updateBtn.innerHTML = UPDATE_EXTENSION_ICON_SVG;
+  const updateBtnIcon = el('span', { class: 'update-btn-icon' });
+  updateBtnIcon.innerHTML = UPDATE_EXTENSION_ICON_SVG;
+  const updateBtnVersion = textEl('span', root.dataset.version || 'dev', 'update-btn-version');
+  updateBtn.append(updateBtnIcon, updateBtnVersion);
   updateBtn.addEventListener('click', () => vscode.postMessage({ type: 'updateExtension' }));
 
   // Assemble the launch row in visual order: Package (far left), the three

@@ -415,6 +415,31 @@ button.icon-button.framed.session-play-button svg {
   height: 15px;
 }
 
+/* Update-Extension button renders [package icon][version] inline, so it grows
+   past the square icon footprint to fit the version label beside the icon.
+   Scoped to update-extension-btn so only this button is affected; the Play
+   button's 28x28 footprint is unchanged. The full class chain
+   (.framed.session-action-button.update-extension-btn) is required for specificity:
+   it must beat .icon-button.framed (0,2,1, later in source) which would otherwise
+   re-fix width:28px, and .icon-button.framed.session-action-button (0,3,1) which
+   sets padding:0. This selector is (0,4,1) so width:auto AND padding both win. */
+button.icon-button.framed.session-action-button.update-extension-btn {
+  width: auto;
+  gap: 4px;
+  padding: 0 7px;
+}
+
+button.icon-button.update-extension-btn .update-btn-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Version text beside the icon — small and muted, matching the panel's caption text. */
+.update-btn-version {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
 /* Input grows to fill its column. */
 .session-command-input {
   flex: 1 1 auto;
