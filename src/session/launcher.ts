@@ -26,6 +26,24 @@ const FASTPATH_SETTING_KEY = 'fastpathDirectory';
 /** Field key on `tool.fastpath-check` for the auto-cd-into-matching-repo toggle. */
 const AUTO_CD_INTO_REPO_KEY = 'autoCdIntoRepo';
 
+/**
+ * Optional per-launch overrides. When omitted, `launch()` behaves exactly as the
+ * default Sessions-tab play button: it creates the `Nomeda Session` terminal,
+ * writes the NOMEDA_{TPM,SWE,QA}_PROMPT_FILE scaffolding, and sends the trigger
+ * word as phase-2 input. `promptOverride` switches to a one-shot dispatch mode
+ * (used by the Commit-and-Push button) that skips the agent-prompt-file
+ * scaffolding and sends a self-contained prompt instead of the trigger word.
+ */
+interface LaunchOptions {
+  /** Terminal name; defaults to the existing session terminal name. */
+  terminalName?: string;
+  /**
+   * When set: skip the TPM/SWE/QA env-prompt-file scaffolding and send THIS
+   * string as the phase-2 message instead of the configured trigger word.
+   */
+  promptOverride?: string;
+}
+
 export class SessionLauncher {
   constructor(
     private readonly loader: ModuleLoader,
@@ -34,7 +52,12 @@ export class SessionLauncher {
     private readonly logger?: vscode.OutputChannel,
   ) {}
 
-  async launch(): Promise<void> {
+  async launch(options?: LaunchOptions): Promise<void> {
+    // One-shot dispatch mode: a caller (e.g. the Commit-and-Push button) wants a
+    // self-contained prompt delivered to a fresh CLI, NOT a full TPM session.
+    const promptOverride = options?.promptOverride;
+    const oneShot = typeof promptOverride === 'string';
+
     const enabled = this.loader.getEnabled();
     const composedAgentIds = this.detectComposedAgentIds(enabled);
     const banner = formatBanner({ enabledModules: enabled, composedAgentIds });
@@ -55,34 +78,41 @@ export class SessionLauncher {
     const cliCommand = (selectedAlias !== '' ? selectedAlias : cfg.get<string>('cliCommand', 'claude')).trim();
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate').trim();
 
+    // Base env shared by all launches. The NOMEDA_{TPM,SWE,QA}_PROMPT_FILE
+    // scaffolding is only needed for a full TPM session that may spawn
+    // subagents, so it is omitted in one-shot dispatch mode.
+    const env: Record<string, string> = {
+      NOMEDA_ROOT: this.extensionPath,
+      SWE_PERFORMANCE_CORES: String(cfg.get<number>('swe.performanceCores', 2)),
+      SWE_EFFICIENCY_CORES: String(cfg.get<number>('swe.efficiencyCores', 1)),
+      SWE_AGENT_COUNT: String(
+        cfg.get<number>('swe.performanceCores', 2) + cfg.get<number>('swe.efficiencyCores', 1),
+      ),
+      SWE_PERFORMANCE_MODEL: cfg.get<string>('swe.performanceCoresModel', 'opus'),
+      SWE_EFFICIENCY_MODEL: cfg.get<string>('swe.efficiencyCoresModel', 'sonnet'),
+      QA_AGENT_COUNT: String(cfg.get<number>('qa.count', 1)),
+      QA_MODEL: cfg.get<string>('qa.model', 'sonnet'),
+    };
+    if (!oneShot) {
+      // Per-workspace paths written by SettingsPanel.writeAllAgentPromptFiles()
+      // immediately before launch. Each path is stable across reopens of the
+      // same workspace but unique across different workspaces, so two VS Code
+      // windows hosting different folders cannot overwrite each other's
+      // composed prompts. The SWE/QA files exist so TPM can read them via
+      // its Read tool and inject the content into the prompt passed to the
+      // Agent tool when spawning a SWE or QA subagent.
+      env.NOMEDA_TPM_PROMPT_FILE = resolveAgentPromptFilePath('tpm');
+      env.NOMEDA_SWE_PROMPT_FILE = resolveAgentPromptFilePath('swe');
+      env.NOMEDA_QA_PROMPT_FILE = resolveAgentPromptFilePath('qa');
+    }
+
     const terminal = vscode.window.createTerminal({
-      name: 'Nomeda Session',
+      name: options?.terminalName ?? 'Nomeda Session',
       shellPath,
       shellArgs,
       cwd,
       location: { viewColumn: vscode.ViewColumn.Active },
-      env: {
-        NOMEDA_ROOT: this.extensionPath,
-        // Per-workspace paths written by SettingsPanel.writeAllAgentPromptFiles()
-        // immediately before launch. Each path is stable across reopens of the
-        // same workspace but unique across different workspaces, so two VS Code
-        // windows hosting different folders cannot overwrite each other's
-        // composed prompts. The SWE/QA files exist so TPM can read them via
-        // its Read tool and inject the content into the prompt passed to the
-        // Agent tool when spawning a SWE or QA subagent.
-        NOMEDA_TPM_PROMPT_FILE: resolveAgentPromptFilePath('tpm'),
-        NOMEDA_SWE_PROMPT_FILE: resolveAgentPromptFilePath('swe'),
-        NOMEDA_QA_PROMPT_FILE: resolveAgentPromptFilePath('qa'),
-        SWE_PERFORMANCE_CORES: String(cfg.get<number>('swe.performanceCores', 2)),
-        SWE_EFFICIENCY_CORES: String(cfg.get<number>('swe.efficiencyCores', 1)),
-        SWE_AGENT_COUNT: String(
-          cfg.get<number>('swe.performanceCores', 2) + cfg.get<number>('swe.efficiencyCores', 1),
-        ),
-        SWE_PERFORMANCE_MODEL: cfg.get<string>('swe.performanceCoresModel', 'opus'),
-        SWE_EFFICIENCY_MODEL: cfg.get<string>('swe.efficiencyCoresModel', 'sonnet'),
-        QA_AGENT_COUNT: String(cfg.get<number>('qa.count', 1)),
-        QA_MODEL: cfg.get<string>('qa.model', 'sonnet'),
-      },
+      env,
     });
 
     terminal.show(true);
@@ -93,22 +123,24 @@ export class SessionLauncher {
     //   1) Send `cliCommand` (default: "claude") as a shell command. The
     //      terminal executes it and the CLI process starts.
     //   2) Wait CLI_BOOT_DELAY_MS for the CLI to be ready to accept stdin.
-    //   3) Send `sessionCommand` (default: "initiate") AS USER INPUT to the
-    //      running CLI. The user's CLI configuration (e.g. CLAUDE.md or user
-    //      memory) defines what that trigger word does — typically reading
-    //      $NOMEDA_TPM_PROMPT_FILE and adopting the TPM role.
+    //   3) Send the phase-2 message AS USER INPUT to the running CLI. By
+    //      default this is `sessionCommand` (the trigger word, e.g. "initiate")
+    //      whose meaning is defined by the user's CLI configuration. In
+    //      one-shot dispatch mode it is `promptOverride` — a self-contained
+    //      prompt sent verbatim instead of the trigger word.
+    const phaseTwoMessage = oneShot ? promptOverride : sessionCommand;
     if (cliCommand) {
       terminal.sendText(cliCommand, true);
-      if (sessionCommand) {
+      if (phaseTwoMessage) {
         setTimeout(() => {
-          terminal.sendText(sessionCommand, true);
+          terminal.sendText(phaseTwoMessage, true);
         }, CLI_BOOT_DELAY_MS);
       }
-    } else if (sessionCommand) {
+    } else if (phaseTwoMessage) {
       // No CLI command configured — preserve the legacy "send phrase to shell"
       // behavior so a user with cliCommand="" can still run an arbitrary
-      // one-shot command via sessionCommand.
-      terminal.sendText(sessionCommand, true);
+      // one-shot command via the phase-2 message.
+      terminal.sendText(phaseTwoMessage, true);
     }
 
     this.logger?.appendLine(`[session] launched terminal with shell: ${shellPath ?? '<default>'}`);

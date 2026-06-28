@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
 import type { SessionLauncher } from '../session/launcher';
 import type { SettingsPanel } from '../settings-panel/host';
+import { registerCommitAndPushCommand } from './commitAndPush';
 import { registerUpdateExtensionCommand } from './updateExtension';
 
 export interface CommandDeps {
@@ -48,5 +49,8 @@ export function registerCommands(
     // Self-update: pull/rebuild/repackage/reinstall this extension from its git
     // checkout. Implemented in updateExtension.ts; returns its own disposable.
     registerUpdateExtensionCommand(context),
+    // Commit-and-Push button: dispatches a one-shot Claude agent that commits
+    // staged changes and pushes. Implemented in commitAndPush.ts.
+    registerCommitAndPushCommand(context, deps),
   );
 }

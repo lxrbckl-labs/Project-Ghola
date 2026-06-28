@@ -16,4 +16,5 @@ export const WORKSPACE_STATE_KEYS = {
 
 export const SET_CONTEXT_KEYS = {
   TICKET_WORK_WIDGET_ENABLED: 'nomeda.ticketWork.widgetEnabled',
+  COMMIT_PUSH_ENABLED: 'nomeda.commitPush.enabled',
 } as const;
