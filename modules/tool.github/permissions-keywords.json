@@ -1,0 +1,5 @@
+[
+  { "keyword": "r", "purpose": "Read-only gh inspection (auth status, pr/issue/repo view and list, pr diff/checks, run view/watch, release/workflow/label list, search, browse, gist view). Safe in all contexts. Cannot mutate GitHub." },
+  { "keyword": "w", "purpose": "State-modifying recoverable gh operations (pr create/comment/edit/ready/review/checkout/close/reopen, issue create/comment/edit/close/reopen, release create/edit, workflow run, run rerun/cancel, label create/edit, repo clone/fork, gist create). Standard collaboration flow." },
+  { "keyword": "d", "purpose": "Destructive, irreversible, or sensitive gh operations (pr merge, release/repo/run/label/gist delete, cache delete, secret set, auth logout, and the arbitrary api escape hatch). Use only when you mean it." }
+]

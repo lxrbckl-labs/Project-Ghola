@@ -2,7 +2,7 @@
   "id": "tool.playwright",
   "name": "Playwright",
   "version": "0.2.1",
-  "description": "Lets QA write Playwright test specs from testing procedures produced by tool.ac-to-testing — specs live outside the work repo with a shared playwright.config.ts.",
+  "description": "Lets QA and SWE agents write Playwright test specs from testing procedures produced by tool.ac-to-testing, and during ticket work the tester can also generate annotated verification videos and AC walkthrough docs on request; specs live outside the work repo with a shared playwright.config.ts.",
   "proactive": false,
   "category": "utility",
   "kind": "capability",
@@ -11,7 +11,8 @@
   "tier": "optional",
   "contributes": {
     "promptFragments": [
-      { "target": "qa", "contentPath": "playwright.md" }
+      { "target": "qa", "contentPath": "playwright.md" },
+      { "target": "swe", "contentPath": "playwright.md" }
     ],
     "settings": {
       "specsDir": {
@@ -29,13 +30,13 @@
       "autoOfferOnProcedures": {
         "type": "boolean",
         "label": "Auto-Offer On Procedures",
-        "description": "When on, QA proactively offers to write Playwright specs whenever fresh testing procedures from tool.ac-to-testing are added to the ticket notes. When off, QA only writes specs on explicit request. On is the typical flow; off is for projects with strict manual-test conventions.",
+        "description": "When on, QA proactively offers to write Playwright specs whenever fresh testing procedures from tool.ac-to-testing are added to the ticket notes. When off, no proactive offer is made and specs are written only on explicit request (an explicit ask can also route the work to a SWE agent). On is the typical flow; off is for projects with strict manual-test conventions.",
         "default": true
       },
       "specPerProcedure": {
         "type": "boolean",
         "label": "Spec Per Procedure",
-        "description": "When on, QA generates one spec file per TP (TP-1.spec.ts, TP-2.spec.ts, etc.). When off, QA consolidates all TPs into a single spec file per ticket. On is preferred for parallel execution and isolated failures; off is preferred for compact spec sets.",
+        "description": "When on, the agent generates one spec file per TP (TP-1.spec.ts, TP-2.spec.ts, etc.). When off, the agent consolidates all TPs into a single spec file per ticket. On is preferred for parallel execution and isolated failures; off is preferred for compact spec sets.",
         "default": true
       },
       "includeSetupTeardown": {
@@ -61,6 +62,26 @@
         "label": "Auth Channel Override",
         "description": "Playwright browser channel used for auth-context specs. msedge uses installed Microsoft Edge with the persistent profile. msedge-beta or msedge-dev for non-stable channels. Has no effect when Edge Profile Auth is off. Default msedge is the typical channel for Azure AD scenarios.",
         "default": "msedge"
+      },
+      "verificationVideo": {
+        "type": "enum",
+        "label": "Verification Video",
+        "default": "on-request",
+        "options": ["on-request", "always", "off"],
+        "description": "Controls whether the tester records annotated Playwright videos of the AC flow. on-request records only when the user or TPM asks. always records whenever specs are generated during ticket work. off never records. Applies only in ticket or project work where a ticket id is in scope."
+      },
+      "annotateVideoSteps": {
+        "type": "boolean",
+        "label": "Annotate Video Steps",
+        "description": "When on, injects an on-page caption banner per test.step so the recorded video carries step narration. When off, video records with no overlay.",
+        "default": true
+      },
+      "acWalkthrough": {
+        "type": "enum",
+        "label": "AC Walkthrough",
+        "default": "on-request",
+        "options": ["on-request", "always", "off"],
+        "description": "Controls whether the tester writes a human-readable AC walkthrough doc (AC-walkthrough.md) alongside the specs. on-request writes only when the user or TPM asks. always writes whenever specs are generated during ticket work. off never writes. Applies only in ticket or project work where a ticket id is in scope."
       }
     }
   }

@@ -6,7 +6,7 @@
   "proactive": true,
   "category": "session-mode",
   "kind": "workflow",
-  "mutuallyExclusiveWith": ["mode.cd", "mode.ticket-work"],
+  "mutuallyExclusiveWith": ["mode.cd", "mode.ticket-work", "mode.sardaukar"],
   "trigger": "session-start",
   "tier": "recommended",
   "contributes": {

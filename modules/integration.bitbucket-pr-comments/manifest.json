@@ -34,6 +34,12 @@
         "default": true,
         "description": "When on, the agent scans PR comments whose body claims the issue is resolved (e.g., 'resolved', 'fixed', 'done') but which Bitbucket still marks as unresolved, and surfaces them for review. It does not auto-resolve anything."
       },
+      "pipelineStatusEnabled": {
+        "type": "boolean",
+        "label": "Pipeline Status Enabled",
+        "default": false,
+        "description": "When on, TPM can read and report the current pipeline/build status for a PR or branch via the Bitbucket REST API using the atlassian-suite credentials; read-only, no triggering builds."
+      },
       "postOrdinalsEnabled": {
         "type": "boolean",
         "label": "Post Ordinals Enabled",

@@ -6,6 +6,28 @@ import type { ModuleHandle } from '../modules/handle';
 import type { SettingsField, SettingsSchema } from '../manifest/types';
 
 /**
+ * `mode.ghola` is no longer a toggleable module: its enablement is driven by the
+ * `mode.ghola::enabled` setting (surfaced as an Agents configuration), not by
+ * loader state. It is excluded from the generic enabled-module fragment loop and
+ * injected via a dedicated special case gated on that setting. It remains
+ * discoverable by the loader so its settings schema and `ghola.md` fragment path
+ * stay reachable.
+ */
+const GHOLA_MODE_ID = 'mode.ghola';
+
+/**
+ * `tool.commit-push` contributes a single TPM-targeted fragment (`commit-push.md`)
+ * that is one-shot BUTTON-dispatch text ("You were launched by the ... button ...
+ * You are not TPM"). The Explorer "Commit and Push" button reads that file DIRECTLY
+ * (see `src/commands/commitAndPush.ts`, which builds a self-contained prompt pointing
+ * the dispatched agent at the module's `commit-push.md`), NOT via the composed TPM
+ * manifest. Injecting it into the long-running TPM session would therefore be
+ * self-contradictory dead weight, so it is excluded from the generic fragment loop
+ * here. The module stays discoverable so the button can still resolve its file path.
+ */
+const COMMIT_PUSH_ID = 'tool.commit-push';
+
+/**
  * Stateless composer: pure function from (agentId, settings) → composed prompt string.
  *
  * Emits `[core] + [preamble] + [Session Manifest block]`. The core and preamble
@@ -85,6 +107,13 @@ export class PromptComposer {
       // discovered by the loader. If a stale core.* manifest survives in the
       // modules dir during transition, swallow it here rather than emit it.
       if (id.startsWith('core.')) continue;
+      // mode.ghola is gated by the `mode.ghola::enabled` setting, not loader
+      // state — injected separately below, never by this generic loop.
+      if (id === GHOLA_MODE_ID) continue;
+      // tool.commit-push's fragment is one-shot button-dispatch text read
+      // directly by the Commit-and-Push button, not by the persistent TPM
+      // session, never emit it into any composed manifest (see COMMIT_PUSH_ID).
+      if (id === COMMIT_PUSH_ID) continue;
 
       const fragments = handle.manifest.contributes?.promptFragments ?? [];
       // `target: "all"` fans out to every agent — include those alongside the
@@ -109,6 +138,14 @@ export class PromptComposer {
       }
     }
 
+    // mode.ghola's TPM fragment: injected here (outside the loop) when the
+    // `mode.ghola::enabled` setting is on. TPM-only, matching the fragment's
+    // declared target — never emitted for swe/qa.
+    if (agentId === 'tpm') {
+      const gholaEntry = this.renderGholaEntry(settings);
+      if (gholaEntry) entries.push(gholaEntry);
+    }
+
     if (entries.length === 0) {
       lines.push('_(no modules contribute prompt fragments to this agent)_');
       return lines.join('\n');
@@ -118,6 +155,49 @@ export class PromptComposer {
     // Trim trailing blank line.
     if (lines[lines.length - 1] === '') lines.pop();
     return lines.join('\n');
+  }
+
+  /**
+   * Build the Session Manifest entry for `mode.ghola`'s TPM fragment when the
+   * `mode.ghola::enabled` setting is on, or `null` otherwise. Reuses the still-
+   * discoverable module manifest for the fragment/parameters metadata; only the
+   * gate has moved from loader-enabled state to the setting value. Emits the
+   * exact same entry shape the generic loop produces (header + contentPath +
+   * parameters sub-list). Read-on-demand is preserved — ghola.md is not inlined.
+   *
+   * The stored `enabled` key is a gate flag, not a ghola parameter, so it is
+   * stripped before rendering — only the four sub-toggles reach the params list.
+   */
+  private renderGholaEntry(
+    settings: Record<string, Record<string, unknown>>,
+  ): string | null {
+    const gholaSettings = settings[GHOLA_MODE_ID];
+    if (gholaSettings?.['enabled'] !== true) return null;
+
+    const handle = this.loader.find(GHOLA_MODE_ID);
+    if (!handle) return null;
+
+    const fragment = (handle.manifest.contributes?.promptFragments ?? []).find(
+      (f) => f.target === 'tpm',
+    );
+    if (!fragment) return null;
+
+    const contentPath = `\${NOMEDA_ROOT}/modules/${handle.manifest.id}/${fragment.contentPath}`;
+    const proactive = handle.manifest.proactive === true;
+    const marker = proactive ? ' [proactive — consult at session start]' : '';
+    const header = `- **${handle.manifest.id}**${marker}`;
+    const contentLine = `  - contentPath: \`${contentPath}\``;
+
+    const params: Record<string, unknown> = {};
+    for (const key of Object.keys(gholaSettings)) {
+      if (key === 'enabled') continue;
+      params[key] = gholaSettings[key];
+    }
+    const paramsBlock = this.renderParameters(
+      handle.manifest.contributes?.settings,
+      params,
+    );
+    return [header, contentLine, ...paramsBlock].join('\n');
   }
 
   // --- parameter rendering -------------------------------------------------

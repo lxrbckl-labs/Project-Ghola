@@ -1,0 +1,32 @@
+{
+  "id": "mode.sardaukar",
+  "name": "Sardaukar",
+  "version": "0.1.0",
+  "description": "The general-purpose, full-toolkit divide-and-conquer session modality; TPM coordinates a fleet of SWE/QA subagents on any task without locking to a single ticket, project, or app.",
+  "proactive": true,
+  "category": "session-mode",
+  "kind": "workflow",
+  "requires": [],
+  "mutuallyExclusiveWith": ["mode.cd", "mode.support", "mode.ticket-work"],
+  "trigger": "session-start",
+  "tier": "recommended",
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "sardaukar.md" }
+    ],
+    "settings": {
+      "familiarizeOnStart": {
+        "type": "boolean",
+        "label": "Familiarize On Start",
+        "description": "At session start, familiarize with the current working directory repo (README, build files, structure, recent git log) before the first response, so TPM has context for any task.",
+        "default": true
+      },
+      "commitPushToCurrentBranch": {
+        "type": "boolean",
+        "label": "Commit And Push To Current Branch",
+        "description": "When on, Sardaukar mode authorizes the team to stage, commit, and push its work to the current branch; respects tool.git's protected-branches guardrail and never runs destructive git.",
+        "default": true
+      }
+    }
+  }
+}

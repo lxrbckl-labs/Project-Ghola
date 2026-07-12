@@ -2,7 +2,7 @@
 
 When this module is loaded, the session has a structured regression-scan gate. The scan greps the test directories in `parameters.testRoots` for references to the classes, methods, exported functions, and public types changed during the session, then reports which tests are most likely to be affected by the work. Every agent reads this same fragment; TPM owns the scan, SWE and QA findings feed it, and role-specific framing is collected at the end.
 
-This module is **not proactive**. It does not fire at session start. It is the third gate in the PR-handoff trio — `tool.pre-pr-checklist` first (the quality gate), `tool.pr-description` second (the artifact), regression scan third (the test-impact survey). It fires when the user signals PR readiness (per `parameters.autoOfferOnSignal`) or when the user explicitly asks. Treat it as a handoff gesture, not a continuous check.
+This module is **not proactive**. It does not fire at session start. It is the middle gate in the PR-handoff trio: `tool.pre-pr-checklist` first (the quality gate), regression scan second (the test-impact survey), `tool.pr-description` third (the artifact). Running the scan before the description means the description reflects a clean scan. It fires when the user signals PR readiness (per `parameters.autoOfferOnSignal`) or when the user explicitly asks. Treat it as a handoff gesture, not a continuous check.
 
 ## What the scan does
 

@@ -158,7 +158,14 @@ The Review Mode findings source is `tool.lenses`, which provides the security / 
 
 ## Comment Logging
 
-When `parameters.logCommentsEnabled` is true, every PR comment fetched during the `address <ordinals>` workflow is appended to a JSON log file at `parameters.logFilePath`. Each entry records: `ts` (ISO timestamp), PR id, comment id, author, body, lens (if applicable), the verb that triggered the fetch (`address` or `post`), and an `isReply: true|false` flag. The log is a passive side effect on top of the existing fetch — the address and post workflows behave identically whether logging is on or off.
+When `parameters.logCommentsEnabled` is true, PR comments seen during the `address <ordinals>` workflow are appended to a JSON log file at `parameters.logFilePath`. Each entry records: `ts` (ISO timestamp), PR id, comment id, author, body, lens (if applicable), the verb that triggered the fetch (`address` or `post`), and an `isReply: true|false` flag. The log is a passive side effect on top of the existing fetch; the address and post workflows behave identically whether logging is on or off.
+
+**What gets logged is gated by `parameters.logIncludeReplies`.** This setting decides whether the agent's own POSTED replies are logged alongside the inbound comments it READ:
+
+- **When on (default):** log inbound comments AND the replies the agent posts (the full round-trip, i.e. every entry regardless of its `isReply` flag). This is the current behavior and gives the fullest downstream training signal.
+- **When off:** log ONLY inbound comments (`isReply: false`). Skip writing a log entry for any reply the agent itself posts via `replyToComment`; do not append the `isReply: true` entry. This keeps the log a pure record of what colleagues said, with the agent's own outbound replies excluded. The address/post workflow is otherwise unchanged; only the reply-side log write is suppressed.
+
+Consult `parameters.logIncludeReplies` at the moment you would write a reply's log entry: if it is off, skip that write.
 
 ### Entry Shape
 
@@ -168,6 +175,8 @@ JSON lines (one JSON object per line) for easy streaming/grep. Sample:
 {"ts": "2026-05-25T14:32:11Z", "prId": "1234", "commentId": "9876", "author": "alice@example.com", "body": "Consider extracting...", "verb": "address", "isReply": false}
 {"ts": "2026-05-25T14:32:42Z", "prId": "1234", "commentId": "9876", "replyTo": "9876", "author": "self", "body": "Done in commit abc123", "verb": "address", "isReply": true}
 ```
+
+The second (`isReply: true`) line is written only when `parameters.logIncludeReplies` is on. When it is off, only the inbound (`isReply: false`) lines are recorded.
 
 ### Path Resolution
 
@@ -194,6 +203,15 @@ On every write, TPM checks the existing log file and prunes entries older than `
 
 `tool.qa-pr-learning` is the canonical downstream consumer of this log. It reads (does not write) the log path and uses entries as training signal for QA review patterns. This module never reads the log back — it is a write-only producer from this module's perspective.
 
+## Pipeline status
+
+When `parameters.pipelineStatusEnabled` is true, TPM can fetch and report the latest pipeline/build state for a PR (or its source branch) so the user knows whether the branch is green before merging. This is a **read-only** capability: TPM fetches state and reports it; it never triggers, stops, or re-runs a pipeline.
+
+- **Fetch.** TPM issues a GET against the Bitbucket pipelines REST endpoint for the current repo and the PR's source branch (the same source branch resolved during PR resolution). Read the most recent pipeline for that branch. This goes through the same credential and REST discipline the comment workflow uses: thread the call through the AtlassianBridge / `integration.atlassian-suite` access path so the Bitbucket token never crosses the agent boundary. Do NOT construct raw auth headers or prompt for a token in chat; the suite owns that surface end-to-end, exactly as it does for the comment calls.
+- **Report.** Surface the pipeline state in plain terms (in-progress, passed, or failed; map Bitbucket's raw state/result to those three), plus a link to the pipeline in Bitbucket so the user can open the full run.
+- **Read-only, always.** Never call any endpoint that triggers a new pipeline, stops a running one, or re-runs a failed one. If the user asks to run or re-run a build, refuse in one sentence and point them at Bitbucket directly; this module reports build state, it does not control builds.
+- When `parameters.pipelineStatusEnabled` is false, TPM does not fetch pipeline status; if the user asks, note that Pipeline Status is disabled in the Modules tab and point them there. The comment and post workflows are unaffected either way.
+
 ## Role-Specific Notes
 
 ### TPM
@@ -211,7 +229,7 @@ On every write, TPM checks the existing log file and prunes entries older than `
   - `parameters.minRatingToPost` — minimum Rating a finding must carry for `post all` / `post all <lens>` to include it. Explicit ordinals bypass the filter. If absent from the Session Manifest, the default applies: `1` (include everything).
   - `parameters.postCommentLocation` — where the comment lands (`inline-when-possible`, `inline-only`, `overview-only`). If absent from the Session Manifest, the default applies: `"inline-when-possible"`.
   - `parameters.requireUserApproval` — when true, present polished comments for approval before posting. If absent from the Session Manifest, the default applies: `true` (the safety gate is on).
-- When `parameters.logCommentsEnabled` is true, every fetched and posted comment is appended to `parameters.logFilePath` as a JSON line. You do not need to invoke logging explicitly; it happens passively during the address/post workflow.
+- When `parameters.logCommentsEnabled` is true, fetched comments are appended to `parameters.logFilePath` as JSON lines. Whether your own posted replies are logged too is gated by `parameters.logIncludeReplies`: on (default) logs inbound comments plus posted replies; off logs only inbound comments and skips the reply entries. You do not need to invoke logging explicitly; it happens passively during the address/post workflow.
 
 ### SWE
 

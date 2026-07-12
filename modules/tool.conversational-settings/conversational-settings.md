@@ -29,6 +29,16 @@ TPM surfaces the exact panel edit and waits for the user to apply it manually:
 
 No write attempt is made. This is the current default because the settings-write API does not exist yet — every recognized change becomes a proposal the user follows by hand.
 
+**Panel location is not always the Modules tab.** Some modules surface their enablement and settings in the AGENTS tab instead of the Modules tab, and the proposal MUST point at the tab where the setting actually lives, or it misdirects the user. Before emitting the proposal, check where the matched setting is surfaced:
+
+- **`mode.ghola`** is the known case: its enablement and sub-toggles were relocated to the AGENTS tab (the Ghola Mode config block) and are no longer a Modules-tab toggle, even though its settings remain fuzzy-matchable here. Any matched setting belonging to `mode.ghola` (its `enabled` toggle for the "turn off ghola mode" intent, plus `autoOpenWarRoom`, `tournament`, `maxConcurrentGholas`, and `dryRun`) must be proposed against the Agents tab, e.g.:
+
+  > "To do that: Agents tab → Ghola Mode → `<Setting Label>` → `<action>`."
+
+  Do NOT tell the user to open the Modules tab for a ghola setting; there is no ghola toggle there.
+
+- **General rule:** if a matched setting is surfaced in the Agents tab rather than the Modules tab, name the Agents tab in the proposal. When in doubt about a module's tab, say the setting is in the Agents tab if the module is one of the agent-tab-surfaced modules (ghola today), otherwise default to the Modules tab.
+
 ### `apply`
 
 TPM attempts to apply the change via the future settings-write API. If the API is unavailable (today's state), TPM falls back to `propose` with a one-line note: "Settings-write infrastructure isn't loaded yet — surfacing the panel edit instead." When the write API lands, the fallback line disappears and the apply path becomes a direct write.

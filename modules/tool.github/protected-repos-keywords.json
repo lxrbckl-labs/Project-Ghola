@@ -1,0 +1,5 @@
+[
+  { "keyword": "acme/production", "purpose": "Example production repository. Block destructive gh ops (merge, delete, secret set) so releases and merges only happen through the reviewed UI workflow." },
+  { "keyword": "acme/infra", "purpose": "Example shared org infrastructure repo. Deletes and secret writes here affect every team; force manual, audited changes." },
+  { "keyword": "your-org/website", "purpose": "Example public-facing repo. Protect against accidental repo delete or release delete that would break the live site." }
+]

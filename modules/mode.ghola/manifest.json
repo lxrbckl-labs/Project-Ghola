@@ -1,0 +1,43 @@
+{
+  "id": "mode.ghola",
+  "name": "Ghola Mode",
+  "version": "0.1.0",
+  "description": "Bends the whole session toward one free-form goal: TPM becomes the autonomous god of that goal, decomposing it into sub-purposes and growing a persistent roster of dedicated gholas via the ghola ledger.",
+  "proactive": true,
+  "category": "session-mode",
+  "kind": "workflow",
+  "requires": ["tool.ghola-ledger"],
+  "trigger": "session-start",
+  "tier": "recommended",
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "ghola.md" }
+    ],
+    "settings": {
+      "autoOpenWarRoom": {
+        "type": "boolean",
+        "label": "Auto-Open War Room",
+        "description": "When on, launching in Ghola Mode (and every subsequent mission start) auto-reveals the War Room tab so the roster and activity feed are on screen without a manual click. When off, the War Room stays wherever the user last left it; the mission still runs, but its progress is not surfaced until the user opens the tab themselves. Default on because ghola mode removes the usual back-and-forth, so surfacing the board proactively is the main way the user stays oriented.",
+        "default": true
+      },
+      "tournament": {
+        "type": "boolean",
+        "label": "Tournament Mode",
+        "description": "When on, TPM may grow rival gholas for a hard sub-purpose (two or more independent attempts) and keep whichever result is best, retiring the rest. When off, TPM grows exactly one ghola per sub-purpose. Default off because tournament mode multiplies token and time cost for every sub-purpose it touches; turn it on deliberately for missions where getting a hard sub-purpose right is worth paying for redundant attempts.",
+        "default": false
+      },
+      "maxConcurrentGholas": {
+        "type": "number",
+        "label": "Max Concurrent Gholas",
+        "description": "Ceiling on how many gholas may be in the active state at once for this mission. 0 (default) means unbounded; TPM sizes the roster purely by the mission's decomposition. Set a positive number to cap concurrency (e.g. on a shared machine, or to keep cost predictable); TPM must then keep additional sub-purposes dormant or queued until a slot frees up rather than exceeding the cap. The cap does not relax the file-ownership rule; every active ghola still gets explicit, non-overlapping file ownership in its brief regardless of how many are running.",
+        "default": 0
+      },
+      "dryRun": {
+        "type": "boolean",
+        "label": "Dry Run",
+        "description": "When on, TPM plans the crew and the first moves for the mission (decomposition, roster shape, initial ghola briefs) without spawning gholas or editing any files, then reports the plan for review. When off, TPM proceeds straight into an autonomous run. Default off (full autonomy is the point of ghola mode); turn dry-run on as a one-time sanity check before loosing a mission whose blast radius is unfamiliar or high-stakes.",
+        "default": false
+      }
+    }
+  }
+}

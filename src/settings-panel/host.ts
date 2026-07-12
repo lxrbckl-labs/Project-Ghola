@@ -17,11 +17,16 @@ import {
 } from './linqpad-connections';
 import type {
   FeedbackEntry,
+  GholaDetail,
   HostToWebviewMessage,
   ModuleSummary,
   NamedConfiguration,
   PromptFragmentDetail,
   SettingKeywordEntry,
+  WarRoomData,
+  WarRoomGhola,
+  WarRoomMission,
+  WarRoomSettings,
   WebviewToHostMessage,
 } from './protocol';
 
@@ -31,6 +36,14 @@ import type {
  * Settings panel "Feedback" tab reads/writes, so TPM and the panel share state.
  */
 const FEEDBACK_MODULE_ID = 'tool.feedback-log';
+
+/**
+ * Session-mode module whose sub-toggle setting VALUES must always reach TPM's
+ * Session Manifest even when left at their schema defaults. See
+ * `getComposeSettings` for why the composer's normal "(defaults)" rendering is
+ * insufficient for this module.
+ */
+const GHOLA_MODE_ID = 'mode.ghola';
 
 /** Disk schema version for the feedback log JSON file. */
 const FEEDBACK_SCHEMA_VERSION = 1;
@@ -66,6 +79,18 @@ export class SettingsPanel implements vscode.Disposable {
    * `false` when there is no active configuration selected.
    */
   private currentlyModified = false;
+
+  /**
+   * The subject slug the operator last EXPLICITLY requested via a
+   * `requestWarRoom` message that carried a `subject`. Internal War Room
+   * refreshes (ledger/control watchers, the control-writing button handlers)
+   * all call `postWarRoom()` with no argument; without this the auto-pick
+   * would re-run on every refresh and yank the view off the operator's chosen
+   * subject. `postWarRoom` reuses this value when no explicit subject is
+   * passed so the selection stays sticky. Undefined until the operator picks a
+   * subject (the initial load auto-picks and leaves this unset).
+   */
+  private lastRequestedSubject?: string;
 
   /**
    * In-host mutex for serializing feedback-log read-modify-write operations.
@@ -162,7 +187,10 @@ export class SettingsPanel implements vscode.Disposable {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist')],
+        localResourceRoots: [
+          vscode.Uri.joinPath(this.context.extensionUri, 'dist'),
+          vscode.Uri.joinPath(this.context.extensionUri, 'media'),
+        ],
       },
     );
     this.adoptPanel(panel);
@@ -187,7 +215,10 @@ export class SettingsPanel implements vscode.Disposable {
     }
     panel.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist')],
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.context.extensionUri, 'dist'),
+        vscode.Uri.joinPath(this.context.extensionUri, 'media'),
+      ],
     };
     this.adoptPanel(panel);
   }
@@ -200,6 +231,7 @@ export class SettingsPanel implements vscode.Disposable {
    */
   private adoptPanel(panel: vscode.WebviewPanel): void {
     this.panel = panel;
+    panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'resources', 'icon-source.png');
 
     panel.onDidDispose(
       () => {
@@ -224,6 +256,19 @@ export class SettingsPanel implements vscode.Disposable {
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.js'),
     );
+    // Webview-safe URI for the Session page hero banner image. Computed
+    // unconditionally; if `media/cover.png` is absent the webview simply skips
+    // rendering the hero (see `renderGeneral`), so a missing file never throws.
+    const coverUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'cover.png'),
+    ).toString();
+    // Webview-safe URI for the War Room tab hero banner image. Computed
+    // unconditionally like `coverUri`; if `media/warroom-banner.png` is absent
+    // the webview simply skips rendering the banner (see `renderWarRoom`), so a
+    // missing file never throws.
+    const warRoomBannerUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'warroom-banner.png'),
+    ).toString();
     const nonce = this.makeNonce();
     // Extension version from the authoritative source: the bundled VERSION file
     // at the extension root. Falls back to package.json (via the activated
@@ -247,7 +292,7 @@ export class SettingsPanel implements vscode.Disposable {
     <style>${await this.loadStyles()}</style>
   </head>
   <body>
-    <div id="app" data-version="${version}"></div>
+    <div id="app" data-version="${version}" data-cover-uri="${coverUri}" data-warroom-banner-uri="${warRoomBannerUri}"></div>
     <script nonce="${nonce}" src="${scriptUri}"></script>
   </body>
 </html>`;
@@ -431,6 +476,27 @@ export class SettingsPanel implements vscode.Disposable {
         await vscode.env.openExternal(vscode.Uri.parse(msg.url));
         break;
       }
+      case 'requestWarRoom':
+        await this.postWarRoom(msg.subject);
+        break;
+      case 'gholaAwakenAll':
+        await this.requestGholaAwakenAll();
+        break;
+      case 'gholaResumeMission':
+        await this.requestGholaResumeMission(msg.id);
+        break;
+      case 'requestGholaDetail':
+        await this.postGholaDetail(msg.subject, msg.ghola);
+        break;
+      case 'gholaDirective':
+        await this.requestGholaDirective(msg.text);
+        break;
+      case 'gholaDeclareDone':
+        await this.requestGholaDeclareDone(msg.id);
+        break;
+      case 'gholaResolveEscalation':
+        await this.requestGholaEscalationResolve(msg.id, msg.subject, msg.decision);
+        break;
       default:
         this.logger?.appendLine(`[panel] unknown message: ${JSON.stringify(msg)}`);
     }
@@ -506,6 +572,8 @@ export class SettingsPanel implements vscode.Disposable {
         kind: h.manifest.kind,
         trigger: h.manifest.trigger,
         tier: h.manifest.tier,
+        mutuallyExclusiveWith: h.manifest.mutuallyExclusiveWith,
+        requires: h.manifest.requires,
       };
     });
     this.post({ type: 'modulesChanged', modules });
@@ -758,7 +826,7 @@ export class SettingsPanel implements vscode.Disposable {
    * terminal never opens against partial state.
    */
   async writeAllAgentPromptFiles(): Promise<{ tpm: string; swe: string; qa: string }> {
-    const settings = this.getCurrentSettings();
+    const settings = this.getComposeSettings();
     const paths = {
       tpm: resolveAgentPromptFilePath('tpm'),
       swe: resolveAgentPromptFilePath('swe'),
@@ -775,7 +843,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   private postComposedPrompt(agent: string): void {
     if (!this.panel) return;
-    const prompt = this.composer.compose(agent, this.getCurrentSettings());
+    const prompt = this.composer.compose(agent, this.getComposeSettings());
     this.post({ type: 'composedPromptUpdated', agent, prompt });
   }
 
@@ -802,6 +870,885 @@ export class SettingsPanel implements vscode.Disposable {
       out[FEEDBACK_MODULE_ID]!['feedbackFilePath'] = this.feedbackFilePath;
     }
     return out;
+  }
+
+  /**
+   * The settings dict handed to `composer.compose`. This is `getCurrentSettings`
+   * plus host-materialized `mode.ghola` defaults.
+   *
+   * The composer renders a module's parameters as `(defaults)` when the user
+   * has no overrides, so a pristine Ghola Mode session would hide its four
+   * sub-toggles (autoOpenWarRoom / tournament / maxConcurrentGholas / dryRun)
+   * from TPM — yet those values gate real autonomous behavior. To fix this we
+   * resolve `mode.ghola`'s schema defaults from the loaded manifest and layer
+   * any user overrides on top, so all four keys always render with concrete
+   * values in the Session Manifest.
+   *
+   * This is deliberately NARROW to `mode.ghola`: materializing defaults for
+   * every module would bloat every prompt. It also lives here (compose-time)
+   * rather than in `getCurrentSettings` so preset save/apply and
+   * modified-detection continue to see only genuine user overrides — the
+   * injected defaults never masquerade as user configuration.
+   */
+  /**
+   * Whether Ghola Mode is on. Source of truth is the `mode.ghola::enabled`
+   * setting value (default false) in the module-settings store — NOT
+   * `loader.isEnabled`. mode.ghola is configured as an Agents configuration,
+   * not toggled as a module, so no ghola gate keys off loader state.
+   */
+  private isGholaEnabled(): boolean {
+    const flat = this.context.workspaceState.get<Record<string, unknown>>(
+      WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
+      {},
+    );
+    return flat[`${GHOLA_MODE_ID}::enabled`] === true;
+  }
+
+  private getComposeSettings(): Record<string, Record<string, unknown>> {
+    const settings = this.getCurrentSettings();
+    if (!this.isGholaEnabled()) return settings;
+    // Still read the manifest for the settings SCHEMA/DEFAULTS — only the
+    // ENABLED decision moved to the setting.
+    const schema = this.loader.find(GHOLA_MODE_ID)?.manifest.contributes?.settings;
+    if (!schema) return settings;
+
+    const resolved: Record<string, unknown> = {};
+    for (const [key, field] of Object.entries(schema)) {
+      // Skip fields without a declared default so we never render a literal
+      // "undefined"; every mode.ghola field currently declares one.
+      if (field.default !== undefined) resolved[key] = field.default;
+    }
+    // User overrides win over schema defaults.
+    Object.assign(resolved, settings[GHOLA_MODE_ID] ?? {});
+    return { ...settings, [GHOLA_MODE_ID]: resolved };
+  }
+
+  // ─── War Room (Ghola Mode) ────────────────────────────────────────────
+
+  /**
+   * Resolve `mode.ghola`'s four sub-toggles to concrete values, always. Reads
+   * the compose-time resolved settings (schema defaults layered with user
+   * overrides) and coerces each key to its declared type with a hardcoded
+   * fallback so the snapshot never carries `undefined`. Used both for the War
+   * Room's control-zone display and (via `getResolvedGholaSettings`) the RUN
+   * auto-open gate.
+   */
+  private gholaSettingsSnapshot(): WarRoomSettings {
+    const g = (this.getComposeSettings()[GHOLA_MODE_ID] ?? {}) as Record<string, unknown>;
+    return {
+      autoOpenWarRoom: typeof g.autoOpenWarRoom === 'boolean' ? g.autoOpenWarRoom : true,
+      tournament: typeof g.tournament === 'boolean' ? g.tournament : false,
+      maxConcurrentGholas: typeof g.maxConcurrentGholas === 'number' ? g.maxConcurrentGholas : 0,
+      dryRun: typeof g.dryRun === 'boolean' ? g.dryRun : false,
+    };
+  }
+
+  /**
+   * Resolved `mode.ghola` sub-toggles when the `mode.ghola::enabled` setting is
+   * on, else null.
+   * The RUN path uses this to gate War Room auto-open: null (disabled) short-
+   * circuits, and a truthy `autoOpenWarRoom` triggers the reveal.
+   */
+  getResolvedGholaSettings(): WarRoomSettings | null {
+    if (!this.isGholaEnabled()) return null;
+    return this.gholaSettingsSnapshot();
+  }
+
+  /**
+   * Reveal the settings panel and ask the webview to switch to the War Room
+   * section. Safe to call whether or not a panel is currently open — `open()`
+   * creates or reveals the singleton, then the `revealSection` message routes
+   * the webview to the tab (the webview requests its own War Room data on
+   * arrival). Never throws.
+   */
+  revealWarRoom(): void {
+    this.open();
+    this.post({ type: 'revealSection', section: 'warroom' });
+  }
+
+  /**
+   * Read the ghola ledger for one subject and post a `warRoomData` payload to
+   * the webview.
+   *
+   * Pointer resolution: the launched `ghola` CLI writes the absolute ledger-
+   * root path to `<workspaceFolder>/.nomeda/ledger-path`. The extension host
+   * has no vault path, so it reads that pointer to learn where to look. When
+   * there is no workspace folder, no pointer file, an empty pointer, a ledger
+   * dir that no longer exists, or no subject directories, we post
+   * `{ empty: true }` — plus `control` when a workspace resolved and
+   * `.nomeda/control.json` has recognized fields, so the Awaken-All /
+   * Declare-Done / resume / directive banners can still render pre-ledger.
+   *
+   * Parsing is done directly in TS (no child_process): a small self-contained
+   * frontmatter reader over `<root>/<subject>/*.md` (skipping `_missions.md`
+   * and `operating-notes.md`) plus `<root>/_archive/<subject>/*.md` for
+   * archived gholas, and a block parser over `<root>/<subject>/_missions.md`.
+   * Both are tolerant of a truncated trailing line (the watcher may fire mid-
+   * append): unreadable ghola files are skipped and malformed mission blocks
+   * are dropped rather than throwing.
+   *
+   * Subject selection: the passed `subject` when it matches a live subject
+   * dir, else the subject whose most-recent open mission is newest, else the
+   * first subject alphabetically.
+   */
+  async postWarRoom(subject?: string): Promise<void> {
+    if (!this.panel) return;
+    // Sticky selection: an explicit subject (from a `requestWarRoom` message)
+    // is remembered so later internal refreshes (which all call this with no
+    // argument) keep showing the operator's chosen subject instead of
+    // reverting to the auto-pick. When no explicit subject is passed, reuse the
+    // last remembered one.
+    if (subject !== undefined) this.lastRequestedSubject = subject;
+    const effectiveSubject = subject ?? this.lastRequestedSubject;
+    try {
+      const data = await this.buildWarRoomData(effectiveSubject);
+      // Reconcile the sticky selection to the subject actually RENDERED. When
+      // we were targeting a specific subject (effectiveSubject defined) but it
+      // could not be resolved and buildWarRoomData fell back to another
+      // subject, sync the sticky value to what is shown so a later reappearance
+      // of the old subject does not snap the view back. Trace: select B ->
+      // renders B, sticky=B; B disappears -> refresh renders A (fallback),
+      // sticky becomes A; B reappears -> refresh renders A (sticky=A), no
+      // snap-back. Initial-load auto-pick (effectiveSubject undefined) is left
+      // untouched so it keeps following the most-recent-open mission until the
+      // operator explicitly picks a subject.
+      //
+      // Late-completion guard: postWarRoom is async, so two builds can finish
+      // out of order. If a NEWER explicit request has already superseded this
+      // build's subject (this.lastRequestedSubject moved off the value we were
+      // serving), do NOT write back - otherwise a stale build resolving late
+      // would clobber the newer selection with its own fallback. Trace: pick B
+      // (unresolvable) then pick C (valid); C resolves first (sticky=C); B's
+      // stale build resolves and, without this guard, would overwrite sticky
+      // with its fallback A. Comparing against the captured effectiveSubject
+      // (stable for this invocation) skips that stale write-back.
+      if (
+        effectiveSubject !== undefined &&
+        typeof data.subject === 'string' &&
+        this.lastRequestedSubject === effectiveSubject
+      ) {
+        this.lastRequestedSubject = data.subject;
+      }
+      this.post({ type: 'warRoomData', data });
+    } catch (err) {
+      this.logger?.appendLine(`[panel] postWarRoom failed: ${(err as Error).message}`);
+      this.post({ type: 'warRoomData', data: { empty: true } });
+    }
+  }
+
+  private async buildWarRoomData(subject?: string): Promise<WarRoomData> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) return { empty: true };
+
+    // Read control.json up front (it lives under the workspace, not the
+    // ledger root) so every empty-ledger early-return below can still carry
+    // it — the Awaken-All / Declare-Done / resume / directive banners must
+    // render even before any mission/ghola has ever been created.
+    const control = await this.readControlState(folder.uri.fsPath);
+    const emptyData: WarRoomData = { empty: true, ...(control ? { control } : {}) };
+
+    const pointerPath = path.join(folder.uri.fsPath, '.nomeda', 'ledger-path');
+    let root: string;
+    try {
+      root = (await fs.readFile(pointerPath, 'utf-8')).trim();
+    } catch {
+      return emptyData;
+    }
+    if (!root || !fsSync.existsSync(root)) return emptyData;
+
+    const subjects = listLedgerSubjects(root);
+    if (subjects.length === 0) return emptyData;
+
+    const target =
+      subject && subjects.includes(subject)
+        ? subject
+        : pickSubjectByRecentOpenMission(root, subjects) ?? subjects[0]!;
+
+    // ALL missions (open + done) — the Mission Library / resume picker needs
+    // the full history. Callers that want "the current mission" (the mission
+    // header, the sub-purpose map) filter for `status === 'open'` themselves.
+    const missions = parseMissionsSafe(readFileSyncOr(missionsPath(root, target), ''));
+    const roster = collectRoster(root, target);
+    const counts = countByState(roster);
+    const alerts = parseAlertsSafe(readFileSyncOr(alertsPath(root, target), ''));
+    const ownership = parseOwnershipSafe(readFileSyncOr(ownershipFilePath(root, target), ''));
+    const escalations = parseEscalationsSafe(readFileSyncOr(escalationsFilePath(root, target), ''));
+
+    // Self-tuning operating notes for the resolved subject only (read-only
+    // War Room display) — tolerant of a missing/unreadable file, and omitted
+    // entirely (rather than sent as an empty string) when there is no note
+    // content yet, so the webview's `data.operatingNotes` truthiness check
+    // doubles as the render gate.
+    const operatingNotesRaw = readFileSyncOr(operatingNotesPath(root, target), '');
+    const operatingNotes = operatingNotesRaw.trim() ? operatingNotesRaw : undefined;
+
+    const settings: WarRoomSettings = this.gholaSettingsSnapshot();
+
+    return {
+      ledgerRoot: root,
+      subject: target,
+      // Every ledger subject (already sorted by listLedgerSubjects) so the War
+      // Room switcher can reach subjects other than the auto-picked/target one.
+      subjects,
+      missions,
+      roster,
+      counts,
+      settings,
+      alerts,
+      ...(ownership.length ? { ownership } : {}),
+      ...(escalations.length ? { escalations } : {}),
+      ...(operatingNotes ? { operatingNotes } : {}),
+      ...(control ? { control } : {}),
+    };
+  }
+
+  /**
+   * Read `<workspace>/.nomeda/control.json` and return its full resolved
+   * shape (awaken-all fields plus the resume/directive/declare-done fields),
+   * or `undefined` when the file is absent, unparseable, or parses to an
+   * empty object. Never throws.
+   *
+   * `awakenAll` defaults to `false` rather than gating the whole return value:
+   * the resume/directive/declareDone RMW writers (`requestGholaResumeMission`
+   * / `requestGholaDirective` / `requestGholaDeclareDone`) all start from `{}`
+   * when no control.json exists yet, so the FIRST such write produces a file
+   * with no `awakenAll` key at all. Requiring `awakenAll` to be a boolean
+   * would reject that file and hide the War Room's pending indicator until an
+   * awaken (or a CLI `--ack`) happened to populate `awakenAll` too. Instead we
+   * return a control object whenever the parsed JSON is a non-empty object
+   * that carries at least one recognized control field (any of
+   * awakenAll/resumeMission/directive/declareDone or their timestamp/ack
+   * companions); an empty object (or a file with no recognized fields at all)
+   * still returns `undefined` so a stray/unrelated JSON blob doesn't spuriously
+   * light up the control zone.
+   */
+  private async readControlState(
+    workspacePath: string,
+  ): Promise<NonNullable<WarRoomData['control']> | undefined> {
+    const controlPath = path.join(workspacePath, '.nomeda', 'control.json');
+    try {
+      const raw = await fs.readFile(controlPath, 'utf-8');
+      const parsed = JSON.parse(raw) as {
+        awakenAll?: unknown;
+        requestedAt?: unknown;
+        acknowledgedAt?: unknown;
+        resumeMission?: unknown;
+        resumeRequestedAt?: unknown;
+        resumeAcknowledgedAt?: unknown;
+        directive?: unknown;
+        directiveRequestedAt?: unknown;
+        directiveAcknowledgedAt?: unknown;
+        declareDone?: unknown;
+        declareDoneRequestedAt?: unknown;
+        declareDoneAcknowledgedAt?: unknown;
+        escalationResolve?: unknown;
+        escalationResolveRequestedAt?: unknown;
+        escalationResolveAcknowledgedAt?: unknown;
+      };
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed) ||
+        Object.keys(parsed).length === 0
+      ) {
+        return undefined;
+      }
+
+      const recognized =
+        'awakenAll' in parsed ||
+        'requestedAt' in parsed ||
+        'acknowledgedAt' in parsed ||
+        'resumeMission' in parsed ||
+        'resumeRequestedAt' in parsed ||
+        'resumeAcknowledgedAt' in parsed ||
+        'directive' in parsed ||
+        'directiveRequestedAt' in parsed ||
+        'directiveAcknowledgedAt' in parsed ||
+        'declareDone' in parsed ||
+        'declareDoneRequestedAt' in parsed ||
+        'declareDoneAcknowledgedAt' in parsed ||
+        'escalationResolve' in parsed ||
+        'escalationResolveRequestedAt' in parsed ||
+        'escalationResolveAcknowledgedAt' in parsed;
+      if (!recognized) return undefined;
+
+      const out: NonNullable<WarRoomData['control']> = {
+        awakenAll: typeof parsed.awakenAll === 'boolean' ? parsed.awakenAll : false,
+      };
+      if (typeof parsed.requestedAt === 'string') out.requestedAt = parsed.requestedAt;
+      if (typeof parsed.acknowledgedAt === 'string') out.acknowledgedAt = parsed.acknowledgedAt;
+      if (typeof parsed.resumeMission === 'string' || parsed.resumeMission === null) {
+        out.resumeMission = parsed.resumeMission;
+      }
+      if (typeof parsed.resumeRequestedAt === 'string') {
+        out.resumeRequestedAt = parsed.resumeRequestedAt;
+      }
+      if (typeof parsed.resumeAcknowledgedAt === 'string') {
+        out.resumeAcknowledgedAt = parsed.resumeAcknowledgedAt;
+      }
+      if (typeof parsed.directive === 'string' || parsed.directive === null) {
+        out.directive = parsed.directive;
+      }
+      if (typeof parsed.directiveRequestedAt === 'string') {
+        out.directiveRequestedAt = parsed.directiveRequestedAt;
+      }
+      if (typeof parsed.directiveAcknowledgedAt === 'string') {
+        out.directiveAcknowledgedAt = parsed.directiveAcknowledgedAt;
+      }
+      if (typeof parsed.declareDone === 'string' || parsed.declareDone === null) {
+        out.declareDone = parsed.declareDone;
+      }
+      if (typeof parsed.declareDoneRequestedAt === 'string') {
+        out.declareDoneRequestedAt = parsed.declareDoneRequestedAt;
+      }
+      if (typeof parsed.declareDoneAcknowledgedAt === 'string') {
+        out.declareDoneAcknowledgedAt = parsed.declareDoneAcknowledgedAt;
+      }
+      // escalationResolve is now a QUEUE (array of { id, subject, decision }).
+      // Tolerant parse: within an array, entries missing a string
+      // id/subject/decision are dropped rather than throwing. Mirroring the CLI,
+      // an OLD single-object value (the pre-queue shape) carrying a valid
+      // id+subject+decision is coerced into a 1-element array so a legacy
+      // control.json written before the queue migration is still honored; any
+      // other non-array value (null, a bad/2-field object, a bare string) leaves
+      // the field omitted.
+      // Mirror the CLI's validation (`scripts/ghola.mjs`): a valid resolve
+      // entry's `decision` must be exactly 'approve' or 'deny'. The host only
+      // ever WRITES those two values, so this only bites hand-edited/corrupt
+      // control.json — an entry with any other `decision` (e.g. "maybe") is
+      // dropped as invalid rather than surfaced, closing the host-vs-CLI
+      // divergence.
+      const isResolveEntry = (
+        raw: unknown,
+      ): raw is { id: string; subject: string; decision: 'approve' | 'deny' } =>
+        !!raw &&
+        typeof raw === 'object' &&
+        !Array.isArray(raw) &&
+        typeof (raw as { id?: unknown }).id === 'string' &&
+        typeof (raw as { subject?: unknown }).subject === 'string' &&
+        ((raw as { decision?: unknown }).decision === 'approve' ||
+          (raw as { decision?: unknown }).decision === 'deny');
+      if (Array.isArray(parsed.escalationResolve)) {
+        const entries: { id: string; subject: string; decision: string }[] = [];
+        for (const raw of parsed.escalationResolve) {
+          if (isResolveEntry(raw)) {
+            entries.push({ id: raw.id, subject: raw.subject, decision: raw.decision });
+          }
+        }
+        out.escalationResolve = entries;
+      } else if (isResolveEntry(parsed.escalationResolve)) {
+        const e = parsed.escalationResolve;
+        out.escalationResolve = [{ id: e.id, subject: e.subject, decision: e.decision }];
+      }
+      if (typeof parsed.escalationResolveRequestedAt === 'string') {
+        out.escalationResolveRequestedAt = parsed.escalationResolveRequestedAt;
+      }
+      if (typeof parsed.escalationResolveAcknowledgedAt === 'string') {
+        out.escalationResolveAcknowledgedAt = parsed.escalationResolveAcknowledgedAt;
+      }
+      return out;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Serialize a control.json read-modify-write against concurrent writers.
+   *
+   * The host's War Room buttons and the `ghola` CLI's `*-ack` commands both do a
+   * full-file read-modify-OVERWRITE of `<workspace>/.nomeda/control.json`. Without
+   * a shared lock, two writers read the same "before" state and the later write
+   * clobbers the earlier one (a lost kill-switch, a lost escalation resolve). This
+   * helper implements the EXACT lock protocol the CLI uses (`scripts/ghola.mjs`
+   * `acquireControlLock`) on the co-located `<workspace>/.nomeda/control.lock`, so
+   * host and CLI mutually exclude. The protocol is ATOMIC and ownership-tokened -
+   * there is no blind unlink that could delete a live lock:
+   *   - Acquire: exclusive create via `fs.open(path, 'wx')`, then write a unique
+   *     NONCE (`<pid>-<rand>-<epochMs>`) into the file and keep it for release.
+   *     On EEXIST wait ~20ms and retry up to a ~2000ms timeout.
+   *   - Stale takeover: a STALE lock (mtime older than ~5000ms) is a crashed
+   *     holder, but we NEVER blind-unlink it (two contenders could both see it
+   *     stale, both unlink+create, and one's release could then delete the
+   *     other's LIVE lock). Instead we ATOMICALLY steal it: `fs.rename` the lock
+   *     to a unique temp path. rename is atomic, so exactly one contender wins;
+   *     losers get ENOENT and fall back into the acquire retry loop. The winner
+   *     unlinks the stolen temp and retries the exclusive create.
+   *   - Release: read the lock file and unlink it ONLY IF it STILL CONTAINS OUR
+   *     nonce. If a stale-takeover handed the lock to someone else, their nonce
+   *     is present and we leave it untouched, so we never delete a live lock.
+   *
+   * Fail-open on timeout / unexpected fs error: we log and still run `fn` (a
+   * best-effort unsynchronized write) rather than dropping the operator's click or
+   * hanging the extension, WITHOUT marking the lock acquired - so the release path
+   * never touches a lock we do not own. A lost kill-switch/resolve is worse than a
+   * rare unsynchronized write, and the ~2000ms budget only elapses under sustained
+   * contention where the CLI holder should already have released. `fn` performs
+   * its own read-modify-write of control.json; this helper only owns the lock's
+   * lifecycle.
+   */
+  private async withControlLock(
+    workspacePath: string,
+    fn: () => Promise<void>,
+  ): Promise<void> {
+    const nomedaDir = path.join(workspacePath, '.nomeda');
+    const lockPath = path.join(nomedaDir, 'control.lock');
+    const timeoutMs = 2000;
+    const staleMs = 5000;
+    const backoffMs = 20;
+    // Ownership token, unique per acquisition. Matches the CLI's nonce format
+    // (`<pid>-<rand>-<epochMs>`) so host and CLI share the same steal/release
+    // discipline on this file.
+    const nonce = `${process.pid}-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+    const sleep = (ms: number): Promise<void> =>
+      new Promise((resolve) => setTimeout(resolve, ms));
+
+    try {
+      await fs.mkdir(nomedaDir, { recursive: true });
+    } catch {
+      // Directory creation failure is surfaced when fn's own write fails; do not
+      // block lock acquisition on it.
+    }
+
+    const start = Date.now();
+    let acquired = false;
+    for (;;) {
+      try {
+        const handle = await fs.open(lockPath, 'wx');
+        try {
+          await handle.writeFile(nonce);
+        } finally {
+          await handle.close();
+        }
+        acquired = true;
+        break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+          // Unexpected fs error (e.g. permission): do not hang; proceed
+          // best-effort without the lock.
+          this.logger?.appendLine(
+            `[panel] control lock: unexpected error on ${lockPath}, proceeding without lock: ${(err as Error).message}`,
+          );
+          break;
+        }
+        // Lock exists: take it over if it is stale (crashed holder), but never
+        // by blind-unlink - steal it ATOMICALLY via rename so only one contender
+        // wins and no live lock can be deleted out from under its owner.
+        try {
+          const st = await fs.stat(lockPath);
+          if (Date.now() - st.mtimeMs > staleMs) {
+            const tempStealPath = `${lockPath}.steal-${process.pid}-${Math.random()
+              .toString(36)
+              .slice(2)}-${Date.now()}`;
+            try {
+              await fs.rename(lockPath, tempStealPath);
+              // Won the steal: remove the stolen stale lock, then retry create.
+              await fs.unlink(tempStealPath).catch(() => {});
+            } catch {
+              // Lost the steal (another contender renamed first -> ENOENT):
+              // fall through and retry the acquire loop.
+            }
+            continue;
+          }
+        } catch {
+          continue; // lock vanished between EEXIST and stat: retry now
+        }
+        if (Date.now() - start > timeoutMs) {
+          this.logger?.appendLine(
+            `[panel] control lock: timed out after ${timeoutMs}ms on ${lockPath}; proceeding with best-effort write`,
+          );
+          break;
+        }
+        await sleep(backoffMs);
+      }
+    }
+
+    try {
+      await fn();
+    } finally {
+      if (acquired) {
+        // Nonce-verified release: only unlink the lock if it still holds OUR
+        // nonce. If a stale-takeover reassigned it, another owner's nonce is
+        // present and we must leave it alone.
+        try {
+          const current = await fs.readFile(lockPath, 'utf-8');
+          if (current === nonce) {
+            await fs.unlink(lockPath).catch(() => {});
+          }
+        } catch {
+          // Lock already gone or unreadable: nothing to release.
+        }
+      }
+    }
+  }
+
+  /**
+   * Atomically write `contents` to `filePath` via a temp-sibling + rename.
+   *
+   * A mid-write crash / ENOSPC can only ever truncate the TEMP file; the real
+   * `filePath` is swapped in by a single `fs.rename`, which is atomic on the
+   * same filesystem (guaranteed here because the temp sibling lives in the same
+   * directory). So a reader (including the tolerant control.json parser) never
+   * observes a half-written file: it sees either the OLD complete contents or
+   * the NEW complete contents, never a truncated blob that would be misread as
+   * "no control active". The temp name (`<filePath>.tmp-<pid>-<rand>`)
+   * deliberately does NOT match the literal `.nomeda/control.json` path the
+   * control watcher observes, so creating/renaming it triggers no spurious War
+   * Room refresh. The temp file is unlinked in a finally so a failed rename
+   * leaves no litter behind (after a successful rename the unlink is a harmless
+   * ENOENT that we swallow).
+   */
+  private async atomicWriteJson(filePath: string, contents: string): Promise<void> {
+    const tempPath = `${filePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+    try {
+      await fs.writeFile(tempPath, contents, 'utf-8');
+      await fs.rename(tempPath, filePath);
+    } finally {
+      await fs.unlink(tempPath).catch(() => {});
+    }
+  }
+
+  /**
+   * Write the emergency "Awaken All" request into
+   * `<workspace>/.nomeda/control.json`: `{ awakenAll: true, requestedAt }`.
+   * This is a read-modify-write (matching `requestGholaResumeMission` /
+   * `requestGholaDirective`): the existing file (if any) is read first and
+   * every other field (`resumeMission`, `directive`, their timestamps,
+   * `acknowledgedAt`, etc.) is preserved verbatim; only `awakenAll` and
+   * `requestedAt` are overwritten. This matters because an operator can click
+   * Awaken All while a resume or directive request is still pending-unacked,
+   * and a fresh-object write would silently clobber those. Creates `.nomeda/`
+   * if missing and never deletes the file — this is the host's own
+   * extension-owned state file. Wrapped in try/catch so a write failure never
+   * throws out of the message handler. Re-posts War Room data afterwards so
+   * the UI reflects the pending request.
+   */
+  private async requestGholaAwakenAll(): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) return;
+    try {
+      await this.withControlLock(folder.uri.fsPath, async () => {
+      const nomedaDir = path.join(folder.uri.fsPath, '.nomeda');
+      await fs.mkdir(nomedaDir, { recursive: true });
+      const controlPath = path.join(nomedaDir, 'control.json');
+
+      // Read-modify-write: start from whatever is already on disk (tolerant
+      // of a missing/unparseable file — treat that as an empty object) so
+      // unrelated fields like `resumeMission`/`directive` are never clobbered.
+      let existing: Record<string, unknown> = {};
+      try {
+        const raw = await fs.readFile(controlPath, 'utf-8');
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          existing = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Missing or unparseable — proceed with an empty base object.
+      }
+
+      const merged = {
+        ...existing,
+        awakenAll: true,
+        requestedAt: new Date().toISOString(),
+      };
+      await this.atomicWriteJson(controlPath, JSON.stringify(merged, null, 2));
+      });
+    } catch (err) {
+      this.logger?.appendLine(
+        `[panel] gholaAwakenAll: failed to write control.json: ${(err as Error).message}`,
+      );
+    }
+    await this.postWarRoom();
+  }
+
+  /**
+   * Write a "Resume mission" request into `<workspace>/.nomeda/control.json`:
+   * `{ resumeMission: id, resumeRequestedAt }`. This is a read-modify-write —
+   * the existing file (if any) is read first and every other field
+   * (`awakenAll`, `requestedAt`, `acknowledgedAt`, and any prior resume
+   * fields) is preserved verbatim; only `resumeMission` and
+   * `resumeRequestedAt` are overwritten. Creates `.nomeda/` if missing and
+   * never deletes the file — this is the host's own extension-owned state
+   * file. Wrapped in try/catch so a write failure never throws out of the
+   * message handler. Re-posts War Room data afterwards so the picker shows
+   * the pending indicator.
+   */
+  private async requestGholaResumeMission(id: string): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) return;
+    try {
+      await this.withControlLock(folder.uri.fsPath, async () => {
+      const nomedaDir = path.join(folder.uri.fsPath, '.nomeda');
+      await fs.mkdir(nomedaDir, { recursive: true });
+      const controlPath = path.join(nomedaDir, 'control.json');
+
+      // Read-modify-write: start from whatever is already on disk (tolerant
+      // of a missing/unparseable file — treat that as an empty object) so
+      // unrelated fields like `awakenAll` are never clobbered.
+      let existing: Record<string, unknown> = {};
+      try {
+        const raw = await fs.readFile(controlPath, 'utf-8');
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          existing = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Missing or unparseable — proceed with an empty base object.
+      }
+
+      const merged = {
+        ...existing,
+        resumeMission: id,
+        resumeRequestedAt: new Date().toISOString(),
+      };
+      await this.atomicWriteJson(controlPath, JSON.stringify(merged, null, 2));
+      });
+    } catch (err) {
+      this.logger?.appendLine(
+        `[panel] gholaResumeMission: failed to write control.json: ${(err as Error).message}`,
+      );
+    }
+    await this.postWarRoom();
+  }
+
+  /**
+   * Write a god-console directive into `<workspace>/.nomeda/control.json`:
+   * `{ directive: text, directiveRequestedAt }`. Read-modify-write, mirroring
+   * `requestGholaResumeMission`: the existing file (if any) is read first and
+   * every other field (`awakenAll`, `resumeMission`, prior directive fields,
+   * etc.) is preserved verbatim; only `directive` and `directiveRequestedAt`
+   * are overwritten. Creates `.nomeda/` if missing and never deletes the
+   * file. Wrapped in try/catch so a write failure never throws out of the
+   * message handler. Re-posts War Room data afterwards so the pending
+   * directive is shown.
+   */
+  private async requestGholaDirective(text: string): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) return;
+    try {
+      await this.withControlLock(folder.uri.fsPath, async () => {
+      const nomedaDir = path.join(folder.uri.fsPath, '.nomeda');
+      await fs.mkdir(nomedaDir, { recursive: true });
+      const controlPath = path.join(nomedaDir, 'control.json');
+
+      let existing: Record<string, unknown> = {};
+      try {
+        const raw = await fs.readFile(controlPath, 'utf-8');
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          existing = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Missing or unparseable — proceed with an empty base object.
+      }
+
+      const merged = {
+        ...existing,
+        directive: text,
+        directiveRequestedAt: new Date().toISOString(),
+      };
+      await this.atomicWriteJson(controlPath, JSON.stringify(merged, null, 2));
+      });
+    } catch (err) {
+      this.logger?.appendLine(
+        `[panel] gholaDirective: failed to write control.json: ${(err as Error).message}`,
+      );
+    }
+    await this.postWarRoom();
+  }
+
+  /**
+   * Write a "Declare Done" request into `<workspace>/.nomeda/control.json`:
+   * `{ declareDone: id, declareDoneRequestedAt }`. Read-modify-write,
+   * mirroring `requestGholaResumeMission` / `requestGholaDirective`: the
+   * existing file (if any) is read first and every other field (`awakenAll`,
+   * `resumeMission`, `directive`, prior declareDone fields, etc.) is preserved
+   * verbatim; only `declareDone` and `declareDoneRequestedAt` are overwritten.
+   * Creates `.nomeda/` if missing and never deletes the file. Wrapped in
+   * try/catch so a write failure never throws out of the message handler.
+   * Re-posts War Room data afterwards so the mission header shows the
+   * "Declaring done..." pending indicator in place of the button.
+   */
+  private async requestGholaDeclareDone(id: string): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) return;
+    try {
+      await this.withControlLock(folder.uri.fsPath, async () => {
+      const nomedaDir = path.join(folder.uri.fsPath, '.nomeda');
+      await fs.mkdir(nomedaDir, { recursive: true });
+      const controlPath = path.join(nomedaDir, 'control.json');
+
+      let existing: Record<string, unknown> = {};
+      try {
+        const raw = await fs.readFile(controlPath, 'utf-8');
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          existing = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Missing or unparseable — proceed with an empty base object.
+      }
+
+      const merged = {
+        ...existing,
+        declareDone: id,
+        declareDoneRequestedAt: new Date().toISOString(),
+      };
+      await this.atomicWriteJson(controlPath, JSON.stringify(merged, null, 2));
+      });
+    } catch (err) {
+      this.logger?.appendLine(
+        `[panel] gholaDeclareDone: failed to write control.json: ${(err as Error).message}`,
+      );
+    }
+    await this.postWarRoom();
+  }
+
+  /**
+   * APPEND an escalation-resolution request into the queue in
+   * `<workspace>/.nomeda/control.json`:
+   * `{ escalationResolve: [...prior, { id, subject, decision }], escalationResolveRequestedAt }`.
+   * Read-modify-write, mirroring `requestGholaResumeMission` /
+   * `requestGholaDirective` / `requestGholaDeclareDone`: the existing file (if
+   * any) is read first and every other field (`awakenAll`, `resumeMission`,
+   * `directive`, `declareDone`, etc.) is preserved verbatim.
+   *
+   * The escalationResolve field is a QUEUE, not a single slot: this method
+   * APPENDS rather than overwrites, so resolving a second escalation while an
+   * earlier one is still pending-unacked no longer clobbers the first (the
+   * clobber bug this fixes). A prior queued entry with the same id+subject is
+   * replaced in place rather than duplicated, so re-clicking a decision updates
+   * it instead of stacking. Creates `.nomeda/` if missing and never deletes the
+   * file. Wrapped in try/catch so a write failure never throws out of the
+   * message handler. Re-posts War Room data afterwards so the escalation shows a
+   * pending indicator.
+   */
+  private async requestGholaEscalationResolve(
+    id: string,
+    subject: string,
+    decision: 'approve' | 'deny',
+  ): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) return;
+    try {
+      await this.withControlLock(folder.uri.fsPath, async () => {
+      const nomedaDir = path.join(folder.uri.fsPath, '.nomeda');
+      await fs.mkdir(nomedaDir, { recursive: true });
+      const controlPath = path.join(nomedaDir, 'control.json');
+
+      let existing: Record<string, unknown> = {};
+      try {
+        const raw = await fs.readFile(controlPath, 'utf-8');
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          existing = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Missing or unparseable: proceed with an empty base object.
+      }
+
+      // Start from the existing queue (tolerant: a non-array value, including a
+      // legacy single object, resets to []), drop any prior entry with the same
+      // id+subject, then append this decision.
+      const priorRaw = (existing as { escalationResolve?: unknown }).escalationResolve;
+      const prior = Array.isArray(priorRaw)
+        ? (priorRaw as unknown[]).filter(
+            (e): e is { id: string; subject: string; decision: string } =>
+              !!e &&
+              typeof e === 'object' &&
+              typeof (e as { id?: unknown }).id === 'string' &&
+              typeof (e as { subject?: unknown }).subject === 'string' &&
+              typeof (e as { decision?: unknown }).decision === 'string',
+          )
+        : [];
+      const queue = prior.filter((e) => !(e.id === id && e.subject === subject));
+      queue.push({ id, subject, decision });
+
+      const merged = {
+        ...existing,
+        escalationResolve: queue,
+        escalationResolveRequestedAt: new Date().toISOString(),
+      };
+      await this.atomicWriteJson(controlPath, JSON.stringify(merged, null, 2));
+      });
+    } catch (err) {
+      this.logger?.appendLine(
+        `[panel] gholaResolveEscalation: failed to write control.json: ${(err as Error).message}`,
+      );
+    }
+    await this.postWarRoom();
+  }
+
+  /**
+   * Read a single ghola's `.md` file for the War Room drill-in view and post
+   * a `gholaDetail` message. Resolves the ledger root the same way
+   * `buildWarRoomData` does (via the `.nomeda/ledger-path` pointer); when
+   * there is no workspace, no pointer, or no ledger dir, posts an
+   * absent-flagged detail rather than throwing. Looks in the subject dir
+   * first, then falls back to `_archive/<subject>/` (mirrors
+   * `collectRoster`'s two-directory scan).
+   */
+  private async postGholaDetail(subject: string, ghola: string): Promise<void> {
+    if (!this.panel) return;
+    const emptyDetail: GholaDetail = {
+      subject,
+      id: ghola,
+      name: '',
+      purpose: '',
+      state: '',
+      model: '',
+      created: '',
+      last_used: '',
+      generation: 1,
+      parent: null,
+      reliability: 'pass:0 rework:0',
+      missions: [],
+      history: '',
+      found: false,
+    };
+    try {
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (!folder) {
+        this.post({ type: 'gholaDetail', data: emptyDetail });
+        return;
+      }
+      const pointerPath = path.join(folder.uri.fsPath, '.nomeda', 'ledger-path');
+      let root: string;
+      try {
+        root = (await fs.readFile(pointerPath, 'utf-8')).trim();
+      } catch {
+        this.post({ type: 'gholaDetail', data: emptyDetail });
+        return;
+      }
+      if (!root || !fsSync.existsSync(root)) {
+        this.post({ type: 'gholaDetail', data: emptyDetail });
+        return;
+      }
+
+      const candidates = [
+        path.join(ledgerSubjectDir(root, subject), `${ghola}.md`),
+        path.join(ledgerArchiveSubjectDir(root, subject), `${ghola}.md`),
+      ];
+      let content: string | null = null;
+      for (const candidate of candidates) {
+        try {
+          content = await fs.readFile(candidate, 'utf-8');
+          break;
+        } catch {
+          continue;
+        }
+      }
+      if (content === null) {
+        this.post({ type: 'gholaDetail', data: emptyDetail });
+        return;
+      }
+
+      this.post({ type: 'gholaDetail', data: parseGholaDetail(content, subject) });
+    } catch (err) {
+      this.logger?.appendLine(
+        `[panel] postGholaDetail failed (${subject}/${ghola}): ${(err as Error).message}`,
+      );
+      this.post({ type: 'gholaDetail', data: emptyDetail });
+    }
   }
 
   private post(msg: HostToWebviewMessage): void {
@@ -892,6 +1839,87 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
+   * Resolve mutual-exclusivity conflicts within a preset's enabled-id list and
+   * pull in required dependencies. Deterministic rule:
+   *   1. Iterate `enabledIds` in stored order; keep a module only when it does
+   *      not conflict (either direction of `mutuallyExclusiveWith`) with a
+   *      module already kept. The FIRST-listed member of a conflicting group
+   *      wins; later conflicting entries are dropped (and logged).
+   *   2. Pull in each kept module's `requires` deps that aren't already present,
+   *      resolved TRANSITIVELY (walk the full requires graph, not just one
+   *      level). A dep is skipped when it is `mutuallyExclusiveWith` an
+   *      already-kept module (either direction) so a transitively-pulled dep can
+   *      never escape mutual exclusion; otherwise it is added.
+   * Unknown ids (no live handle) are skipped; `pruneStaleConfigurationIds`
+   * already strips those from stored presets.
+   */
+  private resolveConfigurationConflicts(enabledIds: string[]): string[] {
+    const kept: string[] = [];
+    const keptSet = new Set<string>();
+    for (const candidateId of enabledIds) {
+      const handle = this.loader.find(candidateId);
+      if (!handle) continue;
+      if (keptSet.has(candidateId)) continue;
+      const excl = handle.manifest.mutuallyExclusiveWith ?? [];
+      const conflicts = kept.some((keptId) => {
+        if (excl.includes(keptId)) return true;
+        const keptExcl = this.loader.find(keptId)?.manifest.mutuallyExclusiveWith ?? [];
+        return keptExcl.includes(candidateId);
+      });
+      if (conflicts) {
+        this.logger?.appendLine(
+          `[panel] applyConfiguration: dropped '${candidateId}' — mutually exclusive with an earlier-listed module in the preset`,
+        );
+        continue;
+      }
+      kept.push(candidateId);
+      keptSet.add(candidateId);
+    }
+    // Pull in requires deps TRANSITIVELY: walk the full requires graph (BFS)
+    // so a chain like tool.qa-pr-learning -> integration.bitbucket-pr-comments
+    // -> integration.atlassian-suite pulls in BOTH downstream deps, not just the
+    // first level. Newly-appended deps are pushed onto the work queue so their
+    // own requires are resolved in turn; `keptSet` doubles as the visited guard,
+    // so a cyclic requires (a module that transitively requires something
+    // already kept) terminates instead of looping forever.
+    //
+    // Mutex guard: a transitively-pulled dep must NOT escape mutual exclusion.
+    // Because the mutex resolution above ran over `enabledIds` only (before this
+    // walk), a dep pulled in here could be `mutuallyExclusiveWith` an
+    // already-kept module and, added unconditionally, would violate the mutex.
+    // So we SKIP a dep when it conflicts (either direction) with any kept
+    // module. Not currently reachable (no mutex participant sits in a requires
+    // chain today), but this closes the latent hole; when no conflict exists the
+    // dep is still added, so `requires` behavior is otherwise identical.
+    const requiresQueue = [...kept];
+    while (requiresQueue.length > 0) {
+      const keptId = requiresQueue.shift()!;
+      const requires = this.loader.find(keptId)?.manifest.requires ?? [];
+      for (const dep of requires) {
+        if (keptSet.has(dep)) continue;
+        const depHandle = this.loader.find(dep);
+        if (!depHandle) continue;
+        const depExcl = depHandle.manifest.mutuallyExclusiveWith ?? [];
+        const conflictsWithKept = kept.some((otherId) => {
+          if (depExcl.includes(otherId)) return true;
+          const otherExcl = this.loader.find(otherId)?.manifest.mutuallyExclusiveWith ?? [];
+          return otherExcl.includes(dep);
+        });
+        if (conflictsWithKept) {
+          this.logger?.appendLine(
+            `[panel] applyConfiguration: skipped required dep '${dep}' - mutually exclusive with a kept module`,
+          );
+          continue;
+        }
+        kept.push(dep);
+        keptSet.add(dep);
+        requiresQueue.push(dep);
+      }
+    }
+    return kept;
+  }
+
+  /**
    * Switch the active configuration. When `id` is null, simply clear the
    * selection — module state is left intact. When non-null, diff and apply
    * the snapshot via the loader and the settings store, then broadcast.
@@ -907,7 +1935,11 @@ export class SettingsPanel implements vscode.Disposable {
     const target = this.configurations.findById(id);
     if (!target) return;
 
-    const targetEnabled = new Set(target.enabledIds);
+    // Resolve any mutual-exclusivity conflicts the preset may carry before
+    // applying it. The webview enforces exclusivity on manual toggle, but a
+    // user-saved preset applied directly bypasses that enforcement, so a stale
+    // preset could carry a conflicting set. Built-in presets are conflict-free.
+    const targetEnabled = new Set(this.resolveConfigurationConflicts(target.enabledIds));
     const handles = this.loader.getAll();
     // Diff: toggle each module to its target state. Use the loader's mutating
     // methods so onDidChange fires exactly once per flip (rather than rewriting
@@ -1489,4 +2521,479 @@ function canonicalJson(v: unknown): string {
     }
     return val;
   });
+}
+
+// ─── Ghola ledger parsing (War Room) ──────────────────────────────────────
+//
+// A self-contained, read-only mirror of the frontmatter + mission-block
+// formats that `scripts/ghola.mjs` writes, so the extension host can build a
+// War Room payload without spawning the CLI. Every reader tolerates a
+// truncated trailing line (the file-watcher may fire mid-append): reads are
+// wrapped in try/catch and malformed records are skipped rather than thrown.
+
+/** Read a file synchronously, returning `fallback` on any error (ENOENT, partial). */
+function readFileSyncOr(p: string, fallback: string): string {
+  try {
+    return fsSync.readFileSync(p, 'utf-8');
+  } catch {
+    return fallback;
+  }
+}
+
+function ledgerSubjectDir(root: string, subject: string): string {
+  return path.join(root, subject);
+}
+
+function ledgerArchiveSubjectDir(root: string, subject: string): string {
+  return path.join(root, '_archive', subject);
+}
+
+function missionsPath(root: string, subject: string): string {
+  return path.join(ledgerSubjectDir(root, subject), '_missions.md');
+}
+
+/** Path to a subject's alert log, mirroring the `_missions.md` convention. */
+function alertsPath(root: string, subject: string): string {
+  return path.join(ledgerSubjectDir(root, subject), 'alerts.md');
+}
+
+/** Path to a subject's ownership ledger, mirroring the `alerts.md` convention. */
+function ownershipFilePath(root: string, subject: string): string {
+  return path.join(ledgerSubjectDir(root, subject), 'ownership.md');
+}
+
+/** Path to a subject's escalations ledger, mirroring the `alerts.md` convention. */
+function escalationsFilePath(root: string, subject: string): string {
+  return path.join(ledgerSubjectDir(root, subject), 'escalations.md');
+}
+
+/**
+ * Path to a subject's self-tuning operating notes, mirroring the CLI's
+ * `notesFilePath` (see `cmdNote` in `ghola.mjs`).
+ */
+function operatingNotesPath(root: string, subject: string): string {
+  return path.join(ledgerSubjectDir(root, subject), 'operating-notes.md');
+}
+
+/**
+ * Parse a subject's `alerts.md` into `{ text, date }` records. The CLI (out
+ * of band, in `scripts/ghola.mjs`) is the sole writer; this is a tolerant
+ * reader that assumes one alert per Markdown list line in the form
+ * `- YYYY-MM-DD: <text>` — mirroring the date-prefixed bullet convention used
+ * elsewhere in this codebase (e.g. the agent switchboard inbox format). A
+ * line missing the leading date is still surfaced (with an empty `date`)
+ * rather than dropped, so a format drift on the CLI side degrades gracefully
+ * instead of hiding alerts outright. Order is preserved exactly as written —
+ * the CLI is trusted to append entries newest-last; this reader never
+ * re-sorts. Blank lines and non-list lines are skipped. Returns `[]` on an
+ * absent or empty file.
+ */
+function parseAlertsSafe(content: string): { text: string; date: string }[] {
+  if (!content || !content.trim()) return [];
+  const out: { text: string; date: string }[] = [];
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith('-')) continue;
+    const body = line.replace(/^-\s*/, '').trim();
+    if (!body) continue;
+    const m = body.match(/^(\d{4}-\d{2}-\d{2}):\s*(.*)$/);
+    if (m) {
+      out.push({ date: m[1]!, text: m[2]! });
+    } else {
+      out.push({ date: '', text: body });
+    }
+  }
+  return out;
+}
+
+/**
+ * Parse a subject's `ownership.md` into `{ path, ghola, at }` records. The CLI
+ * (out of band, in `scripts/ghola.mjs`) is the sole writer; this is a tolerant
+ * reader for the shared line format `- <path> :: <ghola-slug> :: <iso8601>`.
+ * Splits each list line on ` :: ` and requires at least three parts, peeling
+ * `at` (last) and `ghola` (second-to-last) off the end and rejoining the
+ * remaining leading fields with ` :: ` as `path` (so a path may itself contain
+ * ` :: `, matching the CLI, which stores paths verbatim); a line with fewer
+ * fields (or no `-` bullet) is skipped rather than dropped onto a partial
+ * record, so CLI-side format drift degrades gracefully. The
+ * header line (`# Ownership - <subject>`) and blank lines are skipped. Order is
+ * preserved exactly as written; this reader never re-sorts. Returns `[]` on an
+ * absent or empty file.
+ */
+function parseOwnershipSafe(content: string): { path: string; ghola: string; at: string }[] {
+  if (!content || !content.trim()) return [];
+  const out: { path: string; ghola: string; at: string }[] = [];
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith('-')) continue;
+    const body = line.replace(/^-\s*/, '').trim();
+    if (!body) continue;
+    const parts = body.split(' :: ');
+    if (parts.length < 3) continue;
+    const at = parts[parts.length - 1]!;
+    const ghola = parts[parts.length - 2]!;
+    const p = parts.slice(0, parts.length - 2).join(' :: ');
+    if (!p || !ghola || !at) continue;
+    out.push({ path: p, ghola, at });
+  }
+  return out;
+}
+
+/**
+ * Parse a subject's `escalations.md` into `{ id, status, ghola, at, text }`
+ * records. The CLI (out of band, in `scripts/ghola.mjs`) is the sole writer;
+ * this is a tolerant reader for the shared line format
+ * `- <id> :: <status> :: <ghola-slug> :: <iso8601> :: <decision text>`. Peels the
+ * first four ` :: `-delimited fields (id/status/ghola/at) from the FRONT and takes
+ * everything after the fourth delimiter as the decision text (which may itself
+ * contain ` :: ` and may be EMPTY). Requires at least FOUR fields, not five: an
+ * empty-decision escalation is written as
+ * `- <id> :: <status> :: <ghola> :: <ts> :: ` (trailing space), and dropping it on
+ * `parts.length < 5` made the host disagree with the CLI (which keeps it), hiding
+ * the escalation. A genuinely malformed line (fewer than 4 fields, or no `-`
+ * bullet) is still skipped. The header line (`# Escalations - <subject>`) and blank
+ * lines are skipped. Order is preserved exactly as written; this reader never
+ * re-sorts. Returns `[]` on an absent or empty file.
+ *
+ * Shape validation mirrors the CLI (`scripts/ghola.mjs` `parseEscalationsFile`):
+ * the id must match `^E\d{4,}$` and the status must be one of
+ * {pending,approved,denied,cancelled}. A row failing either is skipped
+ * (tolerant, never a throw), so the host never surfaces a corrupt row the CLI
+ * would drop - closing the host-vs-CLI parser divergence.
+ */
+const ESCALATION_STATUSES = new Set(['pending', 'approved', 'denied', 'cancelled']);
+
+function parseEscalationsSafe(
+  content: string,
+): { id: string; status: string; ghola: string; at: string; text: string }[] {
+  if (!content || !content.trim()) return [];
+  const out: { id: string; status: string; ghola: string; at: string; text: string }[] = [];
+  for (const rawLine of content.split('\n')) {
+    // Strip a trailing CR (CRLF files) and leading indentation, but do NOT trim
+    // trailing spaces: the empty-decision line ends with the delimiter ` :: `
+    // whose trailing space is what keeps the empty fifth field present after the
+    // split. Trimming it would collapse ` ::` into the `at` field and corrupt it.
+    const line = rawLine.replace(/\r$/, '').replace(/^\s+/, '');
+    if (!line.startsWith('-')) continue;
+    const body = line.replace(/^-\s*/, '');
+    if (!body.trim()) continue;
+    const parts = body.split(' :: ');
+    if (parts.length < 4) continue;
+    const id = parts[0]!;
+    const status = parts[1]!;
+    const ghola = parts[2]!;
+    const at = parts[3]!;
+    // slice(4) is [] (no delimiter after `at`) or [''] (trailing-space empty
+    // field) for an empty decision -> text ''. trimEnd() drops the trailing
+    // space a non-empty decision may have picked up from the preserved line tail.
+    const text = parts.slice(4).join(' :: ').trimEnd();
+    if (!id || !status || !ghola || !at) continue;
+    // Constrain id shape + status to match the CLI writer; a corrupt row the
+    // CLI would drop must not surface in the War Room.
+    if (!/^E\d{4,}$/.test(id)) continue;
+    if (!ESCALATION_STATUSES.has(status)) continue;
+    out.push({ id, status, ghola, at, text });
+  }
+  return out;
+}
+
+/** Subject directories under the ledger root (excludes `_archive` and dotdirs). */
+function listLedgerSubjects(root: string): string[] {
+  let entries: fsSync.Dirent[];
+  try {
+    entries = fsSync.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((e) => e.isDirectory() && e.name !== '_archive' && !e.name.startsWith('.'))
+    .map((e) => e.name)
+    .sort();
+}
+
+/** Strip surrounding double-quotes and unescape, mirroring `ghola.mjs` `unquote`. */
+function unquoteYaml(v: string): string {
+  if (v.length >= 2 && v[0] === '"' && v[v.length - 1] === '"') {
+    return v.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  return v;
+}
+
+/**
+ * Parse the YAML-ish frontmatter block of a ghola file into a flat map. Only
+ * the fields the War Room needs are meaningful; the parser mirrors
+ * `ghola.mjs` `parseFrontmatter` (scalar `key: value` lines and `- item`
+ * lists under the preceding key). Returns `{}` when no frontmatter is found.
+ */
+function parseGholaFrontmatter(content: string): Record<string, string | string[]> {
+  const m = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!m) return {};
+  const fm: Record<string, string | string[]> = {};
+  let currentKey: string | null = null;
+  for (const rawLine of m[1]!.split('\n')) {
+    if (rawLine.trim() === '') continue;
+    const listMatch = rawLine.match(/^\s*-\s*(.*)$/);
+    if (listMatch && currentKey) {
+      const existing = fm[currentKey];
+      const arr = Array.isArray(existing) ? existing : (fm[currentKey] = []);
+      arr.push(unquoteYaml(listMatch[1]!.trim()));
+      continue;
+    }
+    const kv = rawLine.match(/^([A-Za-z0-9_]+):\s*(.*)$/);
+    if (kv) {
+      currentKey = kv[1]!;
+      const val = kv[2]!.trim();
+      fm[currentKey] = val === '' || val === '[]' ? [] : unquoteYaml(val);
+    }
+  }
+  return fm;
+}
+
+function fmString(fm: Record<string, string | string[]>, key: string): string {
+  const v = fm[key];
+  return typeof v === 'string' ? v : '';
+}
+
+/** Parsed integer value of a frontmatter field, or `fallback` when absent/unparseable. */
+function fmNumber(fm: Record<string, string | string[]>, key: string, fallback: number): number {
+  const v = fm[key];
+  if (typeof v !== 'string' || v.trim() === '') return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Frontmatter string field, or `null` when absent/empty — for nullable fields like `parent`. */
+function fmStringOrNull(fm: Record<string, string | string[]>, key: string): string | null {
+  const v = fm[key];
+  return typeof v === 'string' && v.trim() !== '' ? v : null;
+}
+
+/**
+ * Default reliability string for a ghola with no recorded track record yet.
+ * Mirrors the CLI's `pass:N rework:M` convention.
+ */
+const DEFAULT_RELIABILITY = 'pass:0 rework:0';
+
+/** Normalize a ghola frontmatter map into the War Room roster shape. */
+function gholaFromFrontmatter(fm: Record<string, string | string[]>): WarRoomGhola {
+  const missions = fm.missions;
+  const verification = fmString(fm, 'verification');
+  return {
+    id: fmString(fm, 'id'),
+    name: fmString(fm, 'name'),
+    purpose: fmString(fm, 'purpose'),
+    state: fmString(fm, 'state'),
+    model: fmString(fm, 'model'),
+    last_used: fmString(fm, 'last_used'),
+    missions: Array.isArray(missions) ? missions : [],
+    generation: fmNumber(fm, 'generation', 1),
+    parent: fmStringOrNull(fm, 'parent'),
+    reliability: fmString(fm, 'reliability') || DEFAULT_RELIABILITY,
+    ...(verification ? { verification } : {}),
+  };
+}
+
+/** Markdown heading this reader extracts the ghola's history body from. */
+const HISTORY_HEADING = '## History';
+
+/**
+ * Extract the raw markdown body of the `## History` section (heading itself
+ * excluded), stopping at the next heading of any level. Mirrors the section-
+ * boundary logic `ghola.mjs`'s `appendBulletUnderHeading` uses to find where a
+ * section ends. Returns `''` when the heading is absent.
+ */
+function extractHistorySection(body: string): string {
+  const idx = body.indexOf(HISTORY_HEADING);
+  if (idx === -1) return '';
+  const afterHeadingIdx = idx + HISTORY_HEADING.length;
+  const rest = body.slice(afterHeadingIdx);
+  const nextHeadingMatch = rest.match(/\n#{1,6} /);
+  const sectionEnd = nextHeadingMatch
+    ? afterHeadingIdx + nextHeadingMatch.index!
+    : body.length;
+  return body.slice(afterHeadingIdx, sectionEnd).trim();
+}
+
+/**
+ * Parse a full ghola `.md` file (frontmatter + body) into the War Room
+ * detail-view shape. `found` is always `true` here — callers post the
+ * absent-flagged placeholder themselves when the file could not be read at
+ * all, since that check happens before this parser ever runs.
+ */
+function parseGholaDetail(content: string, subject: string): GholaDetail {
+  const fm = parseGholaFrontmatter(content);
+  const fmMatch = content.match(/^---\n[\s\S]*?\n---\n?/);
+  const body = fmMatch ? content.slice(fmMatch[0].length) : content;
+  const missions = fm.missions;
+  return {
+    subject,
+    id: fmString(fm, 'id'),
+    name: fmString(fm, 'name'),
+    purpose: fmString(fm, 'purpose'),
+    state: fmString(fm, 'state'),
+    model: fmString(fm, 'model'),
+    created: fmString(fm, 'created'),
+    last_used: fmString(fm, 'last_used'),
+    generation: fmNumber(fm, 'generation', 1),
+    parent: fmStringOrNull(fm, 'parent'),
+    reliability: fmString(fm, 'reliability') || DEFAULT_RELIABILITY,
+    missions: Array.isArray(missions) ? missions : [],
+    verification: fmString(fm, 'verification'),
+    history: extractHistorySection(body),
+    found: true,
+  };
+}
+
+/**
+ * Collect every ghola for a subject (active/dormant in the subject dir plus
+ * archived under `_archive/<subject>/`), mirroring `ghola.mjs` `collectGholas`
+ * so the roster + counts match the CLI's `board --json`. Skips the same five
+ * non-ghola files the CLI's `collectGholas` skips (`_missions.md`,
+ * `operating-notes.md`, `alerts.md`, `ownership.md`, and `escalations.md`)
+ * so those Phase-7 per-subject files (which carry no ghola frontmatter) are
+ * not parsed into PHANTOM empty gholas (id='', inflated counts, broken
+ * verification rollup); unreadable/partial files are skipped. As a belt, any
+ * ghola that still parses with an empty id (e.g. a future non-ghola sidecar
+ * file, or a truncated frontmatter) is filtered out before it reaches the
+ * payload.
+ */
+function collectRoster(root: string, subject: string): WarRoomGhola[] {
+  const rows: WarRoomGhola[] = [];
+  for (const dir of [ledgerSubjectDir(root, subject), ledgerArchiveSubjectDir(root, subject)]) {
+    let files: string[];
+    try {
+      files = fsSync.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      if (
+        !f.endsWith('.md') ||
+        f === '_missions.md' ||
+        f === 'operating-notes.md' ||
+        f === 'alerts.md' ||
+        f === 'ownership.md' ||
+        f === 'escalations.md'
+      ) {
+        continue;
+      }
+      let content: string;
+      try {
+        content = fsSync.readFileSync(path.join(dir, f), 'utf-8');
+      } catch {
+        continue;
+      }
+      rows.push(gholaFromFrontmatter(parseGholaFrontmatter(content)));
+    }
+  }
+  const gholas = rows.filter((g) => g.id !== '');
+  gholas.sort((a, b) => a.id.localeCompare(b.id));
+  return gholas;
+}
+
+function countByState(rows: WarRoomGhola[]): { active: number; dormant: number; archived: number; total: number } {
+  const counts = { active: 0, dormant: 0, archived: 0, total: rows.length };
+  for (const r of rows) {
+    if (r.state === 'active') counts.active++;
+    else if (r.state === 'dormant') counts.dormant++;
+    else if (r.state === 'archived') counts.archived++;
+  }
+  return counts;
+}
+
+/**
+ * Parse a single `## Mission …` block, mirroring `ghola.mjs`
+ * `parseMissionBlock` but returning null on a malformed header (rather than
+ * throwing) so a truncated trailing block is dropped, not fatal.
+ */
+function parseMissionBlockSafe(block: string): WarRoomMission | null {
+  const lines = block.split('\n');
+  const hm = lines[0]!.match(/^## Mission (\S+) \(([a-z]+)\) — (.+)$/);
+  if (!hm) return null;
+  const [, id, status, date] = hm;
+  let goal = '';
+  let groundedIn = '';
+  let budget: string | null = null;
+  let integration: string | undefined;
+  const progress: string[] = [];
+  let inProgress = false;
+  for (const line of lines.slice(1)) {
+    if (line.trim() === '### Progress') {
+      inProgress = true;
+      continue;
+    }
+    if (!inProgress) {
+      const gm = line.match(/^- goal: (.*)$/);
+      if (gm) {
+        goal = gm[1]!;
+        continue;
+      }
+      const grm = line.match(/^- grounded-in: (.*)$/);
+      if (grm) {
+        groundedIn = grm[1] === '(none)' ? '' : grm[1]!;
+        continue;
+      }
+      const bm = line.match(/^- budget: (.*)$/);
+      if (bm) {
+        budget = bm[1] === '(none)' ? null : bm[1]!;
+        continue;
+      }
+      const im = line.match(/^- integration: (.*)$/);
+      if (im) {
+        integration = im[1] === '(none)' ? undefined : im[1]!;
+        continue;
+      }
+    } else {
+      const pm = line.match(/^- (.*)$/);
+      if (pm && pm[1] !== '(none yet)') progress.push(pm[1]!);
+    }
+  }
+  return {
+    id: id!,
+    status: status!,
+    date: date!,
+    goal,
+    groundedIn,
+    budget,
+    ...(integration !== undefined ? { integration } : {}),
+    progress,
+  };
+}
+
+/**
+ * Parse a `_missions.md` file into mission records. Mirrors `ghola.mjs`
+ * `parseMissionsFile` but drops malformed blocks instead of failing, so a
+ * partially-written file never crashes the War Room refresh.
+ */
+function parseMissionsSafe(content: string): WarRoomMission[] {
+  if (!content || !content.trim()) return [];
+  const out: WarRoomMission[] = [];
+  for (const raw of content.split(/\n(?=## Mission )/)) {
+    const block = raw.trim();
+    if (!block) continue;
+    const parsed = parseMissionBlockSafe(block);
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
+/**
+ * Pick the subject whose newest open mission has the latest date. Returns null
+ * when no subject has an open mission (caller falls back to the first subject).
+ */
+function pickSubjectByRecentOpenMission(root: string, subjects: string[]): string | null {
+  let best: string | null = null;
+  let bestDate = '';
+  for (const s of subjects) {
+    const openDates = parseMissionsSafe(readFileSyncOr(missionsPath(root, s), ''))
+      .filter((m) => m.status === 'open')
+      .map((m) => m.date)
+      .sort();
+    const newest = openDates[openDates.length - 1];
+    if (newest !== undefined && newest >= bestDate) {
+      bestDate = newest;
+      best = s;
+    }
+  }
+  return best;
 }

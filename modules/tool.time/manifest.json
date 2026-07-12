@@ -1,0 +1,31 @@
+{
+  "id": "tool.time",
+  "name": "Time",
+  "version": "0.1.0",
+  "description": "First-class current date/time awareness for agents: an active mechanism (shell `date`) to obtain the real current time instead of guessing from stale training data.",
+  "proactive": true,
+  "category": "utility",
+  "kind": "capability",
+  "trigger": "session-start",
+  "tier": "recommended",
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "time.md" }
+    ],
+    "settings": {
+      "timezone": {
+        "type": "string",
+        "label": "Timezone override",
+        "default": "",
+        "description": "Blank (default) means the agent runs plain `date` with no TZ override, so timestamps reflect the host machine's local timezone, the most portable choice, since it always matches whatever environment the session happens to run in. Set an IANA timezone name (e.g. 'UTC', 'America/Chicago') to pin timestamps to that zone regardless of host locale; the agent then prefixes the command with `TZ='<value>' date`, e.g. `TZ='America/Chicago' date`. Useful when a team wants consistent timestamps across machines that sit in different timezones."
+      },
+      "timestampFormat": {
+        "type": "enum",
+        "label": "Timestamp format",
+        "default": "friendly",
+        "options": ["iso-8601", "friendly", "date-only"],
+        "description": "Selects which `date` format string the agent uses when it establishes the current time. `iso-8601` runs `date -Iseconds` for machine-sortable output like `2026-07-09T18:58:06-05:00`. `friendly` (default) runs `date +'%Y-%m-%d %H:%M %Z (%A)'` for human-readable output like `2026-07-09 18:58 CDT (Thursday)`. `date-only` runs `date +%Y-%m-%d` for a bare calendar date like `2026-07-09`, useful when only day-level granularity matters (e.g. dating a roster row). Default is `friendly` because most consumers of this value (session handoffs, roster stamps) want a readable timestamp with weekday context, not a machine timestamp."
+      }
+    }
+  }
+}

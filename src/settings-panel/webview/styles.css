@@ -34,16 +34,6 @@ html, body {
   padding: 4px 12px;
 }
 
-/* Subtle separator between the General group (Session, Modules) and the
-   Agents group (TPM, SWE, QA) in the horizontal bar. Negative vertical margin
-   cancels the rail's 4px top/bottom padding so the line runs edge-to-edge. */
-.rail-divider {
-  width: 1px;
-  align-self: stretch;
-  margin: -4px 8px;
-  background: var(--vscode-panel-border);
-}
-
 .rail-item {
   display: inline-block;
   text-align: center;
@@ -66,21 +56,6 @@ html, body {
 .rail-item.active {
   color: var(--vscode-foreground);
   font-weight: 600;
-}
-
-/* Non-clickable group label for the Agents section of the tab strip. Muted,
-   uppercase, small — visually groups TPM/SWE/QA without acting as a tab. */
-.rail-group-label {
-  display: inline-block;
-  padding: 6px 4px 6px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--vscode-descriptionForeground);
-  white-space: nowrap;
-  user-select: none;
-  pointer-events: none;
 }
 
 .content {
@@ -354,6 +329,62 @@ pre.prompt {
    at their natural size. The fields carry no visible labels (each surfaces its
    description via a hover title), so align-items:center vertically centres the bare
    input/dropdown controls against the 28x28 action buttons. */
+/* Session page hero banner. Full width of the content area, holding the pixel-art
+   cover as a centered cover-fit background. A 3:2 aspect-ratio capped by max-height
+   keeps it a tasteful banner rather than dominating the page, and a faint bottom
+   gradient overlay keeps any text that sits just beneath it legible in both themes. */
+.session-hero {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 1;
+  max-height: 220px;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.session-hero::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 40%;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0));
+  pointer-events: none;
+}
+
+/* War Room tab hero banner. Dedicated clone of `.session-hero` (rather than a
+   shared class) so future Session-hero tweaks never disturb the War Room. The
+   ~3:1 pixel-art banner (media/warroom-banner.png) fills a 3:1 box capped by
+   max-height, with the same faint bottom gradient for legibility in both themes. */
+.warroom-hero {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 1;
+  max-height: 220px;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.warroom-hero::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 40%;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0));
+  pointer-events: none;
+}
+
 .session-launch-row {
   display: flex;
   align-items: center;
@@ -407,12 +438,12 @@ button.icon-button.framed.session-action-button svg {
   height: 16px;
 }
 
-/* Play button icon is 5% smaller than the Package icon (15px vs 16px).
+/* Play button icon is sized down to 13px (~15% smaller than the prior 15px).
    Same selector specificity as the shared rule above; placed after it so
    source order guarantees this rule wins for .session-play-button. */
 button.icon-button.framed.session-play-button svg {
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
 }
 
 /* Update-Extension button renders [package icon][version] inline, so it grows
@@ -574,6 +605,12 @@ button.icon-button.framed:focus-visible {
   background: var(--vscode-list-hoverBackground);
 }
 
+/* Agents-tab rows reuse the .module-row scaffolding but the whole row is a
+   click target (unlike module rows, which navigate only via the chevron). */
+.module-row--clickable {
+  cursor: pointer;
+}
+
 .module-row-toggle {
   display: flex;
   align-items: center;
@@ -658,6 +695,18 @@ button.module-row-chevron:focus-visible {
 
 .module-detail .detail-spacer {
   flex: 1 1 auto;
+}
+
+/* Agent detail header reuses the module detail-header flex layout so the back
+   button sits inline with the agent title. */
+.agent-detail .detail-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.agent-detail .detail-header h1 {
+  margin: 0;
 }
 
 .module-detail .desc {
@@ -1502,6 +1551,19 @@ button.module-row-chevron:focus-visible {
   font-style: italic;
 }
 
+/* Ghola Mode config block (top of the Agents tab). The four sub-controls sit
+   below the master Enable toggle; when the master toggle is off they are
+   visually subordinated (dimmed + non-interactive) to signal they have no
+   effect until Ghola Mode is enabled. */
+.ghola-config .ghola-subcontrols {
+  transition: opacity 120ms ease-in-out;
+}
+
+.ghola-config .ghola-subcontrols--disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 /* Faint spelled-out role name rendered inline after the agent abbreviation in
    the agent subpage h1. Uses the VS Code description foreground token so it
    respects the active theme without any hardcoded colour. */
@@ -1909,4 +1971,723 @@ button.module-row-chevron:focus-visible {
 .merkle-test-feedback-stale {
   color: var(--vscode-descriptionForeground);
   font-style: italic;
+}
+
+/* ─── War Room tab (mode.ghola observability, read-only v1) ─────────────── */
+
+/* Card chrome mirrors .module-row (border/radius/background) but stacks
+   content in a column instead of a single-line flex row, since War Room
+   cards (mission header, roster entries, controls) hold multi-line content. */
+.warroom-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
+}
+
+/* Subject switcher: compact label + dropdown row near the top of the War
+   Room, letting the operator pick which ledger subject to view. Only mounted
+   when 2+ subjects exist. */
+.warroom-subject-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.warroom-subject-switcher-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+}
+
+.warroom-subject-select {
+  min-width: 160px;
+  padding: 3px 6px;
+  font-size: 13px;
+  color: var(--vscode-dropdown-foreground);
+  background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+  border-radius: 3px;
+}
+
+.warroom-progress-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.warroom-progress-list li {
+  margin-bottom: 2px;
+}
+
+/* "Declare Done" — the normal happy-path convergence action on the open
+   mission's header card. Positive/primary affordance (green-tinted),
+   deliberately NOT styled like `.warroom-awaken-button`'s red danger
+   treatment: this is the expected way a mission ends, not an emergency. */
+.warroom-declare-done-button {
+  align-self: flex-start;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-charts-green, #89d185);
+  color: var(--vscode-charts-green, #89d185);
+  background: transparent;
+  cursor: pointer;
+}
+
+.warroom-declare-done-button:hover {
+  background: var(--vscode-charts-green, #89d185);
+  color: var(--vscode-editor-background, #1e1e1e);
+}
+
+.warroom-declare-done-button:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.warroom-declare-done-pending {
+  align-self: flex-start;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Ghola roster state badge — neutral by default, colour-coded per state
+   modifier below. Unrecognized state strings fall back to the neutral look. */
+.warroom-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+}
+
+.warroom-badge--active {
+  background: var(--vscode-charts-green, #4ec994);
+  color: var(--vscode-editor-background, #1e1e1e);
+}
+
+.warroom-badge--dormant {
+  background: var(--vscode-charts-yellow, #d7ba7d);
+  color: var(--vscode-editor-background, #1e1e1e);
+}
+
+.warroom-badge--archived {
+  background: var(--vscode-descriptionForeground);
+  color: var(--vscode-editor-background, #1e1e1e);
+}
+
+.warroom-counts {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 12px;
+}
+
+.warroom-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Read-only status chip. Neutral border/text by default; the --on modifier
+   below tints it green to indicate an active/true resolved sub-toggle. */
+.warroom-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-descriptionForeground);
+}
+
+.warroom-chip--on {
+  border-color: var(--vscode-charts-green, #4ec994);
+  color: var(--vscode-charts-green, #4ec994);
+}
+
+.warroom-note {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Prominent kill-switch banner shown while `control.awakenAll` is true.
+   Warning-tinted (not full error-red) since this is a cooperative request in
+   flight, not a failure state. */
+.warroom-awaken-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-charts-orange, #d18616));
+  border-radius: 4px;
+  background: var(--vscode-inputValidation-warningBackground, var(--vscode-editorWidget-background));
+}
+
+.warroom-awaken-banner-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+}
+
+.warroom-awaken-banner-meta {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Awaken All control — button + caption, lives at the bottom of the War
+   Room controls card below the read-only status chips. */
+.warroom-awaken-control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+/* Danger affordance: red border/text at rest, filled red on hover so the
+   destructive-ish intent (emergency stand-down) reads clearly without a new
+   VS Code theme token dependency beyond the standard error colours. */
+.warroom-awaken-button {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-errorForeground, #f48771);
+  color: var(--vscode-errorForeground, #f48771);
+  background: transparent;
+  cursor: pointer;
+}
+
+.warroom-awaken-button:hover {
+  background: var(--vscode-errorForeground, #f48771);
+  color: var(--vscode-editor-background, #1e1e1e);
+}
+
+.warroom-awaken-button:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.warroom-awaken-caption {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  max-width: 480px;
+}
+
+/* ─── Stable ledger browser (Active / Dormant / Archived groups) ────────── */
+
+.warroom-stable {
+  margin-bottom: 12px;
+}
+
+.warroom-stable-group {
+  margin-bottom: 10px;
+}
+
+.warroom-stable-group-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.warroom-stable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.warroom-stable-row {
+  padding: 6px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
+}
+
+.warroom-stable-row-name {
+  font-size: 13px;
+}
+
+.warroom-stable-purpose {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ─── Sub-purpose map (goal → sub-purpose → ghola) ───────────────────────── */
+
+.warroom-subpurpose-root {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.warroom-subpurpose-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.warroom-subpurpose-list li {
+  margin-bottom: 2px;
+}
+
+/* ─── Mission library / resume picker ────────────────────────────────────── */
+
+.warroom-mission-library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.warroom-mission-library-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
+}
+
+.warroom-mission-library-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.warroom-mission-resume-button {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  cursor: pointer;
+}
+
+.warroom-mission-resume-button:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.warroom-mission-resume-button:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.warroom-mission-resume-pending {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ─── Alerts card ─────────────────────────────────────────────────────────
+   Noticeable but not alarming: a soft info tint, distinct from the red
+   awaken-all banner and the warning-orange awaken control. */
+
+.warroom-alerts-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--vscode-charts-blue, #3794ff);
+  border-radius: 4px;
+  background: var(--vscode-inputValidation-infoBackground, var(--vscode-editorWidget-background));
+}
+
+.warroom-alerts-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.warroom-alerts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.warroom-alert-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.warroom-alert-date {
+  flex-shrink: 0;
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+}
+
+.warroom-alert-text {
+  color: var(--vscode-foreground);
+}
+
+/* ─── Clickable roster / Stable cards (per-ghola drill-in) ───────────────── */
+
+/* Roster cards and Stable rows are rendered as <button> elements so they're
+   keyboard-focusable; reset button chrome back to the existing card look and
+   add a subtle hover/focus affordance so the row reads as clickable. */
+.warroom-card-clickable {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.warroom-card-clickable:hover {
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-hoverBackground, var(--vscode-editorWidget-background));
+}
+
+.warroom-card-clickable:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+/* ─── Reliability (track-record) chip ────────────────────────────────────
+   Neutral by default — pass/rework counts are informational, not a status
+   to color-code green/red (a high rework count on a hard mission is not
+   necessarily "bad"). Monospace-ish tabular numerals keep counts aligned
+   when scanning a list of cards. */
+.warroom-reliability-chip {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Verification / integration status chips ─────────────────────────────
+   Reuse the neutral `.warroom-chip` base (border + muted text); the color
+   modifiers tint passed -> green and failed -> red. Pending/absent stay
+   neutral so an un-run state does not read as an error. */
+.warroom-verify-chip--passed,
+.warroom-integration-chip--passed {
+  border-color: var(--vscode-charts-green, #4ec994);
+  color: var(--vscode-charts-green, #4ec994);
+}
+
+.warroom-verify-chip--failed,
+.warroom-integration-chip--failed {
+  border-color: var(--vscode-charts-red, #f14c4c);
+  color: var(--vscode-charts-red, #f14c4c);
+}
+
+.warroom-verify-chip--pending,
+.warroom-integration-chip--pending,
+.warroom-integration-chip--absent {
+  /* Neutral: inherits the base .warroom-chip muted border/text. */
+  font-variant-numeric: tabular-nums;
+}
+
+.warroom-verify-rollup {
+  font-variant-numeric: tabular-nums;
+}
+
+.warroom-mission-status-chips {
+  margin-top: 6px;
+}
+
+/* ─── Escalation queue ────────────────────────────────────────────────────
+   Operator-gating: a warning-tinted card (distinct from the info-blue alerts
+   card and the danger-red awaken banner) since pending rows block a ghola. */
+.warroom-escalations-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--vscode-charts-orange, #d18616);
+  border-radius: 4px;
+  background: var(--vscode-inputValidation-warningBackground, var(--vscode-editorWidget-background));
+}
+
+.warroom-escalations-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.warroom-escalations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.warroom-escalation-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
+}
+
+.warroom-escalation-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.warroom-escalation-status--pending {
+  background: var(--vscode-charts-orange, #d18616);
+  color: var(--vscode-editor-background, #1e1e1e);
+}
+
+.warroom-escalation-status--approved {
+  background: var(--vscode-charts-green, #4ec994);
+  color: var(--vscode-editor-background, #1e1e1e);
+}
+
+.warroom-escalation-status--denied {
+  background: var(--vscode-charts-red, #f14c4c);
+  color: var(--vscode-editor-background, #1e1e1e);
+}
+
+.warroom-escalation-status--cancelled {
+  background: var(--vscode-badge-background, #4d4d4d);
+  color: var(--vscode-descriptionForeground, #999);
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+
+.warroom-escalation-actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+}
+
+.warroom-escalation-button {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  cursor: pointer;
+}
+
+.warroom-escalation-approve {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.warroom-escalation-approve:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.warroom-escalation-deny {
+  background: transparent;
+  border-color: var(--vscode-charts-red, #f14c4c);
+  color: var(--vscode-charts-red, #f14c4c);
+}
+
+.warroom-escalation-deny:hover {
+  background: var(--vscode-inputValidation-errorBackground, rgba(241, 76, 76, 0.15));
+}
+
+.warroom-escalation-button:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.warroom-escalation-pending {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ─── File-ownership registry ─────────────────────────────────────────────
+   Read-only list modeled on the Stable browser: a monospace-ish path -> ghola
+   mapping with the claimed-at timestamp. */
+.warroom-ownership {
+  margin-bottom: 12px;
+}
+
+.warroom-ownership-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.warroom-ownership-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 3px;
+  background: var(--vscode-editorWidget-background);
+}
+
+.warroom-ownership-path {
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--vscode-foreground);
+  word-break: break-all;
+}
+
+.warroom-ownership-arrow {
+  color: var(--vscode-descriptionForeground);
+}
+
+.warroom-ownership-ghola {
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.warroom-ownership-at {
+  margin-left: auto;
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Per-ghola detail drill-in ───────────────────────────────────────────
+   Reuses the Modules tab's `.module-detail` / `.detail-header` /
+   `.detail-title` / `.details-list` / `.details-header` chrome so the
+   drill-in feels like the same navigation pattern as Modules/Agents. */
+
+.warroom-ghola-detail .details-list {
+  margin-bottom: 4px;
+}
+
+.warroom-lineage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 4px;
+}
+
+.warroom-lineage-gen {
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.warroom-lineage-parent {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── God-console (directive input) ───────────────────────────────────────
+   Neutral button styling (not the Awaken-All danger-red treatment) — this is
+   an instruction to the running mission, not a kill-switch. */
+
+.warroom-god-console {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.warroom-god-console-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.warroom-god-console-row {
+  display: flex;
+  gap: 6px;
+}
+
+.warroom-god-console-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: 3px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+}
+
+.warroom-god-console-input:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.warroom-god-console-send {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  cursor: pointer;
+}
+
+.warroom-god-console-send:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.warroom-god-console-send:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.warroom-god-console-caption {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  max-width: 480px;
+}
+
+.warroom-god-console-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--vscode-charts-blue, #3794ff);
+  border-radius: 4px;
+  background: var(--vscode-inputValidation-infoBackground, var(--vscode-editorWidget-background));
+}
+
+.warroom-god-console-pending-text {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.warroom-god-console-pending-meta {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ─── Ledger Health (staleness display) ──────────────────────────────────── */
+
+.warroom-ledger-health .desc {
+  margin-bottom: 4px;
+}
+
+.warroom-health-list {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.warroom-health-list li {
+  margin-bottom: 2px;
+}
+
+/* ─── Operating Notes (subject self-tuning playbook) ─────────────────────── */
+
+.warroom-operating-notes .warroom-note {
+  margin-bottom: 4px;
 }

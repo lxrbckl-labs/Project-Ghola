@@ -1,0 +1,63 @@
+{
+  "id": "tool.self-upgrade",
+  "name": "Self Upgrade",
+  "version": "0.1.0",
+  "description": "Monitors Claude CLI releases and folds notably incremental, documented, revertible improvements into Nomeda, then bumps the version and commits and pushes the change.",
+  "proactive": false,
+  "category": "workflow",
+  "kind": "capability",
+  "trigger": "user-request",
+  "tier": "optional",
+  "requires": ["tool.git", "tool.github"],
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "self-upgrade.md" }
+    ],
+    "settings": {
+      "releaseNotesSource": {
+        "type": "string",
+        "label": "Release Notes Source",
+        "default": "https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md",
+        "description": "URL the agent fetches to learn what is new in Claude Code. Points at the official changelog by default. If the URL fails to load or looks stale, the agent falls back to a WebSearch for the current Claude Code changelog or release notes."
+      },
+      "changeLogPath": {
+        "type": "path",
+        "label": "Upgrade Ledger Path",
+        "default": "docs/self-upgrade-log.md",
+        "description": "Repo relative path to the append only upgrade ledger. The agent reads it to find the last processed Claude version and appends one entry per applied change, each recording its commit hash so a specific upgrade can be reverted."
+      },
+      "maxChangesPerRun": {
+        "type": "number",
+        "label": "Max Changes Per Run",
+        "default": 3,
+        "description": "Hard cap on how many upgrades are APPLIED in a single run. Proposals may exceed this number, but the agent ranks candidates and only applies the top ones up to this limit. Enforces incrementality so each run stays small, reviewable, and easy to revert."
+      },
+      "autoApply": {
+        "type": "boolean",
+        "label": "Auto Apply",
+        "default": false,
+        "description": "When off (default) the agent presents ranked proposals and waits for the user to approve which to apply, keeping a human in the loop. When on, approved candidates are applied without a per change approval gate. Leave off unless you deliberately want unattended application."
+      },
+      "requireVerification": {
+        "type": "boolean",
+        "label": "Require Verification",
+        "default": true,
+        "description": "When on (default) a change must pass build, typecheck, and QA before it is recorded in the ledger or committed. A red build blocks the commit. Turning this off removes the safety gate and is not recommended. Note that commitAndPush auto always verifies before pushing regardless of this setting, so an auto push is never made on a red build."
+      },
+      "commitAndPush": {
+        "type": "enum",
+        "label": "Commit and Push",
+        "default": "on-approval",
+        "options": ["on-approval", "off", "auto"],
+        "description": "Controls the push step. on-approval (default) asks the user before pushing. auto pushes after verification passes and ALWAYS verifies first (a green build, typecheck, and QA) regardless of the Require Verification setting, so auto never pushes unverified work. off never pushes and leaves each commit local. Any push also defers to tool.git protectedBranches: a protected current branch is never pushed. All commits and pushes are performed directly with git (git add, git commit, git push), which are enabled for the Self Upgrade profile through tool.git."
+      },
+      "versionBump": {
+        "type": "enum",
+        "label": "Version Bump",
+        "default": "patch",
+        "options": ["patch", "minor", "manual"],
+        "description": "How the VERSION file is bumped when a run applies changes. patch (default) increments the patch component, minor increments the minor component, manual leaves the bump to the user."
+      }
+    }
+  }
+}

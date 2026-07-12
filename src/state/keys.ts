@@ -9,6 +9,7 @@ export const WORKSPACE_STATE_KEYS = {
   ENABLED_MODULES_INITIALIZED: 'nomeda.enabledModules.initialized',
   CONFIGURATIONS: 'nomeda.configurations',
   CONFIGURATIONS_SEEDED: 'nomeda.configurations.seeded',
+  CONFIGURATIONS_SEEDED_NAMES: 'nomeda.configurations.seededNames',
   ACTIVE_CONFIGURATION_ID: 'nomeda.activeConfigurationId',
   TICKET_WORK_TODOS: 'nomeda.ticketWork.todos',
   ATLASSIAN_LAST_VALIDATION: 'nomeda.atlassianSuite.lastValidation',

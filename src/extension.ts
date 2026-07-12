@@ -1,3 +1,4 @@
+import * as fsSync from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { TicketWidgetProvider } from './ticket-widget/provider';
@@ -407,6 +408,31 @@ export function activate(context: vscode.ExtensionContext): void {
     logger.appendLine(`[nomeda] discovered ${handles.length} module(s)`);
     await seedBuiltInConfigurations(context, configurationsStore, logger);
     await panel.applyDefaultOnStartup();
+
+    // Load-time ghola-ledger backfill. `mode.ghola::enabled` (an Agents
+    // configuration tracked in the module-settings store, NOT a loader toggle)
+    // can be true while its required `tool.ghola-ledger` module is left disabled
+    // in the loader. The dependency is only pulled on the webview master-toggle
+    // ON transition, so a session restored/booted with ghola already enabled
+    // never composes the ledger contract fragment, leaving TPM's prompt
+    // referencing a `ghola` CLI whose contract was never included. Auto-enable
+    // the ledger here (same loader.enable path the toggleModule handler uses) so
+    // the composed prompt stays coherent. Runs after applyDefaultOnStartup so it
+    // reflects the final resolved settings/enabled state. No-op when ghola is off
+    // or the ledger is already enabled/undiscovered.
+    const gholaFlat = context.workspaceState.get<Record<string, unknown>>(
+      WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
+      {},
+    );
+    const gholaEnabled = gholaFlat['mode.ghola::enabled'] === true;
+    const ledgerHandle = loader.find('tool.ghola-ledger');
+    if (gholaEnabled && ledgerHandle && !ledgerHandle.isEnabled) {
+      await loader.enable('tool.ghola-ledger');
+      logger.appendLine(
+        '[nomeda] ghola-ledger backfill: mode.ghola is enabled but tool.ghola-ledger was disabled; auto-enabled it',
+      );
+    }
+
     if (context.extensionMode === vscode.ExtensionMode.Development) {
       vscode.commands.executeCommand('nomeda.openSettings');
     }
@@ -428,6 +454,92 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  // ───── War Room ledger watchers (Ghola Mode) ────────────────────────
+  // Two-watcher scheme (mirrors loader.watchManifests' 250ms debounce):
+  //   A (bootstrap): watches the workspace pointer file
+  //     <workspaceFolder>/.nomeda/ledger-path. The launched `ghola` CLI writes
+  //     the absolute ledger-root path there on the first mission. On
+  //     create/change we (re)build watcher B and refresh the War Room.
+  //   B (ledger): created lazily once the pointer resolves to an existing dir,
+  //     watching <ledgerRoot>/**/*.md. On any ghola-command write it debounces
+  //     then re-posts the War Room payload.
+  // Guards: no workspace folder -> skip entirely; pointer absent -> B not
+  // created (A stays armed); stale pointer (path gone) -> skip B, keep A armed.
+  // Both watchers + the debounce timer are disposed on deactivate.
+  const warRoomFolder = vscode.workspace.workspaceFolders?.[0];
+  if (warRoomFolder) {
+    const pointerPath = path.join(warRoomFolder.uri.fsPath, '.nomeda', 'ledger-path');
+    let ledgerWatcher: vscode.FileSystemWatcher | undefined;
+    let warRoomDebounce: ReturnType<typeof setTimeout> | undefined;
+
+    const scheduleWarRoomRefresh = (): void => {
+      if (warRoomDebounce !== undefined) clearTimeout(warRoomDebounce);
+      warRoomDebounce = setTimeout(() => {
+        warRoomDebounce = undefined;
+        void panel.postWarRoom();
+      }, 250);
+    };
+
+    const disposeLedgerWatcher = (): void => {
+      ledgerWatcher?.dispose();
+      ledgerWatcher = undefined;
+    };
+
+    // (Re)create watcher B from the current pointer contents. No-op (leaving B
+    // torn down) when the pointer is absent or points at a missing dir.
+    const rebuildLedgerWatcher = (): void => {
+      disposeLedgerWatcher();
+      let root: string;
+      try {
+        root = fsSync.readFileSync(pointerPath, 'utf-8').trim();
+      } catch {
+        return; // pointer absent -> no mission yet -> B not created
+      }
+      if (!root || !fsSync.existsSync(root)) return; // stale pointer -> skip B
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(root, '**/*.md'),
+      );
+      watcher.onDidCreate(scheduleWarRoomRefresh);
+      watcher.onDidChange(scheduleWarRoomRefresh);
+      watcher.onDidDelete(scheduleWarRoomRefresh);
+      ledgerWatcher = watcher;
+    };
+
+    const bootstrapWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(warRoomFolder, '.nomeda/ledger-path'),
+    );
+    const onPointerChanged = (): void => {
+      rebuildLedgerWatcher();
+      scheduleWarRoomRefresh();
+    };
+    bootstrapWatcher.onDidCreate(onPointerChanged);
+    bootstrapWatcher.onDidChange(onPointerChanged);
+    // Arm B immediately if the pointer already exists at activation.
+    rebuildLedgerWatcher();
+
+    // Watcher C (control): the ledger watcher (B) only sees `**/*.md` under the
+    // ledger root, so a CLI `*-ack` that writes ONLY <workspace>/.nomeda/control.json
+    // (no ledger .md touched) never refreshed the War Room (pending indicators
+    // went stale and operators re-clicked). Watch the workspace control JSON so an
+    // ack (or any control.json create/change/delete) re-posts the War Room. Reuses
+    // the same 250ms debounce as B, which also coalesces the redundant refresh
+    // that follows the host's own control.json writes (each host writer already
+    // calls postWarRoom directly, then this watcher fires once more, debounced).
+    const controlWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(warRoomFolder, '.nomeda/control.json'),
+    );
+    controlWatcher.onDidCreate(scheduleWarRoomRefresh);
+    controlWatcher.onDidChange(scheduleWarRoomRefresh);
+    controlWatcher.onDidDelete(scheduleWarRoomRefresh);
+
+    context.subscriptions.push(bootstrapWatcher, controlWatcher, {
+      dispose: () => {
+        if (warRoomDebounce !== undefined) clearTimeout(warRoomDebounce);
+        disposeLedgerWatcher();
+      },
+    });
+  }
+
   // Dev-mode convenience auto-open lives inside the discover().then() block
   // above so it runs after applyDefaultOnStartup completes.
 }
@@ -437,33 +549,197 @@ export function deactivate(): void {
 }
 
 /**
- * Seed the built-in configuration presets into the store exactly once. Guarded
- * by the `nomeda.configurations.seeded` workspace-state flag: if the flag is
- * already truthy this is a no-op, so presets are never duplicated across
- * launches and user-created configs are never overwritten. All presets are
- * appended via a single `store.addMany` write, which generates each id +
- * createdAt and forces `isDefault: false`, so none of the presets auto-applies
- * on startup.
+ * Built-in presets that were seeded under an earlier name and must be renamed
+ * in place on activation. Because seeded presets are tracked by NAME, a plain
+ * source rename would strand the old-named entry in existing stores AND seed a
+ * fresh duplicate under the new name; the rename-migration pass in
+ * `seedBuiltInConfigurations` reconciles both.
+ */
+const BUILT_IN_RENAMES: { from: string; to: string }[] = [{ from: 'CD (Project)', to: 'Project' }];
+
+/**
+ * Built-in presets that were seeded under an earlier build but have since been
+ * retired from source. Because seeded presets are tracked by NAME, a plain
+ * source deletion would strand the already-seeded entry in existing stores
+ * (still shown in the dropdown); the removal-migration pass in
+ * `seedBuiltInConfigurations` deletes the stored entry and clears its seeded
+ * marker so it neither lingers nor gets resurrected.
+ */
+const BUILT_IN_REMOVALS: string[] = ['Unconstrained'];
+
+/**
+ * Reconcile the built-in configuration presets into the store on every
+ * activation, adding any newly-introduced built-in exactly once without
+ * duplicating existing presets or resurrecting ones the user deleted.
  *
- * Seeding is atomic: the presets are written in one `setAll` and the
- * `CONFIGURATIONS_SEEDED` flag is set ONLY after that write succeeds. If the
- * write throws, no partial state persists and the flag stays unset, so the
- * next activation retries cleanly without duplicating presets.
+ * Tracking is by preset NAME via `nomeda.configurations.seededNames` (an array
+ * of the built-in names already seeded). This replaces the legacy single
+ * boolean `CONFIGURATIONS_SEEDED` gate, which short-circuited so a built-in
+ * added after first install (e.g. "Self Upgrade") never reached the store.
+ *
+ * Migration: on an install that predates the names list, if the legacy boolean
+ * flag is set, every built-in currently present in the store (matched by name)
+ * is treated as already seeded, leaving genuinely-new built-ins eligible to be
+ * added. A fresh install (no flag, no list) seeds everything.
+ *
+ * Presets are appended via a single `store.addMany` write, which generates each
+ * id + createdAt and forces `isDefault: false`, so none auto-applies on startup.
+ * Seeding stays atomic + retry-safe: the seeded-names list (and legacy flag) are
+ * persisted ONLY after the store write succeeds, so a failed write leaves no
+ * partial state and the next activation retries cleanly. Even if the names-list
+ * write itself fails, the by-name dedupe against `store.getAll()` prevents
+ * duplicates on the retry.
  */
 async function seedBuiltInConfigurations(
   context: vscode.ExtensionContext,
   store: ConfigurationsStore,
   logger: vscode.OutputChannel,
 ): Promise<void> {
-  if (context.workspaceState.get<boolean>(WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED)) return;
+  // Rename-migration pass: rename any stored built-in preset that was seeded
+  // under an old name to its current name, in place (preserving id, enabledIds,
+  // settings, isDefault, createdAt via the store's field-preserving update).
+  // Runs BEFORE the reconcile/add pass so the renamed preset is recognized as
+  // already-seeded and not re-added as a duplicate. A collision guard skips the
+  // rename when a config already carries the target name, so the migration
+  // never produces two configs with the same name and never clobbers a
+  // user-created "to"-named config; the old-named entry is left for the user to
+  // resolve in that rare case.
+  for (const { from, to } of BUILT_IN_RENAMES) {
+    const all = store.getAll();
+    const source = all.find((c) => c.name === from);
+    if (!source || all.some((c) => c.name === to)) continue;
+    try {
+      await store.update(source.id, { name: to });
+      // Reflect the rename in the persisted seeded-names list so the reconcile
+      // pass below treats the renamed preset as already seeded (no re-add). The
+      // legacy-boolean install (no names list yet) needs no update here: its
+      // seeded set is recomputed from the store by name further down.
+      const seeded = context.workspaceState.get<string[]>(WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED_NAMES);
+      if (Array.isArray(seeded) && seeded.includes(from)) {
+        await context.workspaceState.update(
+          WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED_NAMES,
+          seeded.map((n) => (n === from ? to : n)),
+        );
+      }
+    } catch (err) {
+      // Partial-failure note: store.update already renamed the config to `to`;
+      // only the seededNames write failed, so seededNames may be left listing
+      // the old `from` name on the next activation. That is harmless: the rename
+      // pass then no-ops (no config named `from` remains, so `source` is
+      // undefined), and the reconcile pass's existingNames dedupe prevents a
+      // duplicate `to` from being added.
+      logger.appendLine(`[nomeda] built-in configuration rename "${from}" to "${to}" failed: ${err}`);
+      return;
+    }
+  }
+
+  // Recompute after the rename so the reconcile + removal passes see the NEW
+  // name and do not add a fresh "Project".
+  const existingNames = new Set(store.getAll().map((c) => c.name));
+
+  // Resolve the set of built-in preset NAMES already seeded. This is computed
+  // BEFORE the removal pass (below) so that pass's ownership guard can key off
+  // the RESOLVED set, which is critical for the legacy-boolean branch: the
+  // exact upgrade population BUILT_IN_REMOVALS targets.
+  const rawSeeded = context.workspaceState.get<string[]>(
+    WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED_NAMES,
+  );
+  let seededNames: string[];
+  if (Array.isArray(rawSeeded)) {
+    seededNames = rawSeeded;
+  } else if (context.workspaceState.get<boolean>(WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED)) {
+    // Legacy install: an older build already seeded the built-ins that existed
+    // at the time. Mark every built-in currently present (by name) as done so
+    // it is not re-added; genuinely-new built-ins stay eligible below.
+    seededNames = BUILT_IN_CONFIGURATIONS.map((p) => p.name).filter((name) => existingNames.has(name));
+    // ALSO record any retired (BUILT_IN_REMOVALS) preset that is CURRENTLY
+    // PRESENT in the store as seeded. A legacy-boolean install rebuilds
+    // seededNames from BUILT_IN_CONFIGURATIONS, which no longer lists
+    // "Unconstrained", so without this the removal pass below would never
+    // recognize the stored retired preset as ours and would never fire (the
+    // precise upgrade population the removal targets). Recording it here lets the
+    // removal pass's ownership guard pass, so the retired preset is
+    // recorded-as-seeded then removed within this single activation. Accepted
+    // trade-off (unchanged from the prior design): a user-CREATED preset that
+    // happens to share a retired built-in's name is indistinguishable on a pure
+    // legacy install and would also be removed.
+    for (const name of BUILT_IN_REMOVALS) {
+      if (existingNames.has(name) && !seededNames.includes(name)) seededNames.push(name);
+    }
+  } else {
+    // Fresh install: nothing has been seeded yet.
+    seededNames = [];
+  }
+  const seededSet = new Set(seededNames);
+
+  // Removal-migration pass: delete any stored built-in preset that has been
+  // retired from source. Runs AFTER the rename pass (so a renamed-then-retired
+  // preset is matched under its current name) and AFTER seededNames is resolved
+  // (so the legacy-boolean branch's augmentation above is in effect), and BEFORE
+  // the reconcile/add pass. The reconcile pass never re-adds these because they
+  // are no longer present in BUILT_IN_CONFIGURATIONS. Idempotent: a name with no
+  // matching stored config is a no-op. `store.remove` also clears the
+  // active-configuration id when the deleted preset was the active one, so no
+  // dangling active id is left behind (same path the panel's deleteConfiguration
+  // UI uses).
+  for (const name of BUILT_IN_REMOVALS) {
+    const target = store.getAll().find((c) => c.name === name);
+    if (!target) continue;
+    // Ownership guard: only delete a stored config with this name if WE seeded
+    // it, i.e. the name is present in the RESOLVED seededNames set. On a
+    // names-list install that is the persisted list (a user-created config that
+    // merely shares a retired built-in's name is absent from it and is spared);
+    // on a legacy-boolean install the branch above added the name iff it is
+    // present in the store (the accepted trade-off documented there).
+    if (!seededSet.has(name)) continue;
+    try {
+      await store.remove(target.id);
+      // Drop the retired name from the in-memory + persisted seeded-names list
+      // so tracking stays clean (the reconcile pass keys off it). Persisting
+      // here (rather than only via the final reconcile write) preserves the
+      // original removal pass's retry-safety on the names-list path and durably
+      // records the legacy-boolean rebuild.
+      seededSet.delete(name);
+      seededNames = seededNames.filter((n) => n !== name);
+      await context.workspaceState.update(
+        WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED_NAMES,
+        seededNames,
+      );
+    } catch (err) {
+      // Partial-failure note: store.remove already deleted the config from the
+      // store; only the seededNames write failed, so seededNames may be left
+      // listing the removed name on the next activation. That is harmless: the
+      // removal pass then no-ops (no stored config carries the name, so `target`
+      // is undefined), and the reconcile pass never re-adds a name absent from
+      // BUILT_IN_CONFIGURATIONS.
+      logger.appendLine(`[nomeda] built-in configuration removal "${name}" failed: ${err}`);
+      return;
+    }
+  }
+
+  // Reconcile: add each built-in whose name is neither already recorded as
+  // seeded nor already present in the store (dedupe by name). A built-in the
+  // user later deleted keeps its name in seededNames, so it is not resurrected.
+  const toAdd = BUILT_IN_CONFIGURATIONS.filter(
+    (preset) => !seededSet.has(preset.name) && !existingNames.has(preset.name),
+  );
+
   try {
-    await store.addMany(
-      BUILT_IN_CONFIGURATIONS.map((preset) => ({
-        name: preset.name,
-        enabledIds: preset.enabledIds,
-        settings: preset.settings,
-      })),
-    );
+    if (toAdd.length > 0) {
+      await store.addMany(
+        toAdd.map((preset) => ({
+          name: preset.name,
+          enabledIds: preset.enabledIds,
+          settings: preset.settings,
+        })),
+      );
+    }
+    // Persist the reconciled names list ONLY after the store write succeeds.
+    await context.workspaceState.update(WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED_NAMES, [
+      ...seededNames,
+      ...toAdd.map((p) => p.name),
+    ]);
+    // Keep the legacy boolean flag set for any other/older reader.
     await context.workspaceState.update(WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED, true);
   } catch (err) {
     logger.appendLine(`[nomeda] built-in configuration seeding failed, will retry next activation: ${err}`);

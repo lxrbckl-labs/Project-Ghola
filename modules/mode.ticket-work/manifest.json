@@ -6,7 +6,7 @@
   "proactive": true,
   "category": "session-mode",
   "kind": "workflow",
-  "mutuallyExclusiveWith": ["mode.cd", "mode.support"],
+  "mutuallyExclusiveWith": ["mode.cd", "mode.support", "mode.sardaukar"],
   "trigger": "session-start",
   "tier": "recommended",
   "contributes": {
@@ -19,6 +19,12 @@
         "label": "Ticket Id",
         "description": "The active ticket identifier for the session (e.g. CMMS-5412 or PROJ-123). The session is scoped to this ticket for its duration. Leave empty to let TPM ask for one at session start. The format is project-key plus hyphen plus number; no validation is enforced here, the Jira API will reject malformed values.",
         "default": ""
+      },
+      "autoDetectTicketFromBranch": {
+        "type": "boolean",
+        "label": "Auto Detect Ticket From Branch",
+        "description": "At session start, if no Ticket Id is set, derive the ticket from the current git branch name - the standard PROJ-1234 pattern - and use it; the user-set Ticket Id always takes precedence when present.",
+        "default": true
       },
       "pullOnStart": {
         "type": "boolean",

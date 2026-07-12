@@ -3,11 +3,13 @@
 
 import type {
   CliAlias,
+  GholaDetail,
   HostToWebviewMessage,
   ModuleSummary,
   NamedConfiguration,
   PromptFragmentDetail,
   SettingKeywordEntry,
+  WarRoomData,
   WebviewToHostMessage,
 } from '../protocol';
 import type { SettingsField } from '../../manifest/types';
@@ -104,10 +106,9 @@ const vscode = acquireVsCodeApi();
 type SectionId =
   | 'general'
   | 'modules'
-  | 'agents:tpm'
-  | 'agents:swe'
-  | 'agents:qa'
-  | 'sessions';
+  | 'agents'
+  | 'sessions'
+  | 'warroom';
 
 /**
  * Modules-tab navigation state. The tab is either showing the list of all
@@ -116,6 +117,13 @@ type SectionId =
  * 'list' and clears any cached detail payloads.
  */
 type ModuleView = { mode: 'list' } | { mode: 'detail'; moduleId: string };
+
+/**
+ * Agents-tab navigation state. Mirrors `ModuleView`: the tab shows either the
+ * flat list of the three agents or a single agent's detail page (its composed
+ * prompt + config). Switching tabs or pressing Back resets to 'list'.
+ */
+type AgentView = { mode: 'list' } | { mode: 'detail'; agentId: 'tpm' | 'swe' | 'qa' };
 
 /**
  * Inline name-input state for the Configurations row. `false` when no inline
@@ -136,6 +144,8 @@ interface UIState {
   composedPrompts: Record<string, string>;
   /** Current view inside the Modules tab. Ephemeral. */
   moduleView: ModuleView;
+  /** Current view inside the Agents tab. Ephemeral. */
+  agentView: AgentView;
   /** Per-module detail payloads keyed by moduleId. Populated by 'moduleDetail' messages. */
   moduleDetails: Record<string, PromptFragmentDetail[]>;
   /**
@@ -261,6 +271,47 @@ interface UIState {
    * click posts the delete message. A timeout clears the state automatically.
    */
   feedbackPendingNoConfirm: Set<string>;
+  /**
+   * Last War Room payload received from the host via 'warRoomData'. Undefined
+   * until the first response arrives — the War Room tab requests a fresh copy
+   * on every tab-entry (see `setSection`), then the host also pushes fresh
+   * payloads live whenever the ghola ledger changes on disk.
+   */
+  warRoomData: WarRoomData | undefined;
+  /**
+   * True once a 'requestWarRoom' message has been posted for the current
+   * empty-data window, so `renderWarRoom` doesn't re-post on every re-render
+   * while waiting for the host's reply. Set to `true` by `setSection` on
+   * each tab-entry (one request per entry) and by the 'warRoomData' handler
+   * on every reply.
+   */
+  warRoomRequested: boolean;
+  /**
+   * War Room drill-in: the subject+id of the ghola currently shown in detail,
+   * or `null` to show the main War Room view (mission/roster/stable/etc.).
+   * Set by clicking a roster or Stable card; cleared by the detail page's
+   * Back button.
+   */
+  warRoomGhola: { subject: string; id: string } | null;
+  /**
+   * Per-ghola detail payloads keyed by `subject::id` (see
+   * `gholaDetailCacheKey`). Populated by 'gholaDetail' messages; cached
+   * regardless of which ghola is currently being viewed so re-opening a
+   * previously-viewed ghola doesn't re-request while a fresher payload is
+   * still in flight for another one.
+   */
+  gholaDetails: Record<string, GholaDetail>;
+  /** God-console instruction draft text, live in the input before Send is clicked. */
+  warRoomDirectiveDraft: string;
+  /**
+   * Operator-selected War Room subject slug, or null to follow the host's
+   * auto-pick. Persisted across re-renders so a live watcher push or a
+   * tab-entry refresh keeps the chosen subject instead of snapping back to the
+   * auto-picked one. Reconciled to null in `renderWarRoom` when the selected
+   * subject disappears from the ledger's subject list, so auto refreshes fall
+   * back to the payload's `subject`.
+   */
+  warRoomSelectedSubject: string | null;
 }
 
 const state: UIState = {
@@ -270,6 +321,7 @@ const state: UIState = {
   dirty: false,
   composedPrompts: {},
   moduleView: { mode: 'list' },
+  agentView: { mode: 'list' },
   moduleDetails: {},
   settingKeywords: {},
   settingKeywordErrors: {},
@@ -298,6 +350,12 @@ const state: UIState = {
   merkleTesting: false,
   feedbackEntries: [],
   feedbackPendingNoConfirm: new Set(),
+  warRoomData: undefined,
+  warRoomRequested: false,
+  warRoomGhola: null,
+  gholaDetails: {},
+  warRoomDirectiveDraft: '',
+  warRoomSelectedSubject: null,
 };
 
 const root = document.getElementById('app')!;
@@ -385,19 +443,24 @@ function init(): void {
     }
     handleMessage(ev.data as HostToWebviewMessage);
   });
-  // Escape pops the detail view back to the list (Modules tab only).
+  // Escape pops the detail view back to the list (Modules and Agents tabs).
   // Guard against firing when the user is typing in an input field, where
   // Escape is a common "clear/cancel" gesture that should not navigate away.
   window.addEventListener('keydown', (ev) => {
     if (
-      ev.key === 'Escape' &&
-      state.activeSection === 'modules' &&
-      state.moduleView.mode === 'detail' &&
-      !(ev.target instanceof HTMLInputElement) &&
-      !(ev.target instanceof HTMLSelectElement) &&
-      !(ev.target instanceof HTMLTextAreaElement)
+      ev.key !== 'Escape' ||
+      ev.target instanceof HTMLInputElement ||
+      ev.target instanceof HTMLSelectElement ||
+      ev.target instanceof HTMLTextAreaElement
     ) {
+      return;
+    }
+    if (state.activeSection === 'modules' && state.moduleView.mode === 'detail') {
       backToModuleList();
+    } else if (state.activeSection === 'agents' && state.agentView.mode === 'detail') {
+      backToAgentList();
+    } else if (state.activeSection === 'warroom' && state.warRoomGhola) {
+      backFromWarRoomGholaDetail();
     }
   });
 }
@@ -526,6 +589,41 @@ function handleMessage(msg: HostToWebviewMessage): void {
       }
       render();
       break;
+    case 'warRoomData':
+      // Cache regardless of the active tab — a live watcher push can arrive
+      // while the user is on a different tab. Only re-render if War Room is
+      // actually on screen so we don't pay for DOM work nobody sees.
+      state.warRoomData = msg.data;
+      state.warRoomRequested = true;
+      if (state.activeSection === 'warroom') {
+        render();
+      }
+      break;
+    case 'revealSection': {
+      // Only known SectionIds are valid navigation targets; ignore anything
+      // else defensively (the host currently only ever sends 'warroom', fired
+      // on a ghola-mode launch's auto-open).
+      const knownSections: SectionId[] = ['general', 'modules', 'agents', 'sessions', 'warroom'];
+      if ((knownSections as string[]).includes(msg.section)) {
+        setSection(msg.section as SectionId);
+      }
+      break;
+    }
+    case 'gholaDetail': {
+      // Cache regardless of which ghola is currently open — a late reply for
+      // a ghola the user has since navigated away from should still populate
+      // state for the next visit. Re-render only if it's still being viewed.
+      const cacheKey = gholaDetailCacheKey(msg.data.subject, msg.data.id);
+      state.gholaDetails[cacheKey] = msg.data;
+      if (
+        state.activeSection === 'warroom' &&
+        state.warRoomGhola &&
+        gholaDetailCacheKey(state.warRoomGhola.subject, state.warRoomGhola.id) === cacheKey
+      ) {
+        render();
+      }
+      break;
+    }
   }
 }
 
@@ -648,6 +746,29 @@ function setSection(id: SectionId): void {
     // user is on a module detail page actively editing rows.
     state.keyValueDrafts = {};
   }
+  // Reset Agents-tab ephemeral view state when entering the Agents tab so it
+  // always lands on the list (mirrors the Modules reset above).
+  if (id === 'agents' && state.activeSection !== 'agents') {
+    state.agentView = { mode: 'list' };
+  }
+  // Reset the War Room drill-in when leaving the tab so re-entering always
+  // lands on the main War Room view (mirrors the Modules/Agents resets above).
+  if (state.activeSection === 'warroom' && id !== 'warroom') {
+    state.warRoomGhola = null;
+  }
+  // Re-request fresh War Room data on every entry into the tab. Without
+  // this, `renderWarRoom`'s own request-once guard (`warRoomRequested`) only
+  // fires while `warRoomData` is still undefined — once any payload has
+  // arrived (even a stale `{ empty: true }` posted before the ledger watcher
+  // was armed), nothing ever prompts a re-fetch again, and the tab can stay
+  // stuck showing that stale state. Posting unconditionally here (and
+  // pre-marking the guard so `renderWarRoom` doesn't also double-post) keeps
+  // it to exactly one request per tab-entry; the host's live watcher pushes
+  // keep updating `warRoomData` independently of this.
+  if (id === 'warroom' && state.activeSection !== 'warroom') {
+    state.warRoomRequested = true;
+    postRequestWarRoom();
+  }
   // Clear inline configuration name editor and manage panel on any tab leave —
   // both are tab-scoped ephemeral UI states.
   if (state.activeSection !== id) {
@@ -655,12 +776,6 @@ function setSection(id: SectionId): void {
     state.configManageOpen = false;
   }
   state.activeSection = id;
-  if (id.startsWith('agents:')) {
-    const agentId = id.split(':')[1]!;
-    if (!(agentId in state.composedPrompts)) {
-      vscode.postMessage({ type: 'getComposedPrompt', agent: agentId });
-    }
-  }
   render();
 }
 
@@ -670,30 +785,29 @@ function render(): void {
   root.appendChild(renderContent());
 }
 
+/**
+ * Whether Ghola Mode is enabled. Reads the `mode.ghola::enabled` setting value
+ * (default false) rather than the module's loader/enabled state — the master
+ * toggle lives on the Agents tab, not the Modules tab.
+ */
+function gholaEnabled(): boolean {
+  return state.settingsValues['mode.ghola::enabled'] === true;
+}
+
 function renderRail(): HTMLElement {
-  // Horizontal top header (tab strip). Session and Modules form the General
-  // group; a vertical divider plus a non-clickable "Agents" label precede the
-  // TPM/SWE/QA tabs. The 'sub' indent that the Agents items used in the sidebar
-  // is dropped since indentation has no meaning in a row.
+  // Horizontal top header (tab strip): Session, Modules, and the Agents tab
+  // (its own list->detail page), plus War Room while Ghola Mode is enabled.
   const rail = el('nav', { class: 'rail' });
   rail.appendChild(railItem('general', 'Session'));
   rail.appendChild(railItem('modules', 'Modules'));
-  rail.appendChild(railDivider());
-  rail.appendChild(railGroupLabel('Agents'));
-  rail.appendChild(railItem('agents:tpm', 'TPM'));
-  rail.appendChild(railItem('agents:swe', 'SWE'));
-  rail.appendChild(railItem('agents:qa', 'QA'));
+  rail.appendChild(railItem('agents', 'Agents'));
+  // War Room only appears while Ghola Mode is enabled — it has nothing to
+  // show otherwise (no ledger pointer is ever set) and its auto-open only
+  // fires from a ghola-mode launch, so gating it here keeps the two in sync.
+  if (gholaEnabled()) {
+    rail.appendChild(railItem('warroom', 'War Room'));
+  }
   return rail;
-}
-
-function railDivider(): HTMLElement {
-  return el('div', { class: 'rail-divider', 'aria-hidden': 'true' });
-}
-
-function railGroupLabel(text: string): HTMLElement {
-  const label = el('span', { class: 'rail-group-label', 'aria-hidden': 'true' });
-  label.textContent = text;
-  return label;
 }
 
 function railItem(id: SectionId, label: string): HTMLElement {
@@ -713,19 +827,31 @@ function renderContent(): HTMLElement {
     case 'modules':
       renderModules(wrapper);
       break;
-    case 'agents:tpm':
-    case 'agents:swe':
-    case 'agents:qa':
-      renderAgent(wrapper, state.activeSection.split(':')[1]!);
+    case 'agents':
+      renderAgents(wrapper);
       break;
     case 'sessions':
       renderSessions(wrapper);
+      break;
+    case 'warroom':
+      renderWarRoom(wrapper);
       break;
   }
   return wrapper;
 }
 
 function renderGeneral(wrapper: HTMLElement): void {
+  // Hero banner: pixel-art cover image injected by the host as `data-cover-uri`
+  // on the `#app` root (mirrors how `data-version` is read). Rendered as the
+  // first child of the Session page. When the URI is empty/absent (image not
+  // bundled) nothing is rendered, so the page degrades cleanly with no crash.
+  const coverUri = root.dataset.coverUri;
+  if (coverUri) {
+    const hero = el('div', { class: 'session-hero' });
+    hero.style.backgroundImage = `url("${coverUri}")`;
+    wrapper.appendChild(hero);
+  }
+
   wrapper.appendChild(textEl('h1', 'Session'));
   wrapper.appendChild(textEl('p', 'Configure the command that launches your Nomeda agent team, then start a session.', 'subtitle'));
 
@@ -815,27 +941,6 @@ function renderGeneral(wrapper: HTMLElement): void {
   // panel. Users paste it into their Claude Code CLAUDE.md / user memory.
   wrapper.appendChild(el('hr', { class: 'section-divider' }));
   wrapper.appendChild(renderSessionInstruction());
-
-  // Custom settings sections placed in 'general' from any module.
-  const customSections = state.modules
-    .filter((m) => m.enabled)
-    .flatMap((m) =>
-      (m.contributes?.settingsPanelSections ?? [])
-        .filter((s) => s.placement === 'general')
-        .map((s) => ({ module: m, section: s })),
-    );
-
-  customSections.forEach(({ module, section }) => {
-    wrapper.appendChild(textEl('h2', `${section.title} (${module.name})`));
-    const fields = (module.contributes?.settings ?? {}) as Record<string, SettingsField>;
-    Object.entries(fields).forEach(([key, field]) => {
-      wrapper.appendChild(renderField(scopedKey(module.id, key), field));
-    });
-  });
-
-  if (customSections.length > 0) {
-    wrapper.appendChild(renderActions());
-  }
 }
 
 /**
@@ -950,6 +1055,9 @@ function renderModulesList(container: HTMLElement): void {
   container.innerHTML = '';
   const q = state.moduleSearch.trim().toLowerCase();
   const filtered = state.modules.filter((m) => {
+    // mode.ghola is configured on the Agents tab (its master toggle + sub-
+    // controls), not as a toggleable Modules card — hide it from this list.
+    if (m.id === 'mode.ghola') return false;
     if (!q) return true;
     // Base haystack: id, name, description.
     const hay = [m.id, m.name, m.description ?? ''].join(' ').toLowerCase();
@@ -978,6 +1086,102 @@ function renderModulesList(container: HTMLElement): void {
  * The toggle's click handler stops propagation so flipping the enable state
  * doesn't also navigate into the detail view.
  */
+/**
+ * Toggle a module while enforcing its manifest constraints on ENABLE.
+ *
+ * On DISABLE: fire the plain toggle, nothing else (we never touch
+ * requires-dependents — keeping the disable path simple).
+ *
+ * On ENABLE, before the module's own enable we also:
+ *   - auto-DISABLE every currently-enabled module that is mutually exclusive
+ *     with `m`, checking BOTH directions: modules named in
+ *     `m.mutuallyExclusiveWith`, and enabled modules whose own
+ *     `mutuallyExclusiveWith` names `m.id`.
+ *   - auto-ENABLE `m`'s `requires` deps that aren't already enabled, resolved
+ *     TRANSITIVELY (walk the full requires graph, with a visited-set cycle
+ *     guard), so a dep-of-a-dep is pulled in too.
+ *
+ * A required dep is never auto-disabled (requires wins over a contradictory
+ * exclusivity declaration). Each action reuses the existing `toggleModule`
+ * host message, so the host applies enable/disable independently and
+ * re-broadcasts the module list.
+ */
+function requestToggleModule(m: ModuleSummary, enabled: boolean): void {
+  if (!enabled) {
+    vscode.postMessage({ type: 'toggleModule', id: m.id, enabled: false });
+    return;
+  }
+
+  const requires = m.requires ?? [];
+
+  // Enable set: resolve `requires` TRANSITIVELY, walking the full dependency
+  // graph (BFS) so a chain like tool.qa-pr-learning ->
+  // integration.bitbucket-pr-comments -> integration.atlassian-suite enables
+  // BOTH downstream deps, not just the first level. `visited` (seeded with the
+  // module itself) guards against cycles: a module that transitively requires
+  // something which requires it back terminates instead of looping forever. An
+  // already-enabled dep is still walked so its own transitive requires are
+  // pulled in, but only currently-disabled deps are queued to be toggled on.
+  //
+  // `requiredClosure` collects EVERY module reached through the requires graph
+  // (deps only, excluding `m`) regardless of its current enabled state; it is
+  // the transitive protection set used below both to seed mutex sources and to
+  // guard against auto-disabling anything the enable depends on.
+  const enableSet = new Set<string>();
+  const requiredClosure = new Set<string>();
+  const visited = new Set<string>([m.id]);
+  const queue = [...requires];
+  while (queue.length > 0) {
+    const dep = queue.shift()!;
+    if (visited.has(dep)) continue;
+    visited.add(dep);
+    requiredClosure.add(dep);
+    const depMod = state.modules.find((x) => x.id === dep);
+    if (!depMod) continue;
+    if (!depMod.enabled) enableSet.add(dep);
+    for (const next of depMod.requires ?? []) {
+      if (!visited.has(next)) queue.push(next);
+    }
+  }
+
+  // Disable set: bidirectional mutual-exclusivity against currently-enabled
+  // modules. Widened beyond the top-level module to also honor the mutex
+  // declarations of every module the transitive walk will enable: each dep
+  // pulled in by `requires` brings its OWN `mutuallyExclusiveWith` (both
+  // directions) into force, so enabling a dep can't leave a module it excludes
+  // silently enabled. The mutex "sources" are `m` plus every module in the
+  // required closure.
+  const mutexSources: ModuleSummary[] = [m];
+  for (const dep of requiredClosure) {
+    const depMod = state.modules.find((x) => x.id === dep);
+    if (depMod) mutexSources.push(depMod);
+  }
+  const disableSet = new Set<string>();
+  for (const source of mutexSources) {
+    for (const other of state.modules) {
+      if (other.id === source.id || !other.enabled) continue;
+      const forward = (source.mutuallyExclusiveWith ?? []).includes(other.id);
+      const reverse = (other.mutuallyExclusiveWith ?? []).includes(source.id);
+      if (forward || reverse) disableSet.add(other.id);
+    }
+  }
+  // A required dependency must never be auto-disabled (requires wins over a
+  // contradictory exclusivity declaration). Guard the FULL transitive closure,
+  // not just direct requires, so a transitively-required module is never
+  // simultaneously slated for disable; also never disable `m` itself.
+  disableSet.delete(m.id);
+  for (const dep of requiredClosure) disableSet.delete(dep);
+
+  // Apply: disable conflicts first, then enable the module and its deps.
+  for (const id of disableSet) {
+    vscode.postMessage({ type: 'toggleModule', id, enabled: false });
+  }
+  vscode.postMessage({ type: 'toggleModule', id: m.id, enabled: true });
+  for (const id of enableSet) {
+    vscode.postMessage({ type: 'toggleModule', id, enabled: true });
+  }
+}
+
 function renderModuleRow(m: ModuleSummary): HTMLElement {
   const row = el('div', { class: 'module-row' });
 
@@ -988,7 +1192,7 @@ function renderModuleRow(m: ModuleSummary): HTMLElement {
     renderToggle({
       checked: m.enabled,
       onChange: (next) => {
-        vscode.postMessage({ type: 'toggleModule', id: m.id, enabled: next });
+        requestToggleModule(m, next);
       },
       ariaLabel: `Enable ${m.name}`,
     }),
@@ -1682,7 +1886,7 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
     renderToggle({
       checked: m.enabled,
       onChange: (next) => {
-        vscode.postMessage({ type: 'toggleModule', id: m.id, enabled: next });
+        requestToggleModule(m, next);
       },
       ariaLabel: `Enable ${m.name}`,
     }),
@@ -2982,6 +3186,8 @@ interface ToggleOptions {
   ariaLabel?: string;
   /** Optional textual on/off label rendered next to the switch. */
   labelText?: string;
+  /** When true, the underlying checkbox is disabled (non-interactive). */
+  disabled?: boolean;
 }
 
 /**
@@ -2994,6 +3200,7 @@ function renderToggle(opts: ToggleOptions): HTMLElement {
   const input = el('input') as HTMLInputElement;
   input.type = 'checkbox';
   input.checked = opts.checked;
+  if (opts.disabled) input.disabled = true;
   if (opts.ariaLabel) input.setAttribute('aria-label', opts.ariaLabel);
   input.addEventListener('change', () => {
     opts.onChange(input.checked);
@@ -3016,6 +3223,16 @@ const AGENT_FULL_NAMES: Record<string, string> = {
   swe: 'Software Engineer',
   qa: 'Quality Assurance',
 };
+
+/**
+ * The three fixed agent cores, in display order (TPM -> SWE -> QA). Drives the
+ * Agents-tab list; the role blurb for each row comes from AGENT_FULL_NAMES.
+ */
+const AGENTS: { id: 'tpm' | 'swe' | 'qa'; name: string }[] = [
+  { id: 'tpm', name: 'TPM' },
+  { id: 'swe', name: 'SWE' },
+  { id: 'qa', name: 'QA' },
+];
 
 /**
  * Session tab "Instruction" panel: the CLAUDE.md bootstrap snippet a user
@@ -3047,7 +3264,240 @@ function renderSessionInstruction(): HTMLElement {
   return wrap;
 }
 
+/**
+ * Agents tab dispatcher. Renders either the flat list of the three agents or a
+ * single agent's detail page depending on `state.agentView` — mirrors
+ * `renderModules`.
+ */
+function renderAgents(wrapper: HTMLElement): void {
+  if (state.agentView.mode === 'detail') {
+    renderAgent(wrapper, state.agentView.agentId);
+    return;
+  }
+  renderAgentsList(wrapper);
+}
+
+/**
+ * Flat list of the three agents. Mirrors `renderModuleListView` but simpler —
+ * no toggles, configurations row, search, or upload/reload controls.
+ */
+function renderAgentsList(wrapper: HTMLElement): void {
+  wrapper.appendChild(textEl('h1', 'Agents'));
+  wrapper.appendChild(
+    textEl(
+      'p',
+      'The three agent cores that make up a Nomeda team. Click the chevron (›) to view an agent\'s configuration and composed instructions.',
+      'subtitle',
+    ),
+  );
+
+  // Ghola Mode config sits above the agent rows — its master toggle and sub-
+  // controls govern how TPM orchestrates the whole team, so it reads as the
+  // team-level configuration for this tab.
+  wrapper.appendChild(renderGholaConfigBlock());
+
+  const listWrap = el('div', { class: 'modules-list' });
+  AGENTS.forEach((a) => {
+    listWrap.appendChild(renderAgentRow(a));
+  });
+  wrapper.appendChild(listWrap);
+}
+
+/**
+ * Ghola Mode configuration block at the top of the Agents tab. A master
+ * Enable toggle (bound to `mode.ghola::enabled`) plus the four sub-controls
+ * sourced from the ghola module's `contributes.settings`. Each control
+ * auto-saves live on change via `renderField`'s `onCommit` hook (which fires
+ * the whole-map `saveSettings` flow), so the block behaves like the SWE/QA
+ * config fields on this page rather than batching behind a Save button. The
+ * four sub-controls are visually subordinated while the master toggle is off.
+ */
+function renderGholaConfigBlock(): HTMLElement {
+  const block = el('div', { class: 'agent-config ghola-config' });
+
+  const header = el('div', { class: 'agent-config-header' });
+  header.textContent = 'Ghola Mode';
+  block.appendChild(header);
+
+  block.appendChild(
+    textEl(
+      'p',
+      'God-mode orchestration: TPM drives a persistent roster of specialist gholas.',
+      'agent-config-note',
+    ),
+  );
+
+  // Master switch — a locally-constructed boolean field (not part of the
+  // module's contributes.settings schema) bound to mode.ghola::enabled.
+  // Auto-save: persist the whole settings map on every change so the Ghola
+  // block saves live like the SWE/QA fields, rather than batching behind a
+  // Save button. saveSettings writes the entire map to the SAME MODULE_SETTINGS
+  // store getComposeSettings()/isGholaEnabled() read `mode.ghola::*` from, so
+  // firing it per-change is an idempotent whole-map live save. Scoped to this
+  // block via renderField's optional onCommit hook; other callers omit it and
+  // keep their batched Save button.
+  const commitGhola = () => {
+    vscode.postMessage({ type: 'saveSettings', values: state.settingsValues });
+  };
+
+  const masterEnabled = gholaEnabled();
+
+  // The three boolean sub-toggles that must read + persist false when the master
+  // switch is off. Kept as a list so the master-off handler and the sub-control
+  // renderer agree on exactly which keys are gated.
+  const gholaBooleanKeys = ['autoOpenWarRoom', 'tournament', 'dryRun'];
+
+  // Master toggle commit: when the switch has just been flipped to OFF, force
+  // the three boolean sub-values to false in the store (a number field like
+  // maxConcurrentGholas has no false, so it is left untouched), then live-save
+  // the whole map. renderField's onChange already wrote the new `enabled` value
+  // and calls render() after this hook, so the block re-renders showing the
+  // sub-controls disabled + unchecked.
+  const commitMaster = () => {
+    if (state.settingsValues['mode.ghola::enabled'] !== true) {
+      for (const key of gholaBooleanKeys) {
+        state.settingsValues[scopedKey('mode.ghola', key)] = false;
+      }
+    } else {
+      // Transition to ENABLED: Ghola Mode is no longer a Modules-tab row, so
+      // flipping this master switch would otherwise skip the dependency-pull
+      // that requestToggleModule does for real module rows. Mirror it here so
+      // mode.ghola's required tools (e.g. tool.ghola-ledger) come along. Source
+      // the requires list from the module object in state; fall back to the one
+      // known dependency if the payload lacks it. Deps are enabled via the
+      // existing requestToggleModule host path (module-enabled store), while the
+      // `mode.ghola::enabled` setting persists to MODULE_SETTINGS via commitGhola
+      // below -- different stores, so neither clobbers the other. Guard on the
+      // dep's `enabled` flag so an already-enabled dep posts no toggleModule
+      // message (requestToggleModule does not self-guard its top-level target).
+      // Never disabled on master-off: deps are shared tools.
+      const gholaModule = state.modules.find((m) => m.id === 'mode.ghola');
+      const requires = gholaModule?.requires ?? ['tool.ghola-ledger'];
+      for (const depId of requires) {
+        const depModule = state.modules.find((m) => m.id === depId);
+        if (depModule && !depModule.enabled) {
+          requestToggleModule(depModule, true);
+        }
+      }
+    }
+    commitGhola();
+  };
+
+  const enableField: SettingsField = {
+    type: 'boolean',
+    label: 'Enable Ghola Mode',
+    description:
+      'Master switch for Ghola Mode. When on, the War Room tab appears and TPM may run a mission as a roster of gholas.',
+    default: false,
+  };
+  block.appendChild(renderField(scopedKey('mode.ghola', 'enabled'), enableField, commitMaster));
+
+  // Sub-controls: source label/type/default/description from the ghola module's
+  // contributes.settings so they stay defined in one place. If the module is
+  // absent from state.modules, `fields` is empty and none render (rather than
+  // hardcoding definitions here) — SWE-2 keeps mode.ghola in the payload.
+  //
+  // When the master is off, every sub-control is truly disabled (real `disabled`
+  // attribute, not just dimmed) and each boolean is displayed as false via a
+  // valueOverride so stale-true legacy values still render unchecked on load.
+  const ghola = state.modules.find((m) => m.id === 'mode.ghola');
+  const fields = (ghola?.contributes?.settings ?? {}) as Record<string, SettingsField>;
+  const subControls = el('div', {
+    class: masterEnabled ? 'ghola-subcontrols' : 'ghola-subcontrols ghola-subcontrols--disabled',
+  });
+  ['autoOpenWarRoom', 'tournament', 'maxConcurrentGholas', 'dryRun'].forEach((key) => {
+    const field = fields[key];
+    if (!field) return;
+    const isGatedBoolean = !masterEnabled && gholaBooleanKeys.includes(key);
+    subControls.appendChild(
+      renderField(
+        scopedKey('mode.ghola', key),
+        field,
+        commitGhola,
+        !masterEnabled,
+        isGatedBoolean ? false : undefined,
+      ),
+    );
+  });
+  block.appendChild(subControls);
+
+  // No Save button: each control auto-saves via commitGhola on change, matching
+  // the live-save behavior of the SWE/QA config fields on this page.
+  return block;
+}
+
+/**
+ * Compact agent row. Reuses the `.module-row` scaffolding: left = agent name
+ * (`.module-title`) + role blurb (`.desc`); right = a chevron that navigates
+ * into the agent detail view. The whole row is clickable, like a module row.
+ */
+function renderAgentRow(agent: { id: 'tpm' | 'swe' | 'qa'; name: string }): HTMLElement {
+  const row = el('div', { class: 'module-row module-row--clickable' });
+
+  // Text zone — name + role blurb pulled from AGENT_FULL_NAMES.
+  const textZone = el('div', { class: 'module-row-body' });
+  const title = el('div', { class: 'module-title' });
+  const nameEl = el('strong');
+  nameEl.textContent = agent.name;
+  title.appendChild(nameEl);
+  textZone.appendChild(title);
+  const role = AGENT_FULL_NAMES[agent.id];
+  if (role) {
+    textZone.appendChild(textEl('div', role, 'desc'));
+  }
+  row.appendChild(textZone);
+
+  // Chevron — the primary navigation affordance, matching the module row.
+  const chevron = el('button', {
+    class: 'module-row-chevron',
+    type: 'button',
+    'aria-label': `Open ${agent.name} details`,
+    title: 'Open details',
+  }) as HTMLButtonElement;
+  chevron.innerHTML = CHEVRON_RIGHT_SVG;
+  chevron.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    openAgentDetail(agent.id);
+  });
+  row.appendChild(chevron);
+
+  // Whole-row click also navigates into detail (chevron stops propagation so it
+  // doesn't double-fire).
+  row.addEventListener('click', () => openAgentDetail(agent.id));
+
+  return row;
+}
+
+function openAgentDetail(agentId: 'tpm' | 'swe' | 'qa'): void {
+  // The composed-prompt fetch lives solely in renderAgent's undefined-prompt
+  // fallback (the general path that also handles the loading state), so we
+  // don't post getComposedPrompt here — doing both double-fires on first open.
+  state.agentView = { mode: 'detail', agentId };
+  render();
+}
+
+function backToAgentList(): void {
+  state.agentView = { mode: 'list' };
+  render();
+}
+
 function renderAgent(wrapper: HTMLElement, agentId: string): void {
+  const container = el('div', { class: 'agent-detail' });
+  wrapper.appendChild(container);
+
+  // Header: back button + agent title (name + role elucidation). Mirrors the
+  // module detail-header's back affordance.
+  const header = el('div', { class: 'detail-header' });
+  const back = el('button', {
+    class: 'icon-button',
+    type: 'button',
+    'aria-label': 'Back to agent list',
+    title: 'Back',
+  }) as HTMLButtonElement;
+  back.innerHTML = ARROW_LEFT_SVG;
+  back.addEventListener('click', backToAgentList);
+  header.appendChild(back);
+
   const h1 = el('h1');
   h1.textContent = agentId.toUpperCase();
   const fullName = AGENT_FULL_NAMES[agentId];
@@ -3056,16 +3506,18 @@ function renderAgent(wrapper: HTMLElement, agentId: string): void {
     elucidation.textContent = fullName;
     h1.appendChild(elucidation);
   }
-  wrapper.appendChild(h1);
-  wrapper.appendChild(textEl('p', 'Composed agent instruction: core definition, preamble, and Session Manifest. Module content is read on demand.', 'subtitle'));
+  header.appendChild(h1);
+  container.appendChild(header);
+
+  container.appendChild(textEl('p', 'Composed agent instruction: core definition, preamble, and Session Manifest. Module content is read on demand.', 'subtitle'));
 
   // SWE and QA subpages render an agent-config block above the composed prompt
   // for configuring how many concurrent subagents TPM may spawn. TPM itself is
   // singular — no count field.
   if (agentId === 'swe') {
-    wrapper.appendChild(renderSweConfigBlock());
+    container.appendChild(renderSweConfigBlock());
   } else if (agentId === 'qa') {
-    wrapper.appendChild(renderQaConfigBlock());
+    container.appendChild(renderQaConfigBlock());
   }
 
   // "Prompt" heading sits at the top hierarchy (NOT inside an agent-config block)
@@ -3073,15 +3525,15 @@ function renderAgent(wrapper: HTMLElement, agentId: string): void {
   // agent-config-header is unscoped in styles.css, so it applies here safely.
   const promptHeader = el('div', { class: 'agent-config-header' });
   promptHeader.textContent = 'Instructions';
-  wrapper.appendChild(promptHeader);
+  container.appendChild(promptHeader);
 
   const prompt = state.composedPrompts[agentId];
   if (prompt === undefined) {
-    wrapper.appendChild(textEl('div', 'Loading...', 'empty'));
+    container.appendChild(textEl('div', 'Loading...', 'empty'));
     vscode.postMessage({ type: 'getComposedPrompt', agent: agentId });
     return;
   }
-  wrapper.appendChild(makeCopyablePrompt(prompt, `Copy ${agentId.toUpperCase()} Instructions`));
+  container.appendChild(makeCopyablePrompt(prompt, `Copy ${agentId.toUpperCase()} Instructions`));
 }
 
 /**
@@ -3844,7 +4296,1190 @@ function renderSessions(wrapper: HTMLElement): void {
   wrapper.appendChild(actions);
 }
 
-function renderField(key: string, field: SettingsField): HTMLElement {
+// ─── War Room tab (mode.ghola observability, read-only v1) ────────────────
+
+/**
+ * War Room tab: the current open mission (plus its sub-purpose map), the
+ * full ghola roster for the subject (both flat and grouped into the Stable
+ * ledger browser), ledger state counts, any recorded alerts, the mission
+ * library / resume picker, and read-only status chips mirroring the
+ * mode.ghola sub-toggles. Mostly an observability surface — the only
+ * cooperative actions are "Awaken All" and per-mission "Resume", both of
+ * which just write a request into `.nomeda/control.json` for the TPM agent
+ * to pick up out of band; nothing here directly wakes/retires a ghola.
+ *
+ * The rail item that reaches this function only appears while `mode.ghola`
+ * is enabled (see `renderRail`), but this function re-checks defensively —
+ * a stale `revealSection` message racing a module toggle-off, or a direct
+ * `setSection('warroom')` call, should degrade to the empty state rather
+ * than render stale mission/roster data for a now-disabled module.
+ */
+/**
+ * Post a `requestWarRoom` message, carrying the operator's persisted subject
+ * selection when one is set. Used by every AUTO request (tab-entry in
+ * `setSection`, empty-data window in `renderWarRoom`) so a refresh keeps the
+ * chosen subject rather than snapping back to the host's auto-pick. When no
+ * subject is selected the field is omitted and the host auto-picks.
+ */
+function postRequestWarRoom(): void {
+  const subject = state.warRoomSelectedSubject;
+  vscode.postMessage(
+    subject ? { type: 'requestWarRoom', subject } : { type: 'requestWarRoom' },
+  );
+}
+
+/**
+ * Subject switcher control for the War Room. Renders a compact dropdown of all
+ * ledger subjects (`data.subjects`) with the currently-shown subject selected,
+ * so escalations/missions on subjects other than the auto-picked one are
+ * reachable. Returns null when there are fewer than 2 subjects (a single
+ * subject needs no switcher — behaves exactly as before this control existed).
+ *
+ * The highlighted value is the persisted selection when it still exists in the
+ * list, else the payload's `subject` (the host echoes back the subject it
+ * actually rendered). Selecting a subject persists it in
+ * `state.warRoomSelectedSubject` and posts `{ type: 'requestWarRoom', subject }`
+ * so the host re-renders that subject.
+ */
+function renderWarRoomSubjectSwitcher(data: WarRoomData): HTMLElement | null {
+  const subjects = data.subjects ?? [];
+  if (subjects.length < 2) return null;
+
+  const selected =
+    state.warRoomSelectedSubject && subjects.includes(state.warRoomSelectedSubject)
+      ? state.warRoomSelectedSubject
+      : data.subject ?? '';
+
+  const wrap = el('div', { class: 'warroom-subject-switcher' });
+  wrap.appendChild(textEl('span', 'Subject', 'warroom-subject-switcher-label'));
+
+  const select = el('select', {
+    class: 'warroom-subject-select',
+    'aria-label': 'War Room subject',
+  }) as HTMLSelectElement;
+  subjects.forEach((s) => {
+    const opt = el('option') as HTMLOptionElement;
+    opt.value = s;
+    opt.textContent = s;
+    select.appendChild(opt);
+  });
+  select.value = selected;
+  select.addEventListener('change', () => {
+    state.warRoomSelectedSubject = select.value;
+    vscode.postMessage({ type: 'requestWarRoom', subject: select.value });
+  });
+  wrap.appendChild(select);
+
+  return wrap;
+}
+
+function renderWarRoom(wrapper: HTMLElement): void {
+  // Hero banner: pixel-art War Room image injected by the host as
+  // `data-warroom-banner-uri` on the `#app` root (mirrors the Session page's
+  // `data-cover-uri`). Rendered as the first child before every early-return
+  // gate so it shows in all War Room states (not-enabled, drill-in, loading,
+  // enabled). When the URI is empty/absent nothing renders, so the tab
+  // degrades cleanly with no crash.
+  const bannerUri = root.dataset.warroomBannerUri;
+  if (bannerUri) {
+    const hero = el('div', { class: 'warroom-hero' });
+    hero.style.backgroundImage = `url("${bannerUri}")`;
+    wrapper.appendChild(hero);
+  }
+
+  wrapper.appendChild(textEl('h1', 'War Room'));
+  wrapper.appendChild(
+    textEl('p', 'Live view of the current Ghola Mode mission and roster.', 'subtitle'),
+  );
+
+  if (!gholaEnabled()) {
+    wrapper.appendChild(
+      textEl('p', 'Ghola Mode is not enabled. Enable Ghola Mode on the Agents tab to use the War Room.', 'desc'),
+    );
+    return;
+  }
+
+  // Per-ghola drill-in takes over the whole tab, mirroring the Modules/Agents
+  // list->detail pattern — everything below (mission header, roster, etc.) is
+  // skipped while a ghola is being viewed.
+  if (state.warRoomGhola) {
+    renderWarRoomGholaDetail(wrapper, state.warRoomGhola);
+    return;
+  }
+
+  if (!state.warRoomData) {
+    // Ask the host for a fresh payload exactly once per empty-data window —
+    // repeated re-renders while the reply is in flight must not re-post.
+    if (!state.warRoomRequested) {
+      state.warRoomRequested = true;
+      postRequestWarRoom();
+    }
+    wrapper.appendChild(textEl('p', 'Loading...', 'desc'));
+    return;
+  }
+
+  const data = state.warRoomData;
+
+  // Reconcile the persisted subject selection against the current ledger: if
+  // the operator's chosen subject has since disappeared from `subjects`, drop
+  // it so auto-refreshes (and the switcher's highlight) fall back to the
+  // payload's `subject` / the host's auto-pick rather than re-requesting a
+  // subject that no longer exists.
+  if (
+    state.warRoomSelectedSubject &&
+    data.subjects &&
+    !data.subjects.includes(state.warRoomSelectedSubject)
+  ) {
+    state.warRoomSelectedSubject = null;
+  }
+
+  // Subject switcher near the top of the War Room: only shown with 2+ subjects
+  // (a single subject needs no switcher). Lets the operator reach every
+  // subject's missions/escalations, not just the auto-picked one.
+  const subjectSwitcher = renderWarRoomSubjectSwitcher(data);
+  if (subjectSwitcher) {
+    wrapper.appendChild(subjectSwitcher);
+  }
+
+  // Prominent kill-switch banner — surfaced above everything else (including
+  // the empty state) since a pending awaken-all request is the single most
+  // important thing on this tab, whether or not a mission/roster is loaded.
+  if (data.control?.awakenAll) {
+    wrapper.appendChild(renderWarRoomAwakenAllBanner(data.control));
+  }
+
+  // Alerts surface above the empty-state gate too — an alert can be relevant
+  // even before a mission has started (e.g. a roster/config issue).
+  if (data.alerts?.length) {
+    wrapper.appendChild(renderWarRoomAlerts(data.alerts));
+  }
+
+  // Escalation queue surfaces high (right below alerts, above the empty-state
+  // gate) since a pending escalation is operator-gating: a ghola is blocked
+  // waiting on an approve/deny decision.
+  if (data.escalations?.length) {
+    wrapper.appendChild(renderWarRoomEscalations(data.escalations, data.control));
+  }
+
+  // `data.missions` is ALL missions (open + done) as of Phase 5; the mission
+  // header / sub-purpose map care only about the currently open one.
+  const allMissions = data.missions ?? [];
+  const openMissions = allMissions.filter((m) => m.status === 'open');
+  const hasRoster = !!(data.roster && data.roster.length);
+  if (data.empty || (!allMissions.length && !hasRoster)) {
+    wrapper.appendChild(
+      textEl('p', 'No active mission. Start a goal in a ghola-mode session.', 'desc'),
+    );
+    if (data.settings) {
+      wrapper.appendChild(renderWarRoomControls(data.settings, data.control));
+    }
+    return;
+  }
+
+  if (openMissions.length) {
+    wrapper.appendChild(renderWarRoomMissionHeader(openMissions[0]!, data.control, data.roster ?? []));
+    wrapper.appendChild(renderWarRoomSubPurposeMap(openMissions[0]!, data.roster ?? []));
+  } else {
+    wrapper.appendChild(textEl('p', 'No open mission for this subject.', 'desc'));
+  }
+  if (hasRoster) {
+    wrapper.appendChild(renderWarRoomRoster(data.roster!, data.subject ?? ''));
+    wrapper.appendChild(renderWarRoomStable(data.roster!, data.subject ?? ''));
+    // File-ownership registry slots between the roster/Stable views and Ledger
+    // Health: a read-only "who owns what" list. Rendered only when there are
+    // live claims; empty ownership renders nothing.
+    if (data.ownership?.length) {
+      wrapper.appendChild(renderWarRoomOwnership(data.ownership));
+    }
+    wrapper.appendChild(renderWarRoomLedgerHealth(data.roster!));
+  }
+  if (data.counts) {
+    wrapper.appendChild(renderWarRoomCounts(data.counts));
+  }
+  if (data.operatingNotes) {
+    wrapper.appendChild(renderWarRoomOperatingNotes(data.operatingNotes));
+  }
+  if (allMissions.length) {
+    wrapper.appendChild(renderWarRoomMissionLibrary(allMissions, data.control));
+  }
+  if (data.settings) {
+    wrapper.appendChild(renderWarRoomControls(data.settings, data.control));
+  }
+}
+
+/**
+ * Prominent banner shown while a "gholaAwakenAll" kill-switch request is
+ * pending team stand-down (`control.awakenAll === true`). Purely
+ * informational — the actual stand-down is cooperative: the TPM agent polls
+ * `.nomeda/control.json` out of band and clears it once the team has stood
+ * down, at which point the next `warRoomData` push stops rendering this.
+ */
+function renderWarRoomAwakenAllBanner(control: NonNullable<WarRoomData['control']>): HTMLElement {
+  const banner = el('div', { class: 'warroom-awaken-banner' });
+  banner.appendChild(textEl('div', 'Awaken-all requested — awaiting team stand-down', 'warroom-awaken-banner-title'));
+  if (control.requestedAt) {
+    banner.appendChild(
+      textEl('div', `Requested at ${control.requestedAt}`, 'warroom-awaken-banner-meta'),
+    );
+  }
+  return banner;
+}
+
+/**
+ * Mission header card: goal (prominent), mission id + status + date, the
+ * groundedIn reference, and the chronological progress bullets. Reuses
+ * `.module-row-body`'s scoped `.module-title` / `.meta` / `.desc` styling
+ * inside a `.warroom-card` box so it matches the Modules tab's visual chrome.
+ *
+ * Also carries the "Declare Done" affordance for the open mission — the
+ * normal happy-path convergence action (as opposed to `gholaAwakenAll`'s
+ * emergency stand-down). Posts `gholaDeclareDone` on click; when
+ * `control?.declareDone` matches this mission's id, a "Declaring done..."
+ * pending indicator is shown in place of the button, mirroring the
+ * button/pending-indicator swap used by the Mission Library's Resume row.
+ */
+function renderWarRoomMissionHeader(
+  mission: NonNullable<WarRoomData['missions']>[number],
+  control: WarRoomData['control'],
+  roster: NonNullable<WarRoomData['roster']>,
+): HTMLElement {
+  const card = el('div', { class: 'warroom-card' });
+  const body = el('div', { class: 'module-row-body' });
+
+  const title = el('div', { class: 'module-title' });
+  const goalEl = el('strong');
+  goalEl.textContent = mission.goal;
+  title.appendChild(goalEl);
+  body.appendChild(title);
+
+  const meta = el('div', { class: 'meta' });
+  meta.textContent = `${mission.id} · ${mission.status} · ${mission.date}`;
+  body.appendChild(meta);
+
+  // Status chips near the meta line: the mission's integration state plus a
+  // "N/M gholas verified" rollup over the live roster. Both tolerate absent
+  // fields (integration absent -> "not run"; no live roster -> no rollup).
+  const statusChips = el('div', { class: 'warroom-chip-row warroom-mission-status-chips' });
+  statusChips.appendChild(warRoomIntegrationIndicator(mission.integration));
+  const rollup = warRoomVerificationRollup(roster);
+  if (rollup) {
+    statusChips.appendChild(rollup);
+  }
+  body.appendChild(statusChips);
+
+  if (mission.groundedIn) {
+    body.appendChild(textEl('div', `Grounded in: ${mission.groundedIn}`, 'desc'));
+  }
+  if (mission.budget) {
+    body.appendChild(textEl('div', `Budget: ${mission.budget}`, 'desc'));
+  }
+  card.appendChild(body);
+
+  if (mission.progress && mission.progress.length) {
+    const list = el('ul', { class: 'warroom-progress-list' });
+    mission.progress.forEach((p) => {
+      const li = el('li');
+      li.textContent = p;
+      list.appendChild(li);
+    });
+    card.appendChild(list);
+  }
+
+  if (control?.declareDone === mission.id) {
+    card.appendChild(textEl('div', 'Declaring done...', 'warroom-declare-done-pending'));
+  } else {
+    const declareDoneBtn = el('button', {
+      class: 'warroom-declare-done-button',
+      type: 'button',
+      'aria-label': `Declare mission ${mission.id} done`,
+    }) as HTMLButtonElement;
+    declareDoneBtn.textContent = 'Declare Done';
+    declareDoneBtn.addEventListener('click', () => {
+      vscode.postMessage({ type: 'gholaDeclareDone', id: mission.id });
+    });
+    card.appendChild(declareDoneBtn);
+  }
+
+  return card;
+}
+
+/**
+ * Roster section: one card per ghola, name + purpose + a state badge + model
+ * + last_used + a reliability chip. Clicking a card opens the per-ghola
+ * detail drill-in (`renderWarRoomGholaDetail`); wake/retire actions remain
+ * out of scope for v1.
+ */
+function renderWarRoomRoster(
+  roster: NonNullable<WarRoomData['roster']>,
+  subject: string,
+): HTMLElement {
+  const section = el('div');
+  section.appendChild(textEl('h2', 'Roster'));
+  const list = el('div', { class: 'modules-list' });
+  roster.forEach((g) => list.appendChild(renderWarRoomGholaCard(g, subject)));
+  section.appendChild(list);
+  return section;
+}
+
+function renderWarRoomGholaCard(
+  g: NonNullable<WarRoomData['roster']>[number],
+  subject: string,
+): HTMLElement {
+  const card = el('button', {
+    class: 'warroom-card warroom-card-clickable',
+    type: 'button',
+    'aria-label': `View details for ${g.name}`,
+  }) as HTMLButtonElement;
+  card.addEventListener('click', () => openWarRoomGholaDetail(subject, g.id));
+
+  const body = el('div', { class: 'module-row-body' });
+
+  const title = el('div', { class: 'module-title' });
+  const nameEl = el('strong');
+  nameEl.textContent = g.name;
+  title.appendChild(nameEl);
+  const badge = el('span', { class: `warroom-badge warroom-badge--${g.state}` });
+  badge.textContent = g.state;
+  title.appendChild(badge);
+  body.appendChild(title);
+
+  if (g.purpose) {
+    body.appendChild(textEl('div', g.purpose, 'desc'));
+  }
+  const meta = el('div', { class: 'meta' });
+  meta.textContent = `Model: ${g.model} · Last used: ${g.last_used}`;
+  body.appendChild(meta);
+
+  const chipRow = el('div', { class: 'warroom-chip-row' });
+  chipRow.appendChild(warRoomReliabilityChip(g.reliability));
+  chipRow.appendChild(warRoomVerificationChip(g.verification));
+  body.appendChild(chipRow);
+
+  card.appendChild(body);
+  return card;
+}
+
+/**
+ * "Stable" ledger browser: groups the same roster `renderWarRoomRoster`
+ * already renders flat, into Active / Dormant / Archived sections so the
+ * user can scan the ledger by state rather than by id order. Read-only,
+ * purely a different view over `data.roster` — archived gholas are already
+ * present in the roster (see `collectRoster` in host.ts), so no extra data
+ * source is needed here.
+ */
+function renderWarRoomStable(
+  roster: NonNullable<WarRoomData['roster']>,
+  subject: string,
+): HTMLElement {
+  const section = el('div', { class: 'warroom-stable' });
+  section.appendChild(textEl('h2', 'Stable'));
+
+  const groups: { key: string; label: string }[] = [
+    { key: 'active', label: 'Active' },
+    { key: 'dormant', label: 'Dormant' },
+    { key: 'archived', label: 'Archived' },
+  ];
+
+  groups.forEach(({ key, label }) => {
+    const rows = roster.filter((g) => g.state === key);
+    const group = el('div', { class: 'warroom-stable-group' });
+    group.appendChild(textEl('h3', `${label} (${rows.length})`, 'warroom-stable-group-title'));
+    if (!rows.length) {
+      group.appendChild(textEl('div', 'None.', 'warroom-note'));
+    } else {
+      const list = el('div', { class: 'warroom-stable-list' });
+      rows.forEach((g) => list.appendChild(renderWarRoomStableRow(g, subject)));
+      group.appendChild(list);
+    }
+    section.appendChild(group);
+  });
+
+  return section;
+}
+
+/** One clickable row in the Stable browser — opens the same per-ghola detail drill-in as the roster cards. */
+function renderWarRoomStableRow(
+  g: NonNullable<WarRoomData['roster']>[number],
+  subject: string,
+): HTMLElement {
+  const row = el('button', {
+    class: 'warroom-stable-row warroom-card-clickable',
+    type: 'button',
+    'aria-label': `View details for ${g.name}`,
+  }) as HTMLButtonElement;
+  row.addEventListener('click', () => openWarRoomGholaDetail(subject, g.id));
+
+  const nameLine = el('div', { class: 'warroom-stable-row-name' });
+  const nameEl = el('strong');
+  nameEl.textContent = g.name;
+  nameLine.appendChild(nameEl);
+  if (g.purpose) {
+    nameLine.appendChild(textEl('span', ` — ${g.purpose}`, 'warroom-stable-purpose'));
+  }
+  row.appendChild(nameLine);
+  const meta = el('div', { class: 'meta' });
+  meta.textContent = `Model: ${g.model} · Last used: ${g.last_used}`;
+  row.appendChild(meta);
+  const chipRow = el('div', { class: 'warroom-chip-row' });
+  chipRow.appendChild(warRoomReliabilityChip(g.reliability));
+  chipRow.appendChild(warRoomVerificationChip(g.verification));
+  row.appendChild(chipRow);
+  return row;
+}
+
+/**
+ * Ledger Health: a read-only staleness display over the same roster the
+ * Stable browser renders. STALE = state is active/dormant (not already
+ * archived) AND `last_used` parses to a date older than 30 days — mirroring
+ * the CLI's `ghola groom --days 30` cutoff (see `cmdGroom` in `ghola.mjs`) so
+ * the count here always matches what a `ghola groom` run would archive.
+ * Gholas with a missing/unparseable `last_used` are skipped rather than
+ * counted as stale. Display only — grooming (soft-archive) itself remains a
+ * `ghola groom` CLI action for the TPM or the operator; there is no button
+ * here.
+ */
+function renderWarRoomLedgerHealth(roster: NonNullable<WarRoomData['roster']>): HTMLElement {
+  const STALE_DAYS = 30;
+  const cutoff = new Date().getTime() - STALE_DAYS * 24 * 60 * 60 * 1000;
+  const stale = roster.filter((g) => {
+    if (g.state !== 'active' && g.state !== 'dormant') return false;
+    const ts = Date.parse(g.last_used || '');
+    if (Number.isNaN(ts)) return false;
+    return ts < cutoff;
+  });
+
+  const card = el('div', { class: 'warroom-card warroom-ledger-health' });
+  card.appendChild(textEl('div', 'Ledger Health', 'module-title'));
+  card.appendChild(
+    textEl(
+      'div',
+      `Ledger health: ${stale.length} ghola(s) idle 30+ days (candidates for \`ghola groom\`).`,
+      'desc',
+    ),
+  );
+  if (stale.length) {
+    const list = el('ul', { class: 'warroom-health-list' });
+    stale.forEach((g) => {
+      const li = el('li');
+      li.textContent = `${g.name} — last used ${g.last_used}`;
+      list.appendChild(li);
+    });
+    card.appendChild(list);
+  }
+  card.appendChild(
+    textEl(
+      'div',
+      'Grooming (soft-archive) is performed by `ghola groom` — run by the TPM or the operator via the CLI. This is a display only.',
+      'warroom-note',
+    ),
+  );
+  return card;
+}
+
+/**
+ * Operating Notes: the resolved subject's self-tuning playbook, written by
+ * the CLI's `ghola note` command (see `cmdNote` in `ghola.mjs`) and read
+ * verbatim off `<ledgerRoot>/<subject>/operating-notes.md` by the host.
+ * Read-only — reuses the per-ghola History panel's raw `pre.prompt`
+ * treatment (no markdown rendering). Per the Ghola Mode design, these notes
+ * are the lowest-precedence guidance layer and can never override core
+ * functionality, hard rules, or mode mechanics.
+ */
+function renderWarRoomOperatingNotes(notes: string): HTMLElement {
+  const card = el('div', { class: 'warroom-card warroom-operating-notes' });
+  card.appendChild(textEl('div', 'Operating Notes', 'module-title'));
+  card.appendChild(
+    textEl(
+      'div',
+      "The subject's accreted self-tuning notes (lowest-precedence guidance) — read-only.",
+      'warroom-note',
+    ),
+  );
+  const pre = el('pre', { class: 'prompt fragment' });
+  pre.textContent = notes;
+  card.appendChild(pre);
+  return card;
+}
+
+/**
+ * Sub-purpose map: the mission goal as the root, then one bullet per
+ * active/dormant ghola's `purpose` — the derivable
+ * goal -> sub-purpose -> ghola structure. Read-only; archived gholas are
+ * excluded since they no longer serve a live sub-purpose under this mission.
+ */
+function renderWarRoomSubPurposeMap(
+  mission: NonNullable<WarRoomData['missions']>[number],
+  roster: NonNullable<WarRoomData['roster']>,
+): HTMLElement {
+  const card = el('div', { class: 'warroom-card warroom-subpurpose-map' });
+  card.appendChild(textEl('div', 'Goal → Sub-purpose Map', 'module-title'));
+  card.appendChild(textEl('div', mission.goal || '(no goal recorded)', 'warroom-subpurpose-root'));
+
+  const liveRoster = roster.filter((g) => g.state === 'active' || g.state === 'dormant');
+  if (!liveRoster.length) {
+    card.appendChild(textEl('div', 'No active or dormant gholas yet.', 'warroom-note'));
+    return card;
+  }
+
+  const list = el('ul', { class: 'warroom-subpurpose-list' });
+  liveRoster.forEach((g) => {
+    const li = el('li');
+    li.textContent = `${g.name}: ${g.purpose || '(no purpose recorded)'}`;
+    list.appendChild(li);
+  });
+  card.appendChild(list);
+  return card;
+}
+
+/**
+ * Mission library / resume picker: every mission (open + done) with a
+ * "Resume" button that posts `gholaResumeMission`. When
+ * `data.control.resumeMission` matches a row's id, that row shows a
+ * "Resuming <id>..." pending indicator instead of the button — cleared once
+ * the TPM agent (out of band) acknowledges and the next `warRoomData` push
+ * no longer carries that id.
+ */
+function renderWarRoomMissionLibrary(
+  missions: NonNullable<WarRoomData['missions']>,
+  control: WarRoomData['control'],
+): HTMLElement {
+  const card = el('div', { class: 'warroom-card warroom-mission-library' });
+  card.appendChild(textEl('div', 'Mission Library', 'module-title'));
+
+  const pendingId = control?.resumeMission ?? null;
+  const list = el('div', { class: 'warroom-mission-library-list' });
+  missions.forEach((m) => list.appendChild(renderWarRoomMissionLibraryRow(m, pendingId)));
+  card.appendChild(list);
+  return card;
+}
+
+function renderWarRoomMissionLibraryRow(
+  m: NonNullable<WarRoomData['missions']>[number],
+  pendingId: string | null,
+): HTMLElement {
+  const row = el('div', { class: 'warroom-mission-library-row' });
+
+  const body = el('div', { class: 'warroom-mission-library-body' });
+  const title = el('div', { class: 'module-title' });
+  const idEl = el('strong');
+  idEl.textContent = m.id;
+  title.appendChild(idEl);
+  const badge = el('span', {
+    class: `warroom-badge warroom-badge--${m.status === 'open' ? 'active' : 'archived'}`,
+  });
+  badge.textContent = m.status;
+  title.appendChild(badge);
+  body.appendChild(title);
+  body.appendChild(textEl('div', m.date, 'meta'));
+  if (m.goal) {
+    body.appendChild(textEl('div', m.goal, 'desc'));
+  }
+  row.appendChild(body);
+
+  if (pendingId === m.id) {
+    row.appendChild(textEl('div', `Resuming ${m.id}...`, 'warroom-mission-resume-pending'));
+  } else {
+    const btn = el('button', {
+      class: 'warroom-mission-resume-button',
+      type: 'button',
+      'aria-label': `Resume mission ${m.id}`,
+    }) as HTMLButtonElement;
+    btn.textContent = 'Resume';
+    btn.addEventListener('click', () => {
+      vscode.postMessage({ type: 'gholaResumeMission', id: m.id });
+    });
+    row.appendChild(btn);
+  }
+
+  return row;
+}
+
+/**
+ * Alerts card: renders each `{ text, date }` recorded for the subject.
+ * Noticeable-but-not-alarming styling (distinct from the red awaken-all
+ * banner) — these are informational flags, not an emergency kill-switch.
+ */
+function renderWarRoomAlerts(alerts: NonNullable<WarRoomData['alerts']>): HTMLElement {
+  const card = el('div', { class: 'warroom-alerts-card' });
+  card.appendChild(textEl('div', 'Alerts', 'warroom-alerts-title'));
+  const list = el('div', { class: 'warroom-alerts-list' });
+  alerts.forEach((a) => {
+    const row = el('div', { class: 'warroom-alert-row' });
+    if (a.date) {
+      row.appendChild(textEl('span', a.date, 'warroom-alert-date'));
+    }
+    row.appendChild(textEl('span', a.text, 'warroom-alert-text'));
+    list.appendChild(row);
+  });
+  card.appendChild(list);
+  return card;
+}
+
+/**
+ * Escalation queue: ghola-raised decisions awaiting operator approval, read
+ * from `data.escalations`. Each row shows the escalation id, requesting ghola,
+ * decision text, and status. `pending` rows get live Approve/Deny buttons that
+ * post `gholaResolveEscalation`; when `control.escalationResolve` already
+ * targets that row (the operator submitted a decision the TPM agent has not yet
+ * acknowledged), a disabled "pending {approve|deny}" indicator is shown instead
+ * (mirroring the Resume / Declare-Done button/pending swap). approved/denied
+ * rows show only the final status badge, no buttons. The authoritative state
+ * comes from the next `warRoomData` push.
+ */
+function renderWarRoomEscalations(
+  escalations: NonNullable<WarRoomData['escalations']>,
+  control: WarRoomData['control'],
+): HTMLElement {
+  const card = el('div', { class: 'warroom-escalations-card' });
+  card.appendChild(textEl('div', 'Escalation Queue', 'warroom-escalations-title'));
+  card.appendChild(
+    textEl(
+      'div',
+      'Ghola-raised decisions awaiting operator approval. Approve or deny writes a cooperative request the TPM agent picks up out of band.',
+      'warroom-note',
+    ),
+  );
+  const list = el('div', { class: 'warroom-escalations-list' });
+  escalations.forEach((e) => list.appendChild(renderWarRoomEscalationRow(e, control)));
+  card.appendChild(list);
+  return card;
+}
+
+function renderWarRoomEscalationRow(
+  entry: NonNullable<WarRoomData['escalations']>[number],
+  control: WarRoomData['control'],
+): HTMLElement {
+  const row = el('div', { class: 'warroom-escalation-row' });
+
+  const body = el('div', { class: 'warroom-escalation-body' });
+  const title = el('div', { class: 'module-title' });
+  const idEl = el('strong');
+  idEl.textContent = entry.id;
+  title.appendChild(idEl);
+  const statusBadge = el('span', {
+    class: `warroom-badge warroom-escalation-status--${entry.status}`,
+  });
+  statusBadge.textContent = entry.status;
+  title.appendChild(statusBadge);
+  body.appendChild(title);
+
+  const meta = el('div', { class: 'meta' });
+  meta.textContent = entry.at ? `${entry.ghola} · ${entry.at}` : entry.ghola;
+  body.appendChild(meta);
+
+  if (entry.text) {
+    body.appendChild(textEl('div', entry.text, 'desc'));
+  }
+  row.appendChild(body);
+
+  // The subject this War Room payload describes; the escalation-resolution
+  // message now carries it so the TPM agent can route each queued decision back
+  // to the right ledger subject.
+  const activeSubject = state.warRoomData?.subject;
+
+  // A resolution the operator already submitted for THIS entry, still awaiting
+  // the TPM agent's ack: show a disabled pending indicator instead of live
+  // buttons. Because escalationResolve is now a QUEUE, find THIS row's entry by
+  // id (and, when subjects are available on both sides, by subject) rather than
+  // comparing a single object. Multiple rows can therefore be pending-ack at
+  // once, each keyed off its own id, with no cross-row disabling.
+  const pendingResolve =
+    control?.escalationResolve?.find(
+      (r) =>
+        r.id === entry.id &&
+        (!activeSubject || !r.subject || r.subject === activeSubject),
+    ) ?? null;
+
+  if (entry.status === 'pending') {
+    if (pendingResolve) {
+      row.appendChild(
+        textEl('div', `pending ${pendingResolve.decision}...`, 'warroom-escalation-pending'),
+      );
+    } else {
+      const actions = el('div', { class: 'warroom-escalation-actions' });
+
+      const approve = el('button', {
+        class: 'warroom-escalation-button warroom-escalation-approve',
+        type: 'button',
+        'aria-label': `Approve escalation ${entry.id}`,
+      }) as HTMLButtonElement;
+      approve.textContent = 'Approve';
+      approve.addEventListener('click', () => {
+        vscode.postMessage({
+          type: 'gholaResolveEscalation',
+          id: entry.id,
+          subject: activeSubject ?? '',
+          decision: 'approve',
+        });
+      });
+
+      const deny = el('button', {
+        class: 'warroom-escalation-button warroom-escalation-deny',
+        type: 'button',
+        'aria-label': `Deny escalation ${entry.id}`,
+      }) as HTMLButtonElement;
+      deny.textContent = 'Deny';
+      deny.addEventListener('click', () => {
+        vscode.postMessage({
+          type: 'gholaResolveEscalation',
+          id: entry.id,
+          subject: activeSubject ?? '',
+          decision: 'deny',
+        });
+      });
+
+      actions.appendChild(approve);
+      actions.appendChild(deny);
+      row.appendChild(actions);
+    }
+  }
+
+  return row;
+}
+
+/**
+ * File-ownership registry: a read-only list of the live `path -> ghola` claims
+ * recorded in the subject's `ownership.md`, with the claimed-at timestamp.
+ * Read from `data.ownership`; the caller only mounts this when there is at
+ * least one claim, so no empty-state branch is needed here.
+ */
+function renderWarRoomOwnership(
+  ownership: NonNullable<WarRoomData['ownership']>,
+): HTMLElement {
+  const section = el('div', { class: 'warroom-ownership' });
+  section.appendChild(textEl('h2', 'File Ownership'));
+  section.appendChild(
+    textEl(
+      'div',
+      'Live file-ownership registry (read-only): which ghola currently claims each path.',
+      'warroom-note',
+    ),
+  );
+  const list = el('div', { class: 'warroom-ownership-list' });
+  ownership.forEach((o) => {
+    const ownRow = el('div', { class: 'warroom-ownership-row' });
+    ownRow.appendChild(textEl('span', o.path, 'warroom-ownership-path'));
+    ownRow.appendChild(textEl('span', '->', 'warroom-ownership-arrow'));
+    ownRow.appendChild(textEl('span', o.ghola, 'warroom-ownership-ghola'));
+    if (o.at) {
+      ownRow.appendChild(textEl('span', o.at, 'warroom-ownership-at'));
+    }
+    list.appendChild(ownRow);
+  });
+  section.appendChild(list);
+  return section;
+}
+
+/** Small ledger-state summary line: active / dormant / archived / total tallies. */
+function renderWarRoomCounts(counts: NonNullable<WarRoomData['counts']>): HTMLElement {
+  const p = el('div', { class: 'warroom-counts' });
+  p.textContent = `Active ${counts.active} · Dormant ${counts.dormant} · Archived ${counts.archived} · Total ${counts.total}`;
+  return p;
+}
+
+/**
+ * Read-only control-indicator row mirroring the resolved mode.ghola
+ * sub-toggles, plus a static "Hard-rules floor: enforced" chip. These are
+ * status chips only — not editable here; the note below points to where
+ * they're actually configured. Also hosts the Awaken All control and the
+ * god-console directive input, both of which write cooperative requests into
+ * `.nomeda/control.json` for the TPM agent to pick up out of band.
+ */
+function renderWarRoomControls(
+  settings: NonNullable<WarRoomData['settings']>,
+  control: WarRoomData['control'],
+): HTMLElement {
+  const card = el('div', { class: 'warroom-card' });
+  card.appendChild(textEl('div', 'Controls', 'module-title'));
+
+  const chips = el('div', { class: 'warroom-chip-row' });
+  chips.appendChild(warRoomChip('Auto-open War Room', settings.autoOpenWarRoom));
+  chips.appendChild(warRoomChip('Tournament', settings.tournament));
+  chips.appendChild(
+    warRoomChip(
+      `Max concurrent gholas: ${settings.maxConcurrentGholas === 0 ? 'unbounded' : settings.maxConcurrentGholas}`,
+    ),
+  );
+  chips.appendChild(warRoomChip('Dry run', settings.dryRun));
+  chips.appendChild(warRoomChip('Hard-rules floor: enforced', true));
+  card.appendChild(chips);
+
+  card.appendChild(
+    textEl(
+      'div',
+      'These are configured in the mode.ghola module settings (Modules tab), not here.',
+      'warroom-note',
+    ),
+  );
+
+  card.appendChild(el('hr', { class: 'section-divider' }));
+  card.appendChild(renderWarRoomGodConsole(control));
+
+  card.appendChild(el('hr', { class: 'section-divider' }));
+  card.appendChild(renderWarRoomAwakenAllControl());
+
+  return card;
+}
+
+/**
+ * God-console: a free-text instruction input + Send button that posts
+ * `gholaDirective` to the host. Clearly an "instruction to the running
+ * mission" affordance rather than a kill-switch, so it uses the neutral
+ * button styling (not the Awaken All danger-red treatment). When a directive
+ * is already pending (`control.directive` set, not yet acknowledged), shows
+ * it above the input with a note that the TPM agent polls + acknowledges it
+ * cooperatively — mirroring the Awaken-All / Resume request pattern.
+ */
+function renderWarRoomGodConsole(control: WarRoomData['control']): HTMLElement {
+  const wrap = el('div', { class: 'warroom-god-console' });
+  wrap.appendChild(textEl('div', 'Send Instruction', 'warroom-god-console-title'));
+
+  if (control?.directive) {
+    const pending = el('div', { class: 'warroom-god-console-pending' });
+    pending.appendChild(textEl('div', `Pending: "${control.directive}"`, 'warroom-god-console-pending-text'));
+    if (control.directiveRequestedAt) {
+      pending.appendChild(
+        textEl('div', `Requested at ${control.directiveRequestedAt}`, 'warroom-god-console-pending-meta'),
+      );
+    }
+    wrap.appendChild(pending);
+  }
+
+  const row = el('div', { class: 'warroom-god-console-row' });
+  const input = el('input', {
+    class: 'warroom-god-console-input',
+    type: 'text',
+    placeholder: 'Instruction for the running mission…',
+    'aria-label': 'God-console instruction for the running mission',
+  }) as HTMLInputElement;
+  input.value = state.warRoomDirectiveDraft;
+  input.addEventListener('input', () => {
+    state.warRoomDirectiveDraft = input.value;
+  });
+  row.appendChild(input);
+
+  const sendBtn = el('button', {
+    class: 'warroom-god-console-send',
+    type: 'button',
+    'aria-label': 'Send instruction to the running mission',
+  }) as HTMLButtonElement;
+  sendBtn.textContent = 'Send';
+  const submit = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    vscode.postMessage({ type: 'gholaDirective', text });
+    state.warRoomDirectiveDraft = '';
+    render();
+  };
+  sendBtn.addEventListener('click', submit);
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') submit();
+  });
+  row.appendChild(sendBtn);
+  wrap.appendChild(row);
+
+  wrap.appendChild(
+    textEl(
+      'div',
+      'Cooperative: the TPM agent polls for this instruction and acknowledges it, it does not interrupt anything directly.',
+      'warroom-god-console-caption',
+    ),
+  );
+
+  return wrap;
+}
+
+/**
+ * Emergency "Awaken All" affordance: a danger-styled button that requests a
+ * cooperative team stand-down, plus a one-line caption explaining what it
+ * does and does not do (it is a request, not a kill — the TPM agent polls
+ * `.nomeda/control.json` and stands the team down on its own schedule).
+ */
+function renderWarRoomAwakenAllControl(): HTMLElement {
+  const wrap = el('div', { class: 'warroom-awaken-control' });
+
+  const btn = el('button', {
+    class: 'warroom-awaken-button',
+    type: 'button',
+    'aria-label': 'Awaken All — request emergency team stand-down',
+  }) as HTMLButtonElement;
+  btn.textContent = 'Awaken All';
+  btn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'gholaAwakenAll' });
+  });
+  wrap.appendChild(btn);
+
+  wrap.appendChild(
+    textEl(
+      'div',
+      'Requests an emergency team stand-down — cooperative: the TPM agent polls for this and stands the team down, it does not forcibly stop anything.',
+      'warroom-awaken-caption',
+    ),
+  );
+
+  return wrap;
+}
+
+/**
+ * One read-only status chip. `on` colors the chip to indicate an active/true
+ * state; omitted (or false) renders a neutral chip — used for the
+ * maxConcurrentGholas value, which has no boolean on/off meaning.
+ */
+function warRoomChip(label: string, on?: boolean): HTMLElement {
+  const chip = el('span', { class: on ? 'warroom-chip warroom-chip--on' : 'warroom-chip' });
+  chip.textContent = label;
+  return chip;
+}
+
+/**
+ * Track-record chip rendering a ghola's `pass:N rework:M` reliability
+ * string verbatim. Falls back to the same default the host uses when the
+ * field is absent, so a pre-Phase-6 ledger entry still shows a chip.
+ */
+function warRoomReliabilityChip(reliability: string | undefined): HTMLElement {
+  const chip = el('span', { class: 'warroom-chip warroom-reliability-chip' });
+  chip.textContent = reliability ?? 'pass:0 rework:0';
+  return chip;
+}
+
+/**
+ * Per-ghola verification chip. `passed` -> green "verified", `failed` -> red
+ * "failed", `pending`/absent -> muted "pending", and any other non-empty value
+ * -> red (treated as an unverified/unknown state). Absence is tolerated (the
+ * CLI omits the field on older ghola files) and reads as "pending".
+ */
+function warRoomVerificationChip(verification: string | undefined): HTMLElement {
+  const v = (verification || '').toLowerCase();
+  let modifier: string;
+  let label: string;
+  if (v === 'passed') {
+    modifier = 'passed';
+    label = 'verified';
+  } else if (v === 'failed') {
+    modifier = 'failed';
+    label = 'failed';
+  } else if (v === 'pending' || v === '') {
+    modifier = 'pending';
+    label = 'pending';
+  } else {
+    modifier = 'failed';
+    label = v;
+  }
+  const chip = el('span', {
+    class: `warroom-chip warroom-verify-chip warroom-verify-chip--${modifier}`,
+  });
+  chip.textContent = `verification: ${label}`;
+  return chip;
+}
+
+/**
+ * Mission-level integration status indicator. `passed` -> green, `failed` ->
+ * red, `pending` -> muted, absent -> muted "not run" (older ledgers that never
+ * wrote the `- integration:` line). Rendered on the mission header near the
+ * meta line.
+ */
+function warRoomIntegrationIndicator(integration: string | undefined): HTMLElement {
+  const v = (integration || '').toLowerCase();
+  let modifier: string;
+  let label: string;
+  if (v === 'passed') {
+    modifier = 'passed';
+    label = 'passed';
+  } else if (v === 'failed') {
+    modifier = 'failed';
+    label = 'failed';
+  } else if (v === 'pending') {
+    modifier = 'pending';
+    label = 'pending';
+  } else {
+    modifier = 'absent';
+    label = 'not run';
+  }
+  const chip = el('span', {
+    class: `warroom-chip warroom-integration-chip warroom-integration-chip--${modifier}`,
+  });
+  chip.textContent = `Integration: ${label}`;
+  return chip;
+}
+
+/**
+ * "N/M gholas verified" rollup chip over the live (active/dormant) roster;
+ * archived gholas are excluded since they no longer serve the open mission.
+ * Returns null when there is no live roster to count. Turns green only when
+ * every live ghola is verified.
+ */
+function warRoomVerificationRollup(
+  roster: NonNullable<WarRoomData['roster']>,
+): HTMLElement | null {
+  const live = roster.filter((g) => g.state === 'active' || g.state === 'dormant');
+  if (!live.length) {
+    return null;
+  }
+  const verified = live.filter((g) => (g.verification || '').toLowerCase() === 'passed').length;
+  const chip = el('span', { class: 'warroom-chip warroom-verify-rollup' });
+  chip.textContent = `${verified}/${live.length} gholas verified`;
+  if (verified === live.length) {
+    chip.classList.add('warroom-verify-chip--passed');
+  }
+  return chip;
+}
+
+/** Cache-key helper for the per-ghola detail store (`state.gholaDetails`). */
+function gholaDetailCacheKey(subject: string, id: string): string {
+  return `${subject}::${id}`;
+}
+
+/**
+ * Open the per-ghola drill-in view for `id` under `subject`. Requests a fresh
+ * `gholaDetail` payload only when nothing is cached yet for this key — a
+ * cached (possibly stale) payload renders immediately while any live watcher
+ * push refreshes it in place. Mirrors `openModuleDetail`'s request-once-then-
+ * cache pattern.
+ */
+function openWarRoomGholaDetail(subject: string, id: string): void {
+  state.warRoomGhola = { subject, id };
+  if (!state.gholaDetails[gholaDetailCacheKey(subject, id)]) {
+    vscode.postMessage({ type: 'requestGholaDetail', subject, ghola: id });
+  }
+  render();
+}
+
+/** Return from the per-ghola drill-in to the main War Room view. */
+function backFromWarRoomGholaDetail(): void {
+  state.warRoomGhola = null;
+  render();
+}
+
+/**
+ * Per-ghola detail drill-in: header (back button + name + state badge),
+ * purpose, model/created/last-used, the lineage line (generation + parent
+ * chain), the reliability chip, missions served, and the raw `## History`
+ * markdown body. Mirrors `renderModuleDetailView`'s header/back-button
+ * chrome so navigation feels consistent across tabs.
+ */
+function renderWarRoomGholaDetail(
+  wrapper: HTMLElement,
+  view: { subject: string; id: string },
+): void {
+  const container = el('div', { class: 'module-detail warroom-ghola-detail' });
+
+  const header = el('div', { class: 'detail-header' });
+  const back = el('button', {
+    class: 'icon-button',
+    type: 'button',
+    'aria-label': 'Back to War Room',
+    title: 'Back',
+  }) as HTMLButtonElement;
+  back.innerHTML = ARROW_LEFT_SVG;
+  back.addEventListener('click', backFromWarRoomGholaDetail);
+  header.appendChild(back);
+
+  const detail = state.gholaDetails[gholaDetailCacheKey(view.subject, view.id)];
+
+  const headTitle = el('div', { class: 'detail-title' });
+  const headName = el('strong');
+  headName.textContent = detail?.name || view.id;
+  headTitle.appendChild(headName);
+  if (detail?.state) {
+    const badge = el('span', { class: `warroom-badge warroom-badge--${detail.state}` });
+    badge.textContent = detail.state;
+    headTitle.appendChild(badge);
+  }
+  header.appendChild(headTitle);
+  container.appendChild(header);
+
+  if (!detail) {
+    container.appendChild(textEl('div', 'Loading…', 'empty'));
+    wrapper.appendChild(container);
+    return;
+  }
+
+  if (!detail.found) {
+    container.appendChild(
+      textEl(
+        'div',
+        `No ledger file found for '${view.id}' in subject '${view.subject}'.`,
+        'empty',
+      ),
+    );
+    wrapper.appendChild(container);
+    return;
+  }
+
+  if (detail.purpose) {
+    container.appendChild(textEl('div', detail.purpose, 'desc'));
+  }
+
+  const dl = el('dl', { class: 'details-list' });
+  appendDef(dl, 'Model', detail.model || '(unknown)');
+  appendDef(dl, 'Created', detail.created || '(unknown)');
+  appendDef(dl, 'Last used', detail.last_used || '(unknown)');
+  container.appendChild(dl);
+
+  // Lineage: generation + parent chain. Only one hop of parent is available
+  // per detail payload (the parent's own parent would require a second
+  // request); a single "Parent: <slug>" line is sufficient for v1.
+  const lineage = el('div', { class: 'warroom-lineage' });
+  lineage.appendChild(textEl('span', `Generation ${detail.generation}`, 'warroom-lineage-gen'));
+  lineage.appendChild(
+    textEl(
+      'span',
+      detail.parent ? `Parent: ${detail.parent}` : 'Parent: origin',
+      'warroom-lineage-parent',
+    ),
+  );
+  container.appendChild(lineage);
+
+  // Track record + verification state.
+  const chips = el('div', { class: 'warroom-chip-row' });
+  chips.appendChild(warRoomReliabilityChip(detail.reliability));
+  chips.appendChild(warRoomVerificationChip(detail.verification));
+  container.appendChild(chips);
+
+  // Missions served.
+  container.appendChild(textEl('div', 'Missions served', 'details-header'));
+  if (detail.missions.length) {
+    const list = el('ul', { class: 'warroom-progress-list' });
+    detail.missions.forEach((m) => {
+      const li = el('li');
+      li.textContent = m;
+      list.appendChild(li);
+    });
+    container.appendChild(list);
+  } else {
+    container.appendChild(textEl('div', 'None recorded.', 'warroom-note'));
+  }
+
+  // History.
+  container.appendChild(textEl('div', 'History', 'details-header'));
+  if (detail.history) {
+    const pre = el('pre', { class: 'prompt fragment' });
+    pre.textContent = detail.history;
+    container.appendChild(pre);
+  } else {
+    container.appendChild(textEl('div', 'No history recorded.', 'warroom-note'));
+  }
+
+  wrapper.appendChild(container);
+}
+
+/**
+ * Render a single settings field bound to `state.settingsValues[key]`.
+ *
+ * `onCommit` is an OPTIONAL scoped hook: when supplied, it fires the moment a
+ * change is committed (toggle flip, select change, or number blur/enter) so the
+ * caller can persist immediately. Existing callers omit it and keep the
+ * batched Save-button flow unchanged; only the Ghola block opts into
+ * auto-save. Number fields deliberately commit on `change` (blur/Enter), not on
+ * every keystroke, so intermediate typing does not spam saves.
+ */
+function renderField(
+  key: string,
+  field: SettingsField,
+  onCommit?: () => void,
+  disabled?: boolean,
+  valueOverride?: unknown,
+): HTMLElement {
   const wrap = el('div', { class: 'field' });
   const label = el('label');
   label.textContent = field.label;
@@ -3852,7 +5487,11 @@ function renderField(key: string, field: SettingsField): HTMLElement {
   if (field.description) {
     wrap.appendChild(textEl('div', field.description, 'desc'));
   }
-  const value = state.settingsValues[key] ?? field.default;
+  // valueOverride (optional) lets a caller display a coerced value without
+  // mutating the store. Used by the Ghola block to force sub-toggles to read
+  // false while the master switch is off, even for stale-true legacy data.
+  const value =
+    valueOverride !== undefined ? valueOverride : state.settingsValues[key] ?? field.default;
 
   if (field.type === 'boolean') {
     wrap.appendChild(
@@ -3861,13 +5500,16 @@ function renderField(key: string, field: SettingsField): HTMLElement {
         onChange: (next) => {
           state.settingsValues[key] = next;
           state.dirty = true;
+          onCommit?.();
           render();
         },
         ariaLabel: field.label,
+        disabled,
       }),
     );
   } else if (field.type === 'enum') {
     const select = el('select') as HTMLSelectElement;
+    if (disabled) select.disabled = true;
     (field.options ?? []).forEach((opt) => {
       const o = el('option') as HTMLOptionElement;
       o.value = opt;
@@ -3878,41 +5520,38 @@ function renderField(key: string, field: SettingsField): HTMLElement {
     select.addEventListener('change', () => {
       state.settingsValues[key] = select.value;
       state.dirty = true;
+      onCommit?.();
       render();
     });
     wrap.appendChild(select);
   } else if (field.type === 'number') {
     const inp = el('input') as HTMLInputElement;
     inp.type = 'number';
+    if (disabled) inp.disabled = true;
     if (value !== undefined) inp.value = String(value);
     inp.addEventListener('input', () => {
       state.settingsValues[key] = inp.value === '' ? undefined : Number(inp.value);
       state.dirty = true;
     });
+    if (onCommit) {
+      inp.addEventListener('change', () => onCommit());
+    }
     wrap.appendChild(inp);
   } else {
     const inp = el('input') as HTMLInputElement;
     inp.type = 'text';
+    if (disabled) inp.disabled = true;
     if (value !== undefined && value !== null) inp.value = String(value);
     inp.addEventListener('input', () => {
       state.settingsValues[key] = inp.value;
       state.dirty = true;
     });
+    if (onCommit) {
+      inp.addEventListener('change', () => onCommit());
+    }
     wrap.appendChild(inp);
   }
   return wrap;
-}
-
-function renderActions(): HTMLElement {
-  const a = el('div', { class: 'actions' });
-  const save = el('button', { class: 'primary' }) as HTMLButtonElement;
-  save.textContent = state.dirty ? 'Save' : 'Saved';
-  save.disabled = !state.dirty;
-  save.addEventListener('click', () => {
-    vscode.postMessage({ type: 'saveSettings', values: state.settingsValues });
-  });
-  a.appendChild(save);
-  return a;
 }
 
 function scopedKey(moduleId: string, fieldKey: string): string {
