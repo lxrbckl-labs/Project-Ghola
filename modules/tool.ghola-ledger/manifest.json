@@ -1,8 +1,8 @@
 {
   "id": "tool.ghola-ledger",
-  "name": "Ghola Ledger",
+  "name": "War Mode Ledger",
   "version": "0.1.0",
-  "description": "Teaches the ledger contract behind Ghola Mode: the per-subject gholas store (Obsidian vault or workspace-local fallback) and the `ghola` CLI that reads and writes it.",
+  "description": "Teaches the ledger contract behind War Mode: the per-subject gholas store (Obsidian vault or workspace-local fallback) and the `ghola` CLI that reads and writes it.",
   "proactive": false,
   "category": "knowledge",
   "kind": "capability",

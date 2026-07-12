@@ -1,8 +1,8 @@
 # Ghola Ledger
 
-When this module is loaded, the session has access to the **ghola ledger** — the persistent, cross-session store of gholas (dedicated mission agents) that `mode.ghola` grows and reawakens. This module teaches the ledger's storage contract and the `ghola` CLI that is the only sanctioned way to read or write it. Every agent reads this same fragment; role-specific framing is collected at the end.
+When this module is loaded, the session has access to the **ghola ledger** — the persistent, cross-session store of gholas (dedicated mission agents) that `mode.war` grows and reawakens. This module teaches the ledger's storage contract and the `ghola` CLI that is the only sanctioned way to read or write it. Every agent reads this same fragment; role-specific framing is collected at the end.
 
-This module is **not proactive**. It sits quietly until a task touches ghola-mode territory — starting a mission, spawning or reawakening a ghola, checking the roster, or recording a debrief. `mode.ghola` is the module that actually drives mission orchestration; this module is the reference for the storage layer underneath it. A session can have this module loaded without `mode.ghola` active (e.g. to inspect the ledger from a non-mission session), but `mode.ghola` **requires** this module.
+This module is **not proactive**. It sits quietly until a task touches ghola-mode territory — starting a mission, spawning or reawakening a ghola, checking the roster, or recording a debrief. `mode.war` is the module that actually drives mission orchestration; this module is the reference for the storage layer underneath it. A session can have this module loaded without `mode.war` active (e.g. to inspect the ledger from a non-mission session), but `mode.war` **requires** this module.
 
 ## Never touch ledger files directly
 
@@ -138,4 +138,4 @@ The `--vault`/`--workspace`/`--local` global flags above are accepted by every c
 
 ## Role-Specific Notes
 
-The body above applies identically to every agent. TPM is the primary driver of the CLI (it owns mission lifecycle and roster decisions per `mode.ghola`); SWE and QA use it read-only in the ordinary case (checking `ghola ls`/`ghola board` for context) unless a mission brief explicitly assigns ledger-writing responsibility to them. Regardless of role: never write to a ledger file except through a `ghola` command.
+The body above applies identically to every agent. TPM is the primary driver of the CLI (it owns mission lifecycle and roster decisions per `mode.war`); SWE and QA use it read-only in the ordinary case (checking `ghola ls`/`ghola board` for context) unless a mission brief explicitly assigns ledger-writing responsibility to them. Regardless of role: never write to a ledger file except through a `ghola` command.

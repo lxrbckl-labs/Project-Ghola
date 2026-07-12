@@ -6,14 +6,14 @@ import type { ModuleHandle } from '../modules/handle';
 import type { SettingsField, SettingsSchema } from '../manifest/types';
 
 /**
- * `mode.ghola` is no longer a toggleable module: its enablement is driven by the
- * `mode.ghola::enabled` setting (surfaced as an Agents configuration), not by
+ * `mode.war` is no longer a toggleable module: its enablement is driven by the
+ * `mode.war::enabled` setting (surfaced as an Agents configuration), not by
  * loader state. It is excluded from the generic enabled-module fragment loop and
  * injected via a dedicated special case gated on that setting. It remains
  * discoverable by the loader so its settings schema and `ghola.md` fragment path
  * stay reachable.
  */
-const GHOLA_MODE_ID = 'mode.ghola';
+const GHOLA_MODE_ID = 'mode.war';
 
 /**
  * `tool.commit-push` contributes a single TPM-targeted fragment (`commit-push.md`)
@@ -107,7 +107,7 @@ export class PromptComposer {
       // discovered by the loader. If a stale core.* manifest survives in the
       // modules dir during transition, swallow it here rather than emit it.
       if (id.startsWith('core.')) continue;
-      // mode.ghola is gated by the `mode.ghola::enabled` setting, not loader
+      // mode.war is gated by the `mode.war::enabled` setting, not loader
       // state — injected separately below, never by this generic loop.
       if (id === GHOLA_MODE_ID) continue;
       // tool.commit-push's fragment is one-shot button-dispatch text read
@@ -138,8 +138,8 @@ export class PromptComposer {
       }
     }
 
-    // mode.ghola's TPM fragment: injected here (outside the loop) when the
-    // `mode.ghola::enabled` setting is on. TPM-only, matching the fragment's
+    // mode.war's TPM fragment: injected here (outside the loop) when the
+    // `mode.war::enabled` setting is on. TPM-only, matching the fragment's
     // declared target — never emitted for swe/qa.
     if (agentId === 'tpm') {
       const gholaEntry = this.renderGholaEntry(settings);
@@ -158,8 +158,8 @@ export class PromptComposer {
   }
 
   /**
-   * Build the Session Manifest entry for `mode.ghola`'s TPM fragment when the
-   * `mode.ghola::enabled` setting is on, or `null` otherwise. Reuses the still-
+   * Build the Session Manifest entry for `mode.war`'s TPM fragment when the
+   * `mode.war::enabled` setting is on, or `null` otherwise. Reuses the still-
    * discoverable module manifest for the fragment/parameters metadata; only the
    * gate has moved from loader-enabled state to the setting value. Emits the
    * exact same entry shape the generic loop produces (header + contentPath +

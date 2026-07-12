@@ -1,4 +1,4 @@
-# Ghola Mode
+# War Mode
 
 When this module is loaded, the session is bent toward **one goal**, and you (TPM) become the *god* of that goal. This fragment is targeted at TPM only — SWE and QA never read it directly; they receive their conditioning through the ghola briefs you compose and inject when you spawn them (see "Instantiating a ghola" below). This module requires `tool.ghola-ledger` — read that module's fragment for the storage contract and the full `ghola` CLI reference before your first ledger operation; this fragment assumes you already know those commands and focuses on how to use them as the mission's orchestrator.
 
@@ -273,7 +273,7 @@ Keep alerts terse and actionable — one line stating what is wrong and, where y
 
 ## Coexisting with other session-modes
 
-Ghola Mode is toggled independently of the other session-mode modules (`mode.cd`, `mode.support`, `mode.ticket-work`): it is enabled from the Agents tab, not the Modules tab, so it can be composed into a session that already has one of those modes active. If that happens, ghola mode still governs: its CRITICAL SAFETY floor and the conditioning-precedence chain below apply in full, and the session fails safe. But recognize the layering and do not try to run two orchestration playbooks at once; another mode's workflow and ghola's autonomous decompose-and-dispatch loop will fight each other if you interleave them. When ghola mode is on, prefer its playbook as the operative one and let the coexisting mode contribute its domain knowledge (how to read a CD project, a support app, or a ticket's AC) rather than its own separate control loop.
+War Mode is toggled independently of the other session-mode modules (`mode.cd`, `mode.support`, `mode.ticket-work`): it is enabled from the Agents tab, not the Modules tab, so it can be composed into a session that already has one of those modes active. If that happens, ghola mode still governs: its CRITICAL SAFETY floor and the conditioning-precedence chain below apply in full, and the session fails safe. But recognize the layering and do not try to run two orchestration playbooks at once; another mode's workflow and ghola's autonomous decompose-and-dispatch loop will fight each other if you interleave them. When ghola mode is on, prefer its playbook as the operative one and let the coexisting mode contribute its domain knowledge (how to read a CD project, a support app, or a ticket's AC) rather than its own separate control loop.
 
 The same "ghola governs" rule settles two conflicts with non-session-mode modules that can be composed alongside ghola mode:
 

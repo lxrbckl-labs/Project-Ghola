@@ -1551,10 +1551,10 @@ button.module-row-chevron:focus-visible {
   font-style: italic;
 }
 
-/* Ghola Mode config block (top of the Agents tab). The four sub-controls sit
+/* War Mode config block (top of the Agents tab). The four sub-controls sit
    below the master Enable toggle; when the master toggle is off they are
    visually subordinated (dimmed + non-interactive) to signal they have no
-   effect until Ghola Mode is enabled. */
+   effect until War Mode is enabled. */
 .ghola-config .ghola-subcontrols {
   transition: opacity 120ms ease-in-out;
 }
@@ -1973,7 +1973,7 @@ button.module-row-chevron:focus-visible {
   font-style: italic;
 }
 
-/* ─── War Room tab (mode.ghola observability, read-only v1) ─────────────── */
+/* ─── War Room tab (mode.war observability, read-only v1) ─────────────── */
 
 /* Card chrome mirrors .module-row (border/radius/background) but stacks
    content in a column instead of a single-line flex row, since War Room

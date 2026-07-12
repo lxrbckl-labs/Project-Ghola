@@ -786,22 +786,22 @@ function render(): void {
 }
 
 /**
- * Whether Ghola Mode is enabled. Reads the `mode.ghola::enabled` setting value
+ * Whether War Mode is enabled. Reads the `mode.war::enabled` setting value
  * (default false) rather than the module's loader/enabled state — the master
  * toggle lives on the Agents tab, not the Modules tab.
  */
 function gholaEnabled(): boolean {
-  return state.settingsValues['mode.ghola::enabled'] === true;
+  return state.settingsValues['mode.war::enabled'] === true;
 }
 
 function renderRail(): HTMLElement {
   // Horizontal top header (tab strip): Session, Modules, and the Agents tab
-  // (its own list->detail page), plus War Room while Ghola Mode is enabled.
+  // (its own list->detail page), plus War Room while War Mode is enabled.
   const rail = el('nav', { class: 'rail' });
   rail.appendChild(railItem('general', 'Session'));
   rail.appendChild(railItem('modules', 'Modules'));
   rail.appendChild(railItem('agents', 'Agents'));
-  // War Room only appears while Ghola Mode is enabled — it has nothing to
+  // War Room only appears while War Mode is enabled — it has nothing to
   // show otherwise (no ledger pointer is ever set) and its auto-open only
   // fires from a ghola-mode launch, so gating it here keeps the two in sync.
   if (gholaEnabled()) {
@@ -1055,9 +1055,9 @@ function renderModulesList(container: HTMLElement): void {
   container.innerHTML = '';
   const q = state.moduleSearch.trim().toLowerCase();
   const filtered = state.modules.filter((m) => {
-    // mode.ghola is configured on the Agents tab (its master toggle + sub-
+    // mode.war is configured on the Agents tab (its master toggle + sub-
     // controls), not as a toggleable Modules card — hide it from this list.
-    if (m.id === 'mode.ghola') return false;
+    if (m.id === 'mode.war') return false;
     if (!q) return true;
     // Base haystack: id, name, description.
     const hay = [m.id, m.name, m.description ?? ''].join(' ').toLowerCase();
@@ -3291,7 +3291,7 @@ function renderAgentsList(wrapper: HTMLElement): void {
     ),
   );
 
-  // Ghola Mode config sits above the agent rows — its master toggle and sub-
+  // War Mode config sits above the agent rows — its master toggle and sub-
   // controls govern how TPM orchestrates the whole team, so it reads as the
   // team-level configuration for this tab.
   wrapper.appendChild(renderGholaConfigBlock());
@@ -3304,8 +3304,8 @@ function renderAgentsList(wrapper: HTMLElement): void {
 }
 
 /**
- * Ghola Mode configuration block at the top of the Agents tab. A master
- * Enable toggle (bound to `mode.ghola::enabled`) plus the four sub-controls
+ * War Mode configuration block at the top of the Agents tab. A master
+ * Enable toggle (bound to `mode.war::enabled`) plus the four sub-controls
  * sourced from the ghola module's `contributes.settings`. Each control
  * auto-saves live on change via `renderField`'s `onCommit` hook (which fires
  * the whole-map `saveSettings` flow), so the block behaves like the SWE/QA
@@ -3316,7 +3316,7 @@ function renderGholaConfigBlock(): HTMLElement {
   const block = el('div', { class: 'agent-config ghola-config' });
 
   const header = el('div', { class: 'agent-config-header' });
-  header.textContent = 'Ghola Mode';
+  header.textContent = 'War Mode';
   block.appendChild(header);
 
   block.appendChild(
@@ -3328,11 +3328,11 @@ function renderGholaConfigBlock(): HTMLElement {
   );
 
   // Master switch — a locally-constructed boolean field (not part of the
-  // module's contributes.settings schema) bound to mode.ghola::enabled.
+  // module's contributes.settings schema) bound to mode.war::enabled.
   // Auto-save: persist the whole settings map on every change so the Ghola
   // block saves live like the SWE/QA fields, rather than batching behind a
   // Save button. saveSettings writes the entire map to the SAME MODULE_SETTINGS
-  // store getComposeSettings()/isGholaEnabled() read `mode.ghola::*` from, so
+  // store getComposeSettings()/isGholaEnabled() read `mode.war::*` from, so
   // firing it per-change is an idempotent whole-map live save. Scoped to this
   // block via renderField's optional onCommit hook; other callers omit it and
   // keep their batched Save button.
@@ -3354,24 +3354,24 @@ function renderGholaConfigBlock(): HTMLElement {
   // and calls render() after this hook, so the block re-renders showing the
   // sub-controls disabled + unchecked.
   const commitMaster = () => {
-    if (state.settingsValues['mode.ghola::enabled'] !== true) {
+    if (state.settingsValues['mode.war::enabled'] !== true) {
       for (const key of gholaBooleanKeys) {
-        state.settingsValues[scopedKey('mode.ghola', key)] = false;
+        state.settingsValues[scopedKey('mode.war', key)] = false;
       }
     } else {
-      // Transition to ENABLED: Ghola Mode is no longer a Modules-tab row, so
+      // Transition to ENABLED: War Mode is no longer a Modules-tab row, so
       // flipping this master switch would otherwise skip the dependency-pull
       // that requestToggleModule does for real module rows. Mirror it here so
-      // mode.ghola's required tools (e.g. tool.ghola-ledger) come along. Source
+      // mode.war's required tools (e.g. tool.ghola-ledger) come along. Source
       // the requires list from the module object in state; fall back to the one
       // known dependency if the payload lacks it. Deps are enabled via the
       // existing requestToggleModule host path (module-enabled store), while the
-      // `mode.ghola::enabled` setting persists to MODULE_SETTINGS via commitGhola
+      // `mode.war::enabled` setting persists to MODULE_SETTINGS via commitGhola
       // below -- different stores, so neither clobbers the other. Guard on the
       // dep's `enabled` flag so an already-enabled dep posts no toggleModule
       // message (requestToggleModule does not self-guard its top-level target).
       // Never disabled on master-off: deps are shared tools.
-      const gholaModule = state.modules.find((m) => m.id === 'mode.ghola');
+      const gholaModule = state.modules.find((m) => m.id === 'mode.war');
       const requires = gholaModule?.requires ?? ['tool.ghola-ledger'];
       for (const depId of requires) {
         const depModule = state.modules.find((m) => m.id === depId);
@@ -3385,22 +3385,22 @@ function renderGholaConfigBlock(): HTMLElement {
 
   const enableField: SettingsField = {
     type: 'boolean',
-    label: 'Enable Ghola Mode',
+    label: 'Enable War Mode',
     description:
-      'Master switch for Ghola Mode. When on, the War Room tab appears and TPM may run a mission as a roster of gholas.',
+      'Master switch for War Mode. When on, the War Room tab appears and TPM may run a mission as a roster of gholas.',
     default: false,
   };
-  block.appendChild(renderField(scopedKey('mode.ghola', 'enabled'), enableField, commitMaster));
+  block.appendChild(renderField(scopedKey('mode.war', 'enabled'), enableField, commitMaster));
 
   // Sub-controls: source label/type/default/description from the ghola module's
   // contributes.settings so they stay defined in one place. If the module is
   // absent from state.modules, `fields` is empty and none render (rather than
-  // hardcoding definitions here) — SWE-2 keeps mode.ghola in the payload.
+  // hardcoding definitions here) — SWE-2 keeps mode.war in the payload.
   //
   // When the master is off, every sub-control is truly disabled (real `disabled`
   // attribute, not just dimmed) and each boolean is displayed as false via a
   // valueOverride so stale-true legacy values still render unchecked on load.
-  const ghola = state.modules.find((m) => m.id === 'mode.ghola');
+  const ghola = state.modules.find((m) => m.id === 'mode.war');
   const fields = (ghola?.contributes?.settings ?? {}) as Record<string, SettingsField>;
   const subControls = el('div', {
     class: masterEnabled ? 'ghola-subcontrols' : 'ghola-subcontrols ghola-subcontrols--disabled',
@@ -3411,7 +3411,7 @@ function renderGholaConfigBlock(): HTMLElement {
     const isGatedBoolean = !masterEnabled && gholaBooleanKeys.includes(key);
     subControls.appendChild(
       renderField(
-        scopedKey('mode.ghola', key),
+        scopedKey('mode.war', key),
         field,
         commitGhola,
         !masterEnabled,
@@ -4296,19 +4296,19 @@ function renderSessions(wrapper: HTMLElement): void {
   wrapper.appendChild(actions);
 }
 
-// ─── War Room tab (mode.ghola observability, read-only v1) ────────────────
+// ─── War Room tab (mode.war observability, read-only v1) ────────────────
 
 /**
  * War Room tab: the current open mission (plus its sub-purpose map), the
  * full ghola roster for the subject (both flat and grouped into the Stable
  * ledger browser), ledger state counts, any recorded alerts, the mission
  * library / resume picker, and read-only status chips mirroring the
- * mode.ghola sub-toggles. Mostly an observability surface — the only
+ * mode.war sub-toggles. Mostly an observability surface — the only
  * cooperative actions are "Awaken All" and per-mission "Resume", both of
  * which just write a request into `.nomeda/control.json` for the TPM agent
  * to pick up out of band; nothing here directly wakes/retires a ghola.
  *
- * The rail item that reaches this function only appears while `mode.ghola`
+ * The rail item that reaches this function only appears while `mode.war`
  * is enabled (see `renderRail`), but this function re-checks defensively —
  * a stale `revealSection` message racing a module toggle-off, or a direct
  * `setSection('warroom')` call, should degrade to the empty state rather
@@ -4389,12 +4389,12 @@ function renderWarRoom(wrapper: HTMLElement): void {
 
   wrapper.appendChild(textEl('h1', 'War Room'));
   wrapper.appendChild(
-    textEl('p', 'Live view of the current Ghola Mode mission and roster.', 'subtitle'),
+    textEl('p', 'Live view of the current War Mode mission and roster.', 'subtitle'),
   );
 
   if (!gholaEnabled()) {
     wrapper.appendChild(
-      textEl('p', 'Ghola Mode is not enabled. Enable Ghola Mode on the Agents tab to use the War Room.', 'desc'),
+      textEl('p', 'War Mode is not enabled. Enable War Mode on the Agents tab to use the War Room.', 'desc'),
     );
     return;
   }
@@ -4781,7 +4781,7 @@ function renderWarRoomLedgerHealth(roster: NonNullable<WarRoomData['roster']>): 
  * the CLI's `ghola note` command (see `cmdNote` in `ghola.mjs`) and read
  * verbatim off `<ledgerRoot>/<subject>/operating-notes.md` by the host.
  * Read-only — reuses the per-ghola History panel's raw `pre.prompt`
- * treatment (no markdown rendering). Per the Ghola Mode design, these notes
+ * treatment (no markdown rendering). Per the War Mode design, these notes
  * are the lowest-precedence guidance layer and can never override core
  * functionality, hard rules, or mode mechanics.
  */
@@ -5078,7 +5078,7 @@ function renderWarRoomCounts(counts: NonNullable<WarRoomData['counts']>): HTMLEl
 }
 
 /**
- * Read-only control-indicator row mirroring the resolved mode.ghola
+ * Read-only control-indicator row mirroring the resolved mode.war
  * sub-toggles, plus a static "Hard-rules floor: enforced" chip. These are
  * status chips only — not editable here; the note below points to where
  * they're actually configured. Also hosts the Awaken All control and the
@@ -5107,7 +5107,7 @@ function renderWarRoomControls(
   card.appendChild(
     textEl(
       'div',
-      'These are configured in the mode.ghola module settings (Modules tab), not here.',
+      'These are configured in the mode.war module settings (Modules tab), not here.',
       'warroom-note',
     ),
   );

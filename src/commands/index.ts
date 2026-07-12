@@ -33,9 +33,9 @@ export function registerCommands(
         // if any write throws the terminal is never created.
         await deps.panel.writeAllAgentPromptFiles();
         await deps.session.launch();
-        // Ghola Mode: auto-open the War Room after launch when the mode is
+        // War Mode: auto-open the War Room after launch when the mode is
         // enabled and its `autoOpenWarRoom` sub-toggle is on. Defensive —
-        // getResolvedGholaSettings() returns null when mode.ghola is disabled,
+        // getResolvedGholaSettings() returns null when mode.war is disabled,
         // so the optional chain short-circuits. Wrapped so a War Room hiccup
         // never breaks the RUN path (the session has already launched).
         try {

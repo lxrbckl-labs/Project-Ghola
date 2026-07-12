@@ -156,7 +156,7 @@ export interface MerkleTestResult {
   testedBaseUrl: string;
 }
 
-// ─── War Room types (Ghola Mode) ──────────────────────────────────────────
+// ─── War Room types (War Mode) ──────────────────────────────────────────
 
 /**
  * A single mission record for the War Room, mirroring the `ghola.mjs`
@@ -249,7 +249,7 @@ export interface GholaDetail {
 }
 
 /**
- * The resolved `mode.ghola` sub-toggle snapshot the War Room renders in its
+ * The resolved `mode.war` sub-toggle snapshot the War Room renders in its
  * control zone. Values are resolved (schema defaults layered with user
  * overrides), never `(defaults)` placeholders.
  */
@@ -293,7 +293,7 @@ export interface WarRoomData {
   roster?: WarRoomGhola[];
   /** State tallies over the roster. */
   counts?: { active: number; dormant: number; archived: number; total: number };
-  /** Resolved `mode.ghola` sub-toggle values. */
+  /** Resolved `mode.war` sub-toggle values. */
   settings?: WarRoomSettings;
   /**
    * Kill-switch state read from `<workspace>/.nomeda/control.json`, when that
@@ -357,7 +357,7 @@ export interface WarRoomData {
    * Raw markdown body of the resolved subject's self-tuning
    * `operating-notes.md` (written by the CLI's `ghola note` command), for the
    * War Room's read-only "Operating Notes" display. Omitted when the file is
-   * absent, unreadable, or empty. Per the Ghola Mode design these notes are
+   * absent, unreadable, or empty. Per the War Mode design these notes are
    * the lowest-precedence guidance layer — they never override core
    * functionality, hard rules, or mode mechanics.
    */

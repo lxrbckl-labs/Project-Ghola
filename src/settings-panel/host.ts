@@ -43,7 +43,7 @@ const FEEDBACK_MODULE_ID = 'tool.feedback-log';
  * `getComposeSettings` for why the composer's normal "(defaults)" rendering is
  * insufficient for this module.
  */
-const GHOLA_MODE_ID = 'mode.ghola';
+const GHOLA_MODE_ID = 'mode.war';
 
 /** Disk schema version for the feedback log JSON file. */
 const FEEDBACK_SCHEMA_VERSION = 1;
@@ -874,26 +874,26 @@ export class SettingsPanel implements vscode.Disposable {
 
   /**
    * The settings dict handed to `composer.compose`. This is `getCurrentSettings`
-   * plus host-materialized `mode.ghola` defaults.
+   * plus host-materialized `mode.war` defaults.
    *
    * The composer renders a module's parameters as `(defaults)` when the user
-   * has no overrides, so a pristine Ghola Mode session would hide its four
+   * has no overrides, so a pristine War Mode session would hide its four
    * sub-toggles (autoOpenWarRoom / tournament / maxConcurrentGholas / dryRun)
    * from TPM — yet those values gate real autonomous behavior. To fix this we
-   * resolve `mode.ghola`'s schema defaults from the loaded manifest and layer
+   * resolve `mode.war`'s schema defaults from the loaded manifest and layer
    * any user overrides on top, so all four keys always render with concrete
    * values in the Session Manifest.
    *
-   * This is deliberately NARROW to `mode.ghola`: materializing defaults for
+   * This is deliberately NARROW to `mode.war`: materializing defaults for
    * every module would bloat every prompt. It also lives here (compose-time)
    * rather than in `getCurrentSettings` so preset save/apply and
    * modified-detection continue to see only genuine user overrides — the
    * injected defaults never masquerade as user configuration.
    */
   /**
-   * Whether Ghola Mode is on. Source of truth is the `mode.ghola::enabled`
+   * Whether War Mode is on. Source of truth is the `mode.war::enabled`
    * setting value (default false) in the module-settings store — NOT
-   * `loader.isEnabled`. mode.ghola is configured as an Agents configuration,
+   * `loader.isEnabled`. mode.war is configured as an Agents configuration,
    * not toggled as a module, so no ghola gate keys off loader state.
    */
   private isGholaEnabled(): boolean {
@@ -915,7 +915,7 @@ export class SettingsPanel implements vscode.Disposable {
     const resolved: Record<string, unknown> = {};
     for (const [key, field] of Object.entries(schema)) {
       // Skip fields without a declared default so we never render a literal
-      // "undefined"; every mode.ghola field currently declares one.
+      // "undefined"; every mode.war field currently declares one.
       if (field.default !== undefined) resolved[key] = field.default;
     }
     // User overrides win over schema defaults.
@@ -923,10 +923,10 @@ export class SettingsPanel implements vscode.Disposable {
     return { ...settings, [GHOLA_MODE_ID]: resolved };
   }
 
-  // ─── War Room (Ghola Mode) ────────────────────────────────────────────
+  // ─── War Room (War Mode) ────────────────────────────────────────────
 
   /**
-   * Resolve `mode.ghola`'s four sub-toggles to concrete values, always. Reads
+   * Resolve `mode.war`'s four sub-toggles to concrete values, always. Reads
    * the compose-time resolved settings (schema defaults layered with user
    * overrides) and coerces each key to its declared type with a hardcoded
    * fallback so the snapshot never carries `undefined`. Used both for the War
@@ -944,7 +944,7 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Resolved `mode.ghola` sub-toggles when the `mode.ghola::enabled` setting is
+   * Resolved `mode.war` sub-toggles when the `mode.war::enabled` setting is
    * on, else null.
    * The RUN path uses this to gate War Room auto-open: null (disabled) short-
    * circuits, and a truthy `autoOpenWarRoom` triggers the reveal.

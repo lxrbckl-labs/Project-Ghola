@@ -409,7 +409,7 @@ export function activate(context: vscode.ExtensionContext): void {
     await seedBuiltInConfigurations(context, configurationsStore, logger);
     await panel.applyDefaultOnStartup();
 
-    // Load-time ghola-ledger backfill. `mode.ghola::enabled` (an Agents
+    // Load-time ghola-ledger backfill. `mode.war::enabled` (an Agents
     // configuration tracked in the module-settings store, NOT a loader toggle)
     // can be true while its required `tool.ghola-ledger` module is left disabled
     // in the loader. The dependency is only pulled on the webview master-toggle
@@ -424,12 +424,12 @@ export function activate(context: vscode.ExtensionContext): void {
       WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
       {},
     );
-    const gholaEnabled = gholaFlat['mode.ghola::enabled'] === true;
+    const gholaEnabled = gholaFlat['mode.war::enabled'] === true;
     const ledgerHandle = loader.find('tool.ghola-ledger');
     if (gholaEnabled && ledgerHandle && !ledgerHandle.isEnabled) {
       await loader.enable('tool.ghola-ledger');
       logger.appendLine(
-        '[nomeda] ghola-ledger backfill: mode.ghola is enabled but tool.ghola-ledger was disabled; auto-enabled it',
+        '[nomeda] ghola-ledger backfill: mode.war is enabled but tool.ghola-ledger was disabled; auto-enabled it',
       );
     }
 
@@ -454,7 +454,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // ───── War Room ledger watchers (Ghola Mode) ────────────────────────
+  // ───── War Room ledger watchers (War Mode) ────────────────────────
   // Two-watcher scheme (mirrors loader.watchManifests' 250ms debounce):
   //   A (bootstrap): watches the workspace pointer file
   //     <workspaceFolder>/.nomeda/ledger-path. The launched `ghola` CLI writes

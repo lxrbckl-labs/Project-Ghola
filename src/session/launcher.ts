@@ -129,7 +129,16 @@ export class SessionLauncher {
     //      one-shot dispatch mode it is `promptOverride` — a self-contained
     //      prompt sent verbatim instead of the trigger word.
     const phaseTwoMessage = oneShot ? promptOverride : sessionCommand;
-    if (cliCommand) {
+    // Race-free trigger-word delivery: on bash (WSL/Linux) with a real CLI and a
+    // non-empty trigger word, pass the word as the CLI's positional prompt arg so
+    // `claude` submits it as turn 1 with no boot-delay race. One-shot dispatch, the
+    // pwsh/Windows shell, and the no-CLI shell path all keep the timed phase-2
+    // sendText below (a multi-KB one-shot prompt must never go on the command line).
+    const isBashShell = shellPath === '/bin/bash' || shellPath === '/usr/bin/bash';
+    const useArgPrompt = !oneShot && !!cliCommand && isBashShell && !!phaseTwoMessage;
+    if (useArgPrompt) {
+      terminal.sendText(`${cliCommand} ${this.shellQuote(phaseTwoMessage!)}`, true);
+    } else if (cliCommand) {
       terminal.sendText(cliCommand, true);
       if (phaseTwoMessage) {
         setTimeout(() => {
@@ -277,6 +286,15 @@ export class SessionLauncher {
     if (p === '~') return os.homedir();
     if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
     return p;
+  }
+
+  /**
+   * Wrap a string as a single bash single-quoted token, escaping any embedded
+   * single quote as '\'' so the CLI receives the value verbatim as one argument.
+   * Only used on the bash trigger-word path; pwsh has its own timed sendText.
+   */
+  private shellQuote(s: string): string {
+    return `'${s.replace(/'/g, "'\\''")}'`;
   }
 
   private printBanner(terminal: vscode.Terminal, banner: string): void {
