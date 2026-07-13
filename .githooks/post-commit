@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# .githooks/post-commit
+# Ghola release automation: after each commit, build + install the VSIX and
+# create the vX.Y.Z tag from VERSION (locally). You run `git push` to send the
+# commit + tag to origin - enable that in one step with push.followTags:
+#     git config push.followTags true
+#
+# Skip a single run with:   GHOLA_SKIP_HOOK=1 git commit ...
+#
+set -uo pipefail
+
+# --- guards -----------------------------------------------------------------
+[ -n "${GHOLA_SKIP_HOOK:-}" ] && { echo "[ghola-hook] GHOLA_SKIP_HOOK set - skipping."; exit 0; }
+[ -n "${GHOLA_HOOK_RUNNING:-}" ] && exit 0        # re-entrancy guard
+export GHOLA_HOOK_RUNNING=1
+
+log() { printf '[ghola-hook] %s\n' "$*"; }
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$REPO_ROOT" || exit 0
+
+# Only automate on a real branch (rebase / detached HEAD are skipped)
+BRANCH="$(git symbolic-ref --short -q HEAD || true)"
+[ -z "$BRANCH" ] && { log "detached HEAD - skipping."; exit 0; }
+
+# Need a VERSION file
+[ -f VERSION ] || { log "no VERSION file - skipping."; exit 0; }
+VER="$(tr -d ' \t\r\n' < VERSION)"
+[ -z "$VER" ] && { log "VERSION empty - skipping."; exit 0; }
+TAG="v$VER"
+
+# --- 1. build + package (required) -----------------------------------------
+if ! command -v npm >/dev/null 2>&1; then
+  log "npm not on PATH (GUI commit?) - skipping build/tag. Commit from a WSL shell to trigger automation."
+  exit 0
+fi
+
+BUILD_LOG="$(mktemp -t ghola-hook-XXXX.log)"
+log "packaging VSIX for v$VER (log: $BUILD_LOG)..."
+if npm run package >"$BUILD_LOG" 2>&1; then
+  log "package OK."
+else
+  log "PACKAGE FAILED - see $BUILD_LOG. Skipping install/tag."
+  exit 0
+fi
+
+# --- 2. install locally (best-effort) --------------------------------------
+if command -v code >/dev/null 2>&1; then
+  if code --install-extension ghola.vsix --force >>"$BUILD_LOG" 2>&1; then
+    log "extension installed (reload the VS Code window to pick it up)."
+  else
+    log "install step failed (see $BUILD_LOG) - continuing to tag."
+  fi
+else
+  log "'code' CLI not on PATH - skipped install, continuing to tag."
+fi
+
+# --- 3. tag from VERSION (only if new) -------------------------------------
+if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+  log "tag $TAG already exists - not re-tagging."
+else
+  if git tag -a "$TAG" -m "$TAG"; then
+    log "created tag $TAG - run 'git push' to send the commit + tag to origin."
+  else
+    log "failed to create tag $TAG."
+  fi
+fi
+
+exit 0

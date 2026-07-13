@@ -26,8 +26,8 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
-EXT_ID="local.nomeda"
-VSIX_NAME="nomeda.vsix"
+EXT_ID="local.ghola"
+VSIX_NAME="ghola.vsix"
 
 LOCAL_ONLY=0
 for arg in "$@"; do
