@@ -83,6 +83,13 @@ export class SessionLauncher {
     // subagents, so it is omitted in one-shot dispatch mode.
     const env: Record<string, string> = {
       GHOLA_ROOT: this.extensionPath,
+      // Deterministic input for the startup sequence: the extension's own
+      // semver, so the session can detect/report which Ghola build launched it.
+      GHOLA_VERSION: this.readExtensionVersion(),
+      // Deterministic input for the startup sequence: the current git branch
+      // of the repo the terminal is opening in (empty string when the
+      // effective work dir is not a git repo or git is unavailable).
+      GHOLA_BRANCH: this.readGitBranch(cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath),
       SWE_PERFORMANCE_CORES: String(cfg.get<number>('swe.performanceCores', 2)),
       SWE_EFFICIENCY_CORES: String(cfg.get<number>('swe.efficiencyCores', 1)),
       SWE_AGENT_COUNT: String(
@@ -186,6 +193,42 @@ export class SessionLauncher {
       return ['-NoLogo'];
     }
     return undefined;
+  }
+
+  /**
+   * Read the extension's own semver from its `package.json`, so the launched
+   * session has a deterministic version string to key off during startup.
+   * Falls back to `"unknown"` on any read/parse failure.
+   */
+  private readExtensionVersion(): string {
+    try {
+      const pkgPath = path.join(this.extensionPath, 'package.json');
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version?: string };
+      return pkg.version ?? 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Read the current git branch of the effective work dir, so the launched
+   * session has a deterministic branch name to key off during startup.
+   * Returns `""` when there is no dir, the dir is not a git repo, or git is
+   * unavailable — never throws.
+   */
+  private readGitBranch(dir: string | undefined): string {
+    if (!dir) return '';
+    try {
+      const result = childProcess.spawnSync('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+        encoding: 'utf8',
+      });
+      if (result.status === 0 && typeof result.stdout === 'string') {
+        return result.stdout.trim();
+      }
+      return '';
+    } catch {
+      return '';
+    }
   }
 
   /**
@@ -309,14 +352,24 @@ export class SessionLauncher {
   }
 
   private printBanner(terminal: vscode.Terminal, banner: string): void {
-    // sendText with shouldExecute=false would type into the prompt; we instead
-    // push the banner via echo so it appears as terminal output.
+    // A shell-backed terminal echoes every command sent via sendText, so
+    // emitting one echo per banner line surfaced six `echo "..."` command lines
+    // to the user. Instead, send ONE self-clearing command per shell: clear
+    // wipes the echoed command line, then a single printf/Write-Host renders the
+    // whole banner, leaving only the banner text in the terminal buffer.
     const isWin = os.platform() === 'win32';
     const lines = banner.split('\n');
-    for (const line of lines) {
-      const escaped = line.replace(/"/g, '`"');
-      const cmd = isWin ? `Write-Host "${escaped}"` : `echo "${line.replace(/"/g, '\\"')}"`;
-      terminal.sendText(cmd, true);
+    if (isWin) {
+      // pwsh: Clear-Host wipes the echoed command line; a single piped statement
+      // then writes each banner line. Double-quotes are escaped as `" for pwsh.
+      const arr = lines.map((l) => `"${l.replace(/"/g, '`"')}"`).join(',');
+      terminal.sendText(`Clear-Host; @(${arr}) | ForEach-Object { Write-Host $_ }`, true);
+    } else {
+      // bash: clear wipes the echoed command line; a single printf renders every
+      // banner line (%s\n per arg). Each line is single-quoted (via shellQuote)
+      // so its contents pass through verbatim.
+      const args = lines.map((l) => this.shellQuote(l)).join(' ');
+      terminal.sendText(`clear; printf '%s\\n' ${args}`, true);
     }
   }
 

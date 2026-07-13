@@ -1,8 +1,8 @@
 {
   "id": "tool.session-bootstrap",
   "name": "Session Bootstrap",
-  "version": "0.1.2",
-  "description": "Orchestrates the session-start sequence — config load, team allocation, branch detection, proactive-module consultation, ready signal — and renders the user-facing boot diagnostics.",
+  "version": "0.2.0",
+  "description": "Orchestrates the ordered, diagnostic-rendering session-start sequence — version, environment, team allocation, work-repo + branch sanity, ticket auto-detect, notes, mode detection, resume, ready — delegating each domain step to the relevant proactive module and rendering one [ghola] check/cross line per step before the first response.",
   "proactive": true,
   "category": "workflow",
   "kind": "capability",
@@ -16,13 +16,18 @@
       "steps": {
         "type": "keyValue",
         "label": "Steps",
-        "description": "User-managed list of session-start steps TPM runs in order before responding to the first user message. Each entry is a step name plus a one-line description of what the step does. Default seeds match the standard 5-step boot convention. Reorder by editing the kv-table; add custom steps for project-specific boot work; disable individual steps without deleting them.",
+        "description": "Ordered list of session-start steps TPM runs before responding to the first user message. Each entry is a step name plus a one-line instruction for what the step does and what it emits. The seeded defaults are the Ghola startup sequence (the analog of SWT's TPM Startup Sequence); domain steps delegate to the relevant proactive module and degrade gracefully when it is off. Reorder by editing the kv-table (declared order is run order); add custom steps for project-specific boot work; disable individual steps without deleting them.",
         "default": {
-          "config-load": { "value": "Read the session configuration file (or equivalent) and surface the active configuration.", "enabled": true },
-          "team-allocation": { "value": "Compute performance / efficiency / QA core counts and surface the team shape.", "enabled": true },
-          "branch-detection": { "value": "Detect the active git branch and base; cache for downstream proactive modules.", "enabled": true },
-          "proactive-modules": { "value": "Consult every enabled proactive module in turn (fastpath-check, obsidian-notes, setup-walkthrough, active session mode (mode.cd, mode.ticket-work, or mode.support), session-handoff, lenses auto-detection triggers). Each module's session-start work runs here.", "enabled": true },
-          "ready": { "value": "Emit a single 'Ready' line signaling the boot phase is complete before responding to the first user message.", "enabled": true }
+          "version": { "value": "Resolve the extension version from $GHOLA_VERSION (fallback: read $GHOLA_ROOT/VERSION, then $GHOLA_ROOT/package.json). Emit '[ghola] ✓ Ghola v{version}' on success or '[ghola] ✗ Version (unknown)'.", "enabled": true },
+          "environment": { "value": "Confirm $GHOLA_ROOT is set and the three agent prompt files ($GHOLA_TPM_PROMPT_FILE, $GHOLA_SWE_PROMPT_FILE, $GHOLA_QA_PROMPT_FILE) resolve. Emit '[ghola] ✓ Environment: GHOLA_ROOT set, agent prompt files resolved'.", "enabled": true },
+          "team-allocation": { "value": "Report the team shape from the SWE_*/QA_* env vars; delegate the dispatch policy detail to tool.core-allocation when enabled. Emit '[ghola] ✓ Team: {perf} performance + {eff} efficiency + {qa} QA (perf={SWE_PERFORMANCE_MODEL}, eff={SWE_EFFICIENCY_MODEL}, qa={QA_MODEL})'.", "enabled": true },
+          "work-repo": { "value": "Run pwd and check for a git work tree (git rev-parse --is-inside-work-tree). If not a repo, emit the '[ghola] ✗ Work repo' guidance line and continue (ticket/notes/branch steps then degrade). If a repo, emit '[ghola] ✓ Work repo: {basename} ({cwd})'.", "enabled": true },
+          "branch": { "value": "Prefer $GHOLA_BRANCH; fall back to git rev-parse --abbrev-ref HEAD. Emit '[ghola] ✓ Branch: {branch}' or, when cwd is not a git repo, '[ghola] ✓ Branch: none (not a git repo)'.", "enabled": true },
+          "ticket": { "value": "Delegate to mode.ticket-work when enabled (it derives the Jira key from the branch name and pulls via integration.atlassian-suite). Emit '[ghola] ✓ Ticket: {KEY} (pulled from Jira)' / '[ghola] ✗ Ticket: {KEY} (Jira unavailable — paste the description)' / '[ghola] ✓ Ticket: none detected from branch'. When ticket-work is off, emit '[ghola] ✓ Ticket: (ticket-work module off)'.", "enabled": true },
+          "notes": { "value": "Delegate to tool.obsidian-notes (vault discovery) plus ticket-work (notes-file create/read). Emit '[ghola] ✓ Notes: {Project}/{Number}.md created' or '... resuming from {date}'; skip cleanly when there is no vault or no ticket.", "enabled": true },
+          "mode-detection": { "value": "Detect planning (0 commits ahead of base) / review (branch commits authored by someone other than the current git user) / author (your own commits) via git log <base>..HEAD --format=%ae versus git config user.email; base defaults to main. Emit '[ghola] ✓ Mode: planning|review|author'. When the mode is planning or review AND tool.lenses is enabled, hand off to it to kick the lens flow.", "enabled": true },
+          "resume": { "value": "Delegate to tool.session-handoff to surface the most-recent handoff and WAIT (do not auto-continue), plus any feedback the enabled modules surface. Emit '[ghola] ✓ Resume: {date} handoff found' or '[ghola] ✓ Resume: fresh session'.", "enabled": true },
+          "ready": { "value": "Emit '[ghola] ✓ Ready', then a concise natural-language orientation paragraph (version, work repo, branch, ticket + status, detected mode, where things left off) and end by asking what the user wants to work on.", "enabled": true }
         },
         "optionalValue": false,
         "optionalEnabled": true,
@@ -31,19 +36,19 @@
       "outputFormat": {
         "type": "string",
         "label": "Output Format",
-        "description": "Format for the user-facing boot diagnostics line(s). detailed emits [ghola] check step-name — detail per step. compact emits a single line summarizing the full boot phase. silent emits nothing (steps still run, but the user sees only TPM's first response). Default detailed is the most informative.",
+        "description": "Format for the user-facing boot diagnostics. detailed (default) emits one line per step in the shared contract shape — '[ghola] ✓ <desc>' on success or '[ghola] ✗ <desc> (<reason>)' on failure. compact emits a single line summarizing the full boot phase. silent emits nothing (steps still run and their side effects still apply, but the user sees only the orientation paragraph). detailed is the most informative.",
         "default": "detailed"
       },
       "failureBehavior": {
         "type": "string",
         "label": "Failure Behavior",
-        "description": "How TPM responds when a step fails (e.g., a proactive module errors, config file is missing). warn-and-continue emits a warning marker for the failed step and proceeds with subsequent steps. halt stops the boot sequence and refuses to respond until the user addresses the failure. retry-once attempts the failed step a second time before falling back to warn-and-continue. Default warn-and-continue keeps sessions usable in degraded states.",
+        "description": "How TPM responds when a step fails (e.g., a proactive module errors, a git command fails, a file is missing). warn-and-continue (default) prints the cross line for the failed step and proceeds to the next step — the hard rule is that the sequence never stalls on a failed step. halt is available for critical setups but must never block a git/ticket/notes step whose downstream degrades gracefully. retry-once attempts the failed step a second time before falling back to warn-and-continue.",
         "default": "warn-and-continue"
       },
       "includeTimings": {
         "type": "boolean",
         "label": "Include Timings",
-        "description": "When on, each step's elapsed time is appended to the boot diagnostics line (e.g. [ghola] check proactive-modules — 312ms). Useful for diagnosing slow boots. When off, no timings are shown. Off is the typical default for normal use; turn on temporarily when investigating slow startups.",
+        "description": "When on, each step's elapsed time is appended to its boot diagnostics line (e.g. '[ghola] ✓ Branch: main — 48ms'). Useful for diagnosing slow boots. When off (the typical default), no timings are shown; turn it on temporarily when investigating slow startups.",
         "default": false
       }
     }
