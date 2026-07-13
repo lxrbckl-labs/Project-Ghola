@@ -1,7 +1,7 @@
 {
   "id": "mode.cd",
   "name": "Directory Navigation",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Scopes the session strictly to the current working directory as a named project, resisting drift to other paths and surfacing the project's latest handoff on resume.",
   "proactive": true,
   "category": "session-mode",
@@ -23,20 +23,50 @@
       "projectNoteSections": {
         "type": "string",
         "label": "Project Note Sections",
-        "description": "Comma-separated list of top-level sections the project notes file should contain, in the order TPM writes them when creating or updating the file. Trim entries you do not use or extend with custom sections to taste. Note that Session Handoff in this list is the heading the tool.session-handoff module manages — Directory Navigation mode ensures the heading exists but defers the writing of that block to that module.",
+        "description": "Comma-separated list of top-level sections the project notes file should contain, in the order TPM writes them when creating or updating the file. Trim entries you do not use or extend with custom sections to taste. Note that Session Handoff in this list is the heading the tool.session-handoff module manages — Directory Navigation mode ensures the heading exists but defers the writing of that block to that module. The section structure, YAML frontmatter, update discipline, and per-type templates are defined authoritatively by tool.obsidian-notes; this list only selects which of that module's cd-project catalog sections appear and in what order.",
         "default": "Project Overview, Sessions, Decisions, Open Questions, Session Handoff"
       },
       "autoCreateNotesFile": {
         "type": "boolean",
         "label": "Auto Create Notes File",
-        "description": "When on, TPM auto-creates the project notes file at the vault's projects subfolder keyed by the cwd basename on first run if it does not exist. When off, TPM only reads existing files and surfaces a one-line notice when the project has no notes yet. Leave on for low-friction onboarding; turn off if you prefer to create project notes files by hand.",
+        "description": "When on, TPM auto-creates the project notes file at the vault's projects subfolder keyed by the project's single home on first run if it does not exist. When off, TPM only reads existing files and surfaces a one-line notice when the project has no notes yet. Leave on for low-friction onboarding; turn off if you prefer to create project notes files by hand.",
         "default": true
       },
       "projectNameSource": {
         "type": "string",
         "label": "Project Name Source",
-        "description": "Controls how TPM derives the project name at session start. Set to cwd-basename to use the cwd's directory name (the SWT default and the predictable choice), or git-remote to use the basename of the current git remote origin when the cwd is a git repo. When git-remote is set and the cwd is not a git repo or the remote lookup fails, TPM falls back to cwd-basename silently.",
-        "default": "cwd-basename"
+        "description": "Controls how TPM derives the project's canonical identity at session start. Set to git-remote (the default) to derive a lowercase canonical key from the cwd's origin remote (basename of the remote URL, .git stripped), so clones of one repo in separate directories collapse to a single home; TPM falls back to the lowercase cwd basename when there is no remote or the lookup fails. Set to cwd-basename to force a per-directory key from the lowercase cwd basename (no clone collapse).",
+        "default": "git-remote"
+      },
+      "projectHomeName": {
+        "type": "string",
+        "label": "Project Home Name",
+        "description": "Optional explicit name for this project's single home file or directory under the projects subfolder. This is the precedence-0 override: when set it wins over all automatic naming (an existing on-disk home matched by cwd, canonical, or nickname affinity; the canonical key; and the cwd basename). Use it to pin a home name in cases affinity cannot infer, for example a greenfield project you want under a specific name, or a home whose filename shares no token with the cwd or remote. It is NOT needed for the common rename case: a home whose filename already matches the cwd basename is preserved automatically by the precedence-1 affinity rule. Leave blank to let TPM resolve the home name via the 1-then-2-then-3 precedence.",
+        "default": ""
+      },
+      "consolidateSiblings": {
+        "type": "boolean",
+        "label": "Consolidate Sibling Notes",
+        "description": "When on, at session start TPM scans the projects subfolder for sibling files that belong to this project (other clones of the same repo, and topical sidecar files about the same project) and offers, in one prompt, to fold their content into the single home; you approve first, and old files are kept with a pointer, never deleted. Cross-team comms (_AgentComms) and any underscore-prefixed vault area are never scanned. Turn off to skip sibling detection and the consolidation offer; single-home keying still applies.",
+        "default": true
+      },
+      "overflowThresholdLines": {
+        "type": "number",
+        "label": "Overflow Threshold (lines)",
+        "description": "When a single-file home grows past this many lines, TPM proposes promoting it to a directory home and splitting large topical bodies into subfiles (proposed once per session, never done silently). Set to 0 to disable the line-based trigger.",
+        "default": 500
+      },
+      "overflowThresholdKb": {
+        "type": "number",
+        "label": "Overflow Threshold (KB)",
+        "description": "When a single-file home grows past this many kilobytes, TPM proposes promoting it to a directory home (whichever of the line or KB threshold trips first). Set to 0 to disable the size-based trigger.",
+        "default": 50
+      },
+      "projectNicknames": {
+        "type": "string",
+        "label": "Project Nicknames",
+        "description": "Optional comma-separated extra name tokens used when detecting topical sidecar files that belong to this project, on top of the home name itself. Useful when files are named after a short nickname rather than the full project name, for example ghola for a home named Project-Ghola. Leave blank to match on the home name only.",
+        "default": ""
       }
     }
   }

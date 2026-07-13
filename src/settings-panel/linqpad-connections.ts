@@ -7,7 +7,7 @@
 //
 // Resolution order:
 //   1. `override` argument (caller-passed, typically the
-//      `nomeda.linqpadConnectionsPath` VS Code config value, if non-empty).
+//      `ghola.linqpadConnectionsPath` VS Code config value, if non-empty).
 //   2. `$APPDATA/LINQPad/ConnectionsV2.xml` — present when VS Code is running
 //      under Windows (or under a WSL distro that has APPDATA propagated).
 //   3. `/mnt/c/Users/$USER/AppData/Roaming/LINQPad/ConnectionsV2.xml` — the

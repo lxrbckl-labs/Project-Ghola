@@ -16,7 +16,7 @@ const copyStylesPlugin = {
         fs.mkdirSync(path.dirname(dst), { recursive: true });
         fs.copyFileSync(src, dst);
       } catch (err) {
-        console.warn('[nomeda] failed to copy styles.css:', err.message);
+        console.warn('[ghola] failed to copy styles.css:', err.message);
       }
     });
   },
@@ -51,10 +51,10 @@ async function run() {
     const ctxExt = await esbuild.context(extensionConfig);
     const ctxWeb = await esbuild.context(webviewConfig);
     await Promise.all([ctxExt.watch(), ctxWeb.watch()]);
-    console.log('[nomeda] watching...');
+    console.log('[ghola] watching...');
   } else {
     await Promise.all([esbuild.build(extensionConfig), esbuild.build(webviewConfig)]);
-    console.log('[nomeda] build complete');
+    console.log('[ghola] build complete');
   }
 }
 

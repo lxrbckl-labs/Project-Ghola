@@ -142,16 +142,16 @@ export class SettingsPanel implements vscode.Disposable {
     );
 
     // Mirror native VS Code settings edits back into the webview so the agent
-    // subpages stay in sync with `nomeda.*` config changes made outside the panel.
+    // subpages stay in sync with `ghola.*` config changes made outside the panel.
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((ev) => {
-        if (ev.affectsConfiguration('nomeda')) {
+        if (ev.affectsConfiguration('ghola')) {
           this.postSettings();
         }
         // When the LINQPad connections override path changes, re-probe and
         // re-broadcast so any open keyValue dropdowns refresh without a manual
         // refresh click.
-        if (ev.affectsConfiguration('nomeda.linqpadConnectionsPath')) {
+        if (ev.affectsConfiguration('ghola.linqpadConnectionsPath')) {
           this.broadcastLinqpadConnections();
         }
       }),
@@ -184,8 +184,8 @@ export class SettingsPanel implements vscode.Disposable {
       return;
     }
     const panel = vscode.window.createWebviewPanel(
-      'nomedaSettings',
-      'Nomeda',
+      'gholaSettings',
+      'Ghola',
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -201,7 +201,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   /**
    * Adopt a webview panel that VS Code handed back when restoring a serialized
-   * 'nomedaSettings' panel after a window reload (see the
+   * 'gholaSettings' panel after a window reload (see the
    * `registerWebviewPanelSerializer` registration in `extension.ts`). The
    * restored panel arrives without our webview options or HTML, so re-apply the
    * same options the create path uses, then route it through the shared
@@ -295,7 +295,7 @@ export class SettingsPanel implements vscode.Disposable {
   <head>
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="${csp}" />
-    <title>Nomeda</title>
+    <title>Ghola</title>
     <style>${await this.loadStyles()}</style>
   </head>
   <body>
@@ -369,7 +369,7 @@ export class SettingsPanel implements vscode.Disposable {
         this.postComposedPrompt(msg.agent);
         break;
       case 'reloadModules':
-        await vscode.commands.executeCommand('nomeda.reloadModules');
+        await vscode.commands.executeCommand('ghola.reloadModules');
         break;
       case 'copyNewModulePrompt':
         await this.copyNewModulePrompt();
@@ -378,10 +378,10 @@ export class SettingsPanel implements vscode.Disposable {
         await this.uploadModule();
         break;
       case 'openSession':
-        await vscode.commands.executeCommand('nomeda.openSession');
+        await vscode.commands.executeCommand('ghola.openSession');
         break;
       case 'updateExtension':
-        await vscode.commands.executeCommand('nomeda.updateExtension');
+        await vscode.commands.executeCommand('ghola.updateExtension');
         break;
       case 'requestModuleDetail':
         await this.postModuleDetail(msg.moduleId);
@@ -437,16 +437,16 @@ export class SettingsPanel implements vscode.Disposable {
         await this.runOnFeedbackChain(() => this.applyFeedbackDelete(msg.id));
         break;
       case 'atlassianSetJiraToken':
-        await vscode.commands.executeCommand('nomeda.atlassianSuite.setJiraToken');
+        await vscode.commands.executeCommand('ghola.atlassianSuite.setJiraToken');
         break;
       case 'atlassianClearJiraToken':
-        await vscode.commands.executeCommand('nomeda.atlassianSuite.clearJiraToken');
+        await vscode.commands.executeCommand('ghola.atlassianSuite.clearJiraToken');
         break;
       case 'atlassianSetBitbucketToken':
-        await vscode.commands.executeCommand('nomeda.atlassianSuite.setBitbucketToken');
+        await vscode.commands.executeCommand('ghola.atlassianSuite.setBitbucketToken');
         break;
       case 'atlassianClearBitbucketToken':
-        await vscode.commands.executeCommand('nomeda.atlassianSuite.clearBitbucketToken');
+        await vscode.commands.executeCommand('ghola.atlassianSuite.clearBitbucketToken');
         break;
       case 'atlassianTokenStatusRequested':
         await this.broadcastAtlassianTokenStatus();
@@ -462,7 +462,7 @@ export class SettingsPanel implements vscode.Disposable {
         // when done, which the constructor subscription above will broadcast.
         // We do NOT call bridge.validate() directly so that all telemetry / hooks
         // stay routed through the single command path.
-        await vscode.commands.executeCommand('nomeda.atlassianSuite.validateToken');
+        await vscode.commands.executeCommand('ghola.atlassianSuite.validateToken');
         break;
       case 'merkleTestConnection':
         await this.runMerkleTestConnection(msg.baseUrl);
@@ -512,8 +512,8 @@ export class SettingsPanel implements vscode.Disposable {
   // ─── CLI alias registry ──────────────────────────────────────────────
 
   /**
-   * Validate every entry, then persist to `nomeda.cliAliases` and rewrite the
-   * managed block in `nomeda.aliasFile`. Surfaces validation and fs errors
+   * Validate every entry, then persist to `ghola.cliAliases` and rewrite the
+   * managed block in `ghola.aliasFile`. Surfaces validation and fs errors
    * back to the webview via `aliasesSaved`.
    */
   private async saveAliases(aliases: CliAlias[]): Promise<void> {
@@ -526,10 +526,10 @@ export class SettingsPanel implements vscode.Disposable {
     }
     try {
       await vscode.workspace
-        .getConfiguration('nomeda')
+        .getConfiguration('ghola')
         .update('cliAliases', aliases, vscode.ConfigurationTarget.Global);
       const aliasFile = vscode.workspace
-        .getConfiguration('nomeda')
+        .getConfiguration('ghola')
         .get<string>('aliasFile', '~/.bashrc');
       await syncAliasFile(aliasFile, aliases);
       this.post({ type: 'aliasesSaved', ok: true });
@@ -545,7 +545,7 @@ export class SettingsPanel implements vscode.Disposable {
    */
   private postAliases(): void {
     if (!this.panel) return;
-    const cfg = vscode.workspace.getConfiguration('nomeda');
+    const cfg = vscode.workspace.getConfiguration('ghola');
     const aliases = cfg.get<CliAlias[]>('cliAliases', []);
     const selectedAlias = cfg.get<string>('selectedAlias', '');
     const aliasFile = cfg.get<string>('aliasFile', '~/.bashrc');
@@ -767,7 +767,7 @@ export class SettingsPanel implements vscode.Disposable {
   private postSettings(): void {
     if (!this.panel) return;
     const values = this.context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
-    const cfg = vscode.workspace.getConfiguration('nomeda');
+    const cfg = vscode.workspace.getConfiguration('ghola');
     const cliCommand = cfg.get<string>('cliCommand', 'claude');
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate');
     const swe = {
@@ -822,10 +822,10 @@ export class SettingsPanel implements vscode.Disposable {
   /**
    * Compose the TPM, SWE, and QA prompts with the current settings and write
    * each to a workspace-scoped temp-file location so the launched terminal
-   * can read them via the `$NOMEDA_TPM_PROMPT_FILE`, `$NOMEDA_SWE_PROMPT_FILE`,
-   * and `$NOMEDA_QA_PROMPT_FILE` env vars. Filenames are derived from a hash
+   * can read them via the `$GHOLA_TPM_PROMPT_FILE`, `$GHOLA_SWE_PROMPT_FILE`,
+   * and `$GHOLA_QA_PROMPT_FILE` env vars. Filenames are derived from a hash
    * of the workspace folder path (see `resolveAgentPromptFilePath`) so
-   * concurrent Nomeda sessions in different VS Code windows cannot collide.
+   * concurrent Ghola sessions in different VS Code windows cannot collide.
    * Within a single workspace the paths are stable across launches — repeated
    * invocations overwrite the previous prompts cleanly.
    *
@@ -978,12 +978,12 @@ export class SettingsPanel implements vscode.Disposable {
    * the webview.
    *
    * Pointer resolution: the launched `ghola` CLI writes the absolute ledger-
-   * root path to `<workspaceFolder>/.nomeda/ledger-path`. The extension host
+   * root path to `<workspaceFolder>/.ghola/ledger-path`. The extension host
    * has no vault path, so it reads that pointer to learn where to look. When
    * there is no workspace folder, no pointer file, an empty pointer, a ledger
    * dir that no longer exists, or no subject directories, we post
    * `{ empty: true }` — plus `control` when a workspace resolved and
-   * `.nomeda/control.json` has recognized fields, so the Awaken-All /
+   * `.ghola/control.json` has recognized fields, so the Awaken-All /
    * Declare-Done / resume / directive banners can still render pre-ledger.
    *
    * Parsing is done directly in TS (no child_process): a small self-contained
@@ -1054,7 +1054,7 @@ export class SettingsPanel implements vscode.Disposable {
     const control = await this.readControlState(folder.uri.fsPath);
     const emptyData: WarRoomData = { empty: true, ...(control ? { control } : {}) };
 
-    const pointerPath = path.join(folder.uri.fsPath, '.nomeda', 'ledger-path');
+    const pointerPath = path.join(folder.uri.fsPath, '.ghola', 'ledger-path');
     let root: string;
     try {
       root = (await fs.readFile(pointerPath, 'utf-8')).trim();
@@ -1110,7 +1110,7 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Read `<workspace>/.nomeda/control.json` and return its full resolved
+   * Read `<workspace>/.ghola/control.json` and return its full resolved
    * shape (awaken-all fields plus the resume/directive/declare-done fields),
    * or `undefined` when the file is absent, unparseable, or parses to an
    * empty object. Never throws.
@@ -1132,7 +1132,7 @@ export class SettingsPanel implements vscode.Disposable {
   private async readControlState(
     workspacePath: string,
   ): Promise<NonNullable<WarRoomData['control']> | undefined> {
-    const controlPath = path.join(workspacePath, '.nomeda', 'control.json');
+    const controlPath = path.join(workspacePath, '.ghola', 'control.json');
     try {
       const raw = await fs.readFile(controlPath, 'utf-8');
       const parsed = JSON.parse(raw) as {
@@ -1263,11 +1263,11 @@ export class SettingsPanel implements vscode.Disposable {
    * Serialize a control.json read-modify-write against concurrent writers.
    *
    * The host's War Room buttons and the `ghola` CLI's `*-ack` commands both do a
-   * full-file read-modify-OVERWRITE of `<workspace>/.nomeda/control.json`. Without
+   * full-file read-modify-OVERWRITE of `<workspace>/.ghola/control.json`. Without
    * a shared lock, two writers read the same "before" state and the later write
    * clobbers the earlier one (a lost kill-switch, a lost escalation resolve). This
    * helper implements the EXACT lock protocol the CLI uses (`scripts/ghola.mjs`
-   * `acquireControlLock`) on the co-located `<workspace>/.nomeda/control.lock`, so
+   * `acquireControlLock`) on the co-located `<workspace>/.ghola/control.lock`, so
    * host and CLI mutually exclude. The protocol is ATOMIC and ownership-tokened -
    * there is no blind unlink that could delete a live lock:
    *   - Acquire: exclusive create via `fs.open(path, 'wx')`, then write a unique
@@ -1297,8 +1297,8 @@ export class SettingsPanel implements vscode.Disposable {
     workspacePath: string,
     fn: () => Promise<void>,
   ): Promise<void> {
-    const nomedaDir = path.join(workspacePath, '.nomeda');
-    const lockPath = path.join(nomedaDir, 'control.lock');
+    const gholaDir = path.join(workspacePath, '.ghola');
+    const lockPath = path.join(gholaDir, 'control.lock');
     const timeoutMs = 2000;
     const staleMs = 5000;
     const backoffMs = 20;
@@ -1310,7 +1310,7 @@ export class SettingsPanel implements vscode.Disposable {
       new Promise((resolve) => setTimeout(resolve, ms));
 
     try {
-      await fs.mkdir(nomedaDir, { recursive: true });
+      await fs.mkdir(gholaDir, { recursive: true });
     } catch {
       // Directory creation failure is surfaced when fn's own write fails; do not
       // block lock acquisition on it.
@@ -1398,7 +1398,7 @@ export class SettingsPanel implements vscode.Disposable {
    * observes a half-written file: it sees either the OLD complete contents or
    * the NEW complete contents, never a truncated blob that would be misread as
    * "no control active". The temp name (`<filePath>.tmp-<pid>-<rand>`)
-   * deliberately does NOT match the literal `.nomeda/control.json` path the
+   * deliberately does NOT match the literal `.ghola/control.json` path the
    * control watcher observes, so creating/renaming it triggers no spurious War
    * Room refresh. The temp file is unlinked in a finally so a failed rename
    * leaves no litter behind (after a successful rename the unlink is a harmless
@@ -1416,14 +1416,14 @@ export class SettingsPanel implements vscode.Disposable {
 
   /**
    * Write the emergency "Awaken All" request into
-   * `<workspace>/.nomeda/control.json`: `{ awakenAll: true, requestedAt }`.
+   * `<workspace>/.ghola/control.json`: `{ awakenAll: true, requestedAt }`.
    * This is a read-modify-write (matching `requestGholaResumeMission` /
    * `requestGholaDirective`): the existing file (if any) is read first and
    * every other field (`resumeMission`, `directive`, their timestamps,
    * `acknowledgedAt`, etc.) is preserved verbatim; only `awakenAll` and
    * `requestedAt` are overwritten. This matters because an operator can click
    * Awaken All while a resume or directive request is still pending-unacked,
-   * and a fresh-object write would silently clobber those. Creates `.nomeda/`
+   * and a fresh-object write would silently clobber those. Creates `.ghola/`
    * if missing and never deletes the file — this is the host's own
    * extension-owned state file. Wrapped in try/catch so a write failure never
    * throws out of the message handler. Re-posts War Room data afterwards so
@@ -1434,9 +1434,9 @@ export class SettingsPanel implements vscode.Disposable {
     if (!folder) return;
     try {
       await this.withControlLock(folder.uri.fsPath, async () => {
-      const nomedaDir = path.join(folder.uri.fsPath, '.nomeda');
-      await fs.mkdir(nomedaDir, { recursive: true });
-      const controlPath = path.join(nomedaDir, 'control.json');
+      const gholaDir = path.join(folder.uri.fsPath, '.ghola');
+      await fs.mkdir(gholaDir, { recursive: true });
+      const controlPath = path.join(gholaDir, 'control.json');
 
       // Read-modify-write: start from whatever is already on disk (tolerant
       // of a missing/unparseable file — treat that as an empty object) so
@@ -1468,12 +1468,12 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Write a "Resume mission" request into `<workspace>/.nomeda/control.json`:
+   * Write a "Resume mission" request into `<workspace>/.ghola/control.json`:
    * `{ resumeMission: id, resumeRequestedAt }`. This is a read-modify-write —
    * the existing file (if any) is read first and every other field
    * (`awakenAll`, `requestedAt`, `acknowledgedAt`, and any prior resume
    * fields) is preserved verbatim; only `resumeMission` and
-   * `resumeRequestedAt` are overwritten. Creates `.nomeda/` if missing and
+   * `resumeRequestedAt` are overwritten. Creates `.ghola/` if missing and
    * never deletes the file — this is the host's own extension-owned state
    * file. Wrapped in try/catch so a write failure never throws out of the
    * message handler. Re-posts War Room data afterwards so the picker shows
@@ -1484,9 +1484,9 @@ export class SettingsPanel implements vscode.Disposable {
     if (!folder) return;
     try {
       await this.withControlLock(folder.uri.fsPath, async () => {
-      const nomedaDir = path.join(folder.uri.fsPath, '.nomeda');
-      await fs.mkdir(nomedaDir, { recursive: true });
-      const controlPath = path.join(nomedaDir, 'control.json');
+      const gholaDir = path.join(folder.uri.fsPath, '.ghola');
+      await fs.mkdir(gholaDir, { recursive: true });
+      const controlPath = path.join(gholaDir, 'control.json');
 
       // Read-modify-write: start from whatever is already on disk (tolerant
       // of a missing/unparseable file — treat that as an empty object) so
@@ -1518,12 +1518,12 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Write a god-console directive into `<workspace>/.nomeda/control.json`:
+   * Write a god-console directive into `<workspace>/.ghola/control.json`:
    * `{ directive: text, directiveRequestedAt }`. Read-modify-write, mirroring
    * `requestGholaResumeMission`: the existing file (if any) is read first and
    * every other field (`awakenAll`, `resumeMission`, prior directive fields,
    * etc.) is preserved verbatim; only `directive` and `directiveRequestedAt`
-   * are overwritten. Creates `.nomeda/` if missing and never deletes the
+   * are overwritten. Creates `.ghola/` if missing and never deletes the
    * file. Wrapped in try/catch so a write failure never throws out of the
    * message handler. Re-posts War Room data afterwards so the pending
    * directive is shown.
@@ -1533,9 +1533,9 @@ export class SettingsPanel implements vscode.Disposable {
     if (!folder) return;
     try {
       await this.withControlLock(folder.uri.fsPath, async () => {
-      const nomedaDir = path.join(folder.uri.fsPath, '.nomeda');
-      await fs.mkdir(nomedaDir, { recursive: true });
-      const controlPath = path.join(nomedaDir, 'control.json');
+      const gholaDir = path.join(folder.uri.fsPath, '.ghola');
+      await fs.mkdir(gholaDir, { recursive: true });
+      const controlPath = path.join(gholaDir, 'control.json');
 
       let existing: Record<string, unknown> = {};
       try {
@@ -1564,13 +1564,13 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Write a "Declare Done" request into `<workspace>/.nomeda/control.json`:
+   * Write a "Declare Done" request into `<workspace>/.ghola/control.json`:
    * `{ declareDone: id, declareDoneRequestedAt }`. Read-modify-write,
    * mirroring `requestGholaResumeMission` / `requestGholaDirective`: the
    * existing file (if any) is read first and every other field (`awakenAll`,
    * `resumeMission`, `directive`, prior declareDone fields, etc.) is preserved
    * verbatim; only `declareDone` and `declareDoneRequestedAt` are overwritten.
-   * Creates `.nomeda/` if missing and never deletes the file. Wrapped in
+   * Creates `.ghola/` if missing and never deletes the file. Wrapped in
    * try/catch so a write failure never throws out of the message handler.
    * Re-posts War Room data afterwards so the mission header shows the
    * "Declaring done..." pending indicator in place of the button.
@@ -1580,9 +1580,9 @@ export class SettingsPanel implements vscode.Disposable {
     if (!folder) return;
     try {
       await this.withControlLock(folder.uri.fsPath, async () => {
-      const nomedaDir = path.join(folder.uri.fsPath, '.nomeda');
-      await fs.mkdir(nomedaDir, { recursive: true });
-      const controlPath = path.join(nomedaDir, 'control.json');
+      const gholaDir = path.join(folder.uri.fsPath, '.ghola');
+      await fs.mkdir(gholaDir, { recursive: true });
+      const controlPath = path.join(gholaDir, 'control.json');
 
       let existing: Record<string, unknown> = {};
       try {
@@ -1612,7 +1612,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   /**
    * APPEND an escalation-resolution request into the queue in
-   * `<workspace>/.nomeda/control.json`:
+   * `<workspace>/.ghola/control.json`:
    * `{ escalationResolve: [...prior, { id, subject, decision }], escalationResolveRequestedAt }`.
    * Read-modify-write, mirroring `requestGholaResumeMission` /
    * `requestGholaDirective` / `requestGholaDeclareDone`: the existing file (if
@@ -1624,7 +1624,7 @@ export class SettingsPanel implements vscode.Disposable {
    * earlier one is still pending-unacked no longer clobbers the first (the
    * clobber bug this fixes). A prior queued entry with the same id+subject is
    * replaced in place rather than duplicated, so re-clicking a decision updates
-   * it instead of stacking. Creates `.nomeda/` if missing and never deletes the
+   * it instead of stacking. Creates `.ghola/` if missing and never deletes the
    * file. Wrapped in try/catch so a write failure never throws out of the
    * message handler. Re-posts War Room data afterwards so the escalation shows a
    * pending indicator.
@@ -1638,9 +1638,9 @@ export class SettingsPanel implements vscode.Disposable {
     if (!folder) return;
     try {
       await this.withControlLock(folder.uri.fsPath, async () => {
-      const nomedaDir = path.join(folder.uri.fsPath, '.nomeda');
-      await fs.mkdir(nomedaDir, { recursive: true });
-      const controlPath = path.join(nomedaDir, 'control.json');
+      const gholaDir = path.join(folder.uri.fsPath, '.ghola');
+      await fs.mkdir(gholaDir, { recursive: true });
+      const controlPath = path.join(gholaDir, 'control.json');
 
       let existing: Record<string, unknown> = {};
       try {
@@ -1688,7 +1688,7 @@ export class SettingsPanel implements vscode.Disposable {
   /**
    * Read a single ghola's `.md` file for the War Room drill-in view and post
    * a `gholaDetail` message. Resolves the ledger root the same way
-   * `buildWarRoomData` does (via the `.nomeda/ledger-path` pointer); when
+   * `buildWarRoomData` does (via the `.ghola/ledger-path` pointer); when
    * there is no workspace, no pointer, or no ledger dir, posts an
    * absent-flagged detail rather than throwing. Looks in the subject dir
    * first, then falls back to `_archive/<subject>/` (mirrors
@@ -1718,7 +1718,7 @@ export class SettingsPanel implements vscode.Disposable {
         this.post({ type: 'gholaDetail', data: emptyDetail });
         return;
       }
-      const pointerPath = path.join(folder.uri.fsPath, '.nomeda', 'ledger-path');
+      const pointerPath = path.join(folder.uri.fsPath, '.ghola', 'ledger-path');
       let root: string;
       try {
         root = (await fs.readFile(pointerPath, 'utf-8')).trim();
@@ -2042,13 +2042,13 @@ export class SettingsPanel implements vscode.Disposable {
   // ─── Module clipboard + upload ────────────────────────────────────────
 
   /**
-   * Copy the user-configurable `nomeda.newModulePrompt` text to the system
+   * Copy the user-configurable `ghola.newModulePrompt` text to the system
    * clipboard so the user can paste it into an AI chat to generate a new
-   * Nomeda module. Surfaces a non-modal info toast on success.
+   * Ghola module. Surfaces a non-modal info toast on success.
    */
   private async copyNewModulePrompt(): Promise<void> {
     const promptText = vscode.workspace
-      .getConfiguration('nomeda')
+      .getConfiguration('ghola')
       .get<string>('newModulePrompt', '');
     await vscode.env.clipboard.writeText(promptText);
     vscode.window.showInformationMessage('Module-generation prompt copied to clipboard');
@@ -2056,7 +2056,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   /**
    * Prompt the user to pick a folder (default: ~/Downloads), validate it
-   * looks like a Nomeda module, then copy it into the workspace modules
+   * looks like a Ghola module, then copy it into the workspace modules
    * directory. If the module already exists, prompts the user via a modal
    * Overwrite/Cancel confirmation before replacing it.
    */
@@ -2075,7 +2075,7 @@ export class SettingsPanel implements vscode.Disposable {
     const manifestPath = path.join(sourceFolder, 'manifest.json');
     if (!fsSync.existsSync(manifestPath)) {
       vscode.window.showErrorMessage(
-        'Selected folder has no manifest.json — not a valid Nomeda module.',
+        'Selected folder has no manifest.json — not a valid Ghola module.',
       );
       return;
     }
@@ -2144,7 +2144,7 @@ export class SettingsPanel implements vscode.Disposable {
 
     // Re-discover so the new module shows up in the Modules tab. Use the
     // existing command path so any watchers / state stay consistent.
-    await vscode.commands.executeCommand('nomeda.reloadModules');
+    await vscode.commands.executeCommand('ghola.reloadModules');
 
     vscode.window.showInformationMessage(`Module ${manifest.id} uploaded successfully.`);
   }
@@ -2180,7 +2180,7 @@ export class SettingsPanel implements vscode.Disposable {
   private broadcastLinqpadConnections(): void {
     if (!this.panel) return;
     const override = vscode.workspace
-      .getConfiguration('nomeda')
+      .getConfiguration('ghola')
       .get<string>('linqpadConnectionsPath', '');
     const resolved = resolveLinqpadConnectionsPath(override);
     if (resolved.status === 'not-installed') {
@@ -2212,14 +2212,14 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Copy the user-configurable `nomeda.linqpadInstallPrompt` text to the
+   * Copy the user-configurable `ghola.linqpadInstallPrompt` text to the
    * system clipboard so the user can paste it into an AI chat (or a notes
    * app) to walk through a LINQPad install / connection-export. Mirrors the
    * `copyNewModulePrompt` UX exactly.
    */
   private async copyLinqpadInstallPrompt(): Promise<void> {
     const promptText = vscode.workspace
-      .getConfiguration('nomeda')
+      .getConfiguration('ghola')
       .get<string>('linqpadInstallPrompt', '');
     await vscode.env.clipboard.writeText(promptText);
     vscode.window.showInformationMessage('LINQPad install prompt copied to clipboard');

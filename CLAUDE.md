@@ -1,11 +1,11 @@
-# Project-Nomeda — Claude Code Context
+# Project-Ghola — Claude Code Context
 
 ## Canonical working tree
 
-`/home/aarbuckle/projects/Project-Nomeda` is the **only** copy of this repo.
-`/mnt/c/Users/aarbuckle/Project-Nomeda` was a frozen safety net that has been **deleted**.
+`/home/aarbuckle/projects/Project-Ghola` is the **only** copy of this repo.
+`/mnt/c/Users/aarbuckle/Project-Ghola` was a frozen safety net that has been **deleted**.
 If your `cwd` is anywhere under `/mnt/c/`, stop immediately and ask the user to
-re-launch from `~/projects/Project-Nomeda`.
+re-launch from `~/projects/Project-Ghola`.
 
 ## Architecture — read-on-demand module contract
 
@@ -19,7 +19,7 @@ compose time.
 - **Cores** (`prompts/cores/`): `preamble.md`, `tpm.md`, `swe.md`, `qa.md` — hardcoded in the composer, always present, cannot be toggled.
 - **Modules** (`modules/`): toggleable in the Modules tab. Includes `tool.*`, `mode.*`, and `integration.*` namespaces. See `modules/` for the full set.
 
-Retired modules (do not recreate): `reference.hello-nomeda`, `tool.wsl-migrate`,
+Retired modules (do not recreate): `reference.hello-ghola`, `tool.wsl-migrate`,
 `mode.preview`, `mode.edge-case-hunt`, `mode.review`, `mode.planning`.
 
 ## Build and dev workflow
@@ -31,7 +31,7 @@ Retired modules (do not recreate): `reference.hello-nomeda`, `tool.wsl-migrate`,
 - **tasks.json** runs `npm run build` / `npm run watch` as shell commands with
   `cwd: ${workspaceFolder}` — no `wsl` prefix needed (project runs in Remote-WSL)
 - **Fast iteration:** `Ctrl+R` inside the dev host reloads the extension after a
-  rebuild; `Nomeda: Reload Modules` re-discovers modules without a full reload
+  rebuild; `Ghola: Reload Modules` re-discovers modules without a full reload
 
 ## Hard rules for future Claude sessions in this repo
 

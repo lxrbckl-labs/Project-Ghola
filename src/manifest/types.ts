@@ -1,4 +1,4 @@
-// The ModuleManifest is the contract every Nomeda module must satisfy.
+// The ModuleManifest is the contract every Ghola module must satisfy.
 // A module is a folder containing a `manifest.json` matching this shape.
 // Contributions are the surfaces a module can extend: prompts, agents,
 // settings, settings-panel UI sections, and tools the agent can call.
@@ -256,7 +256,7 @@ export interface LifecycleContext {
   moduleId: string;
   rootPath: string;
   settings: Record<string, unknown>;
-  /** Append a line to the shared Nomeda OutputChannel. */
+  /** Append a line to the shared Ghola OutputChannel. */
   log: (msg: string) => void;
 }
 

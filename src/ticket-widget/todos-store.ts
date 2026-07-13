@@ -8,7 +8,7 @@ import { WORKSPACE_STATE_KEYS } from '../state/keys';
  * holds the whole record, full-record writes on every mutation.
  *
  * Storage key:
- *   - `nomeda.ticketWork.todos` : Record<ticketId, TicketTodo[]>
+ *   - `ghola.ticketWork.todos` : Record<ticketId, TicketTodo[]>
  *
  * Two item provenances are tracked:
  *   - `ac-extract` — auto-extracted from the Jira description's acceptance

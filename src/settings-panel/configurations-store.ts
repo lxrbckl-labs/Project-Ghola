@@ -8,8 +8,8 @@ import type { NamedConfiguration } from './protocol';
  * `context.workspaceState`) with one in-memory representation per entry.
  *
  * Storage keys:
- *   - `nomeda.configurations`     : NamedConfiguration[]
- *   - `nomeda.activeConfigurationId` : string | null
+ *   - `ghola.configurations`     : NamedConfiguration[]
+ *   - `ghola.activeConfigurationId` : string | null
  *
  * The store guarantees the single-default invariant: at most one entry has
  * `isDefault === true` at any time. `setDefault` zeros others atomically.

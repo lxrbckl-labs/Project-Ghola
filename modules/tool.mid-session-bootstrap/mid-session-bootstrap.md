@@ -22,7 +22,7 @@ What each `parameters.bootstrapScope` value does when the user accepts the offer
 
 - Sets the active ticket id to the detected value in session memory. Does NOT update `mode.ticket-work::ticketId` in settings — that is a settings write the user does deliberately through the Modules tab, not a side effect of a bootstrap.
 - Pulls the ticket via `integration.atlassian-suite`'s `getTicketDetails(<id>)` helper. Captures the summary, status, and description for the announcement and the notes file.
-- Sets up the per-ticket notes file at `<vault>/<Project>/<TicketNumber>.md` via `tool.obsidian-notes`. If the file does not exist, creates it with `mode.ticket-work`'s `notesSections` default (or the value configured there, if `mode.ticket-work` is loaded).
+- Sets up the per-ticket notes file at `<vault>/<Project>/<TicketNumber>.md` via `tool.obsidian-notes`. If the file does not exist, creates it per `tool.obsidian-notes`' ticket-note template (frontmatter plus skeleton), including the sections from `mode.ticket-work`'s `notesSections` default (or the value configured there, if `mode.ticket-work` is loaded).
 - Surfaces any prior handoff via `tool.session-handoff` — reads the most-recent `## Session Handoff` block in the notes file and includes a summary in the announcement.
 - Activates cross-ticket discipline for the remainder of the session — uses `mode.ticket-work`'s `crossTicketStrictness` setting if `mode.ticket-work` is loaded, or `ask` as the internal default if it is not.
 - Announces: "Bootstrapped to `<TICKET-ID>`: `<summary>`. Notes at `<path>`."

@@ -31,6 +31,24 @@
         "default": 14,
         "description": "Roster rows whose Last active date is older than this many days are flagged as stale when listing active teams. Stale rows are never deleted — only marked so operators can see which teams have gone quiet. Reduce this value to surface inactivity sooner; increase it for teams that work in longer bursts with natural gaps."
       },
+      "handledMessageRetentionDays": {
+        "type": "number",
+        "label": "Handled message retention (days)",
+        "default": 3,
+        "description": "How many days a handled directed message (a '[x]' item) is kept in this team's own inbox-<slug>.md before it is pruned. At session start, after the inbox check, the agent deletes handled '[x]' items whose sent date is this many days or more before today. Only this team's OWN inbox is touched, only directed messages, only ones already marked '[x]'; unread '[ ]' items and all inbox-all.md broadcasts are never pruned regardless of age. Increase to keep handled reply-history longer; set to a large value to effectively disable pruning."
+      },
+      "detectParentProject": {
+        "type": "boolean",
+        "label": "Detect parent project from path nesting",
+        "default": true,
+        "description": "When on, at session start the agent checks the roster for a team whose repo path is a proper ancestor of this team's repo path (nearest ancestor wins) and, if found, surfaces the parent relationship and groups this team's roster row under the parent. Detection uses workspace path nesting only, never the team name or #N suffix or git remote. Channels are never merged and no inbox is moved — this is roster presentation plus an optional aggregated read view. Turn off for a flat roster."
+      },
+      "mergeDeadChildren": {
+        "type": "boolean",
+        "label": "Offer to reclaim dead child channels",
+        "default": true,
+        "description": "When on, and this team is a parent (per detectParentProject), the agent may OFFER to reclaim a child channel that is dead — defined strictly as a roster row stale past staleAfterDays AND whose inbox holds no unhandled '[ ]' directed items. The reclamation is ALWAYS operator-confirmed and never automatic; this toggle only controls whether the offer appears. Folding or removing another team's dead inbox is a cross-team action whose mechanics and authorization live in the canonical vault _Switchboard.md — this module surfaces the offer but defers the actual cross-team fold to that doc. Turn off to suppress the offer entirely."
+      },
       "checkInboxOnBoot": {
         "type": "boolean",
         "label": "Check inbox on session start",
@@ -41,7 +59,7 @@
         "type": "boolean",
         "label": "Update roster on session start",
         "default": true,
-        "description": "When on, the agent refreshes its row in switchboard.md at session start (current focus + today's date), adding the row if this team has never registered. When off, the roster row is only updated on explicit request — useful when you want to control exactly what 'currently working on' shows or when you are running a read-only review session that should not advertise presence."
+        "description": "When on, the agent refreshes its row in _Switchboard.md at session start (current focus + today's date), adding the row if this team has never registered. When off, the roster row is only updated on explicit request — useful when you want to control exactly what 'currently working on' shows or when you are running a read-only review session that should not advertise presence."
       }
     }
   }

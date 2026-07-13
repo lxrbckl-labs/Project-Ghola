@@ -6,7 +6,7 @@ This module is **proactive**: TPM reads it once, at session start, before respon
 
 This module depends on `integration.atlassian-suite` for the ticket pull — `checkTicketExists` is the existing Jira helper exposed by that module (it calls `GET ${jiraBase}/rest/api/3/issue/${key}` under the hood), and credentials, base URL, and the token come from that integration. It also depends on `tool.obsidian-notes` for file location — per-ticket notes live at `<vault>/<ProjectName>/<TicketNumber>.md` and the vault path resolution is that module's job. And it depends on `tool.session-handoff` for the resume surfacing — the most-recent `## Session Handoff` block in the per-ticket notes file is read and summarized by that module, not by this mode directly. All three dependencies are soft: if any of them is disabled or degraded, this mode degrades gracefully — see "Dependency failure modes" below.
 
-In this version of Nomeda there is no mode-selector UI on the panel; Ticket Work mode is active whenever this module is present in the Session Manifest. Ticket Work is mutually exclusive with `mode.cd` and `mode.support` — only one session mode is active at a time. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
+In this version of Ghola there is no mode-selector UI on the panel; Ticket Work mode is active whenever this module is present in the Session Manifest. Ticket Work is mutually exclusive with `mode.cd` and `mode.support` — only one session mode is active at a time. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
 
 ## What Ticket Work mode does (at a glance)
 
@@ -26,7 +26,7 @@ TPM does the following BEFORE responding to the user's first request:
    - On success, hold the summary, status, and description in session memory for the opening message and the Ticket Summary section of the notes file.
    - On failure (the Atlassian module is disabled or absent, credentials are missing, the network call errors, or the ticket is not found), surface to the user — "Could not pull `<TICKET-ID>` from Jira: `<reason>`. Paste the ticket description here and I'll continue." — and accept whatever they provide. Do NOT block the session and do not refuse other work; the pull is convenience, not a gate.
 5. Resolve the per-ticket notes file path via `tool.obsidian-notes` conventions: `<vault>/<ProjectName>/<TicketNumber>.md`. If the vault is unresolved (the dependency is disabled or degraded), follow the degradation rules in "Dependency failure modes" below — do not invent a path.
-6. If the notes file does not exist, create it with the sections listed in `parameters.notesSections` (comma-separated, trimmed, in declared order). Write each section as an empty `## ` heading with one blank line between sections — no body content for the empty sections. Write the captured Jira summary into the `Ticket Summary` section on creation as a single paragraph (the summary as written, not embellished); if the pull failed and the user pasted context, write that paragraph instead. Surface to the user as part of the opening message: "Created per-ticket notes at `<path>`."
+6. If the notes file does not exist, create it per `tool.obsidian-notes`' ticket-note template (the `Parent knowledge: [[<KEY>]]` up-link, YAML frontmatter, and the empty `## ` heading skeleton), including the sections listed in `parameters.notesSections` (comma-separated, trimmed, in declared order). Write the captured Jira summary into the `Ticket Summary` section on creation as a single paragraph (the summary as written, not embellished); if the pull failed and the user pasted context, write that paragraph instead. Surface to the user as part of the opening message: "Created per-ticket notes at `<path>`."
 7. If the notes file exists, defer to `tool.session-handoff` for the resume surfacing — that module reads the most-recent `## Session Handoff` block and includes a summary in the opening message. This mode does not duplicate that surfacing.
 8. Include the ticket id and summary in the opening message so the user knows the scope: "Ticket Work mode — working on `<TICKET-ID>`: `<summary>`." Combine this with the notes-file message (step 6) and the session-handoff summary (step 7) into a single coherent opening rather than three separate messages.
 
@@ -88,7 +88,7 @@ The widget composes three modules:
 
 - `integration.atlassian-suite` — provides `getTicketDetails` (ticket summary, status, description for AC extraction) and `findOpenPrForBranch` (PR button target).
 - `mode.ticket-work` (this module) — provides `parameters.ticketId` and the four widget-behavior settings (`showWidget`, `parseAcAsTodo`, `acSectionMarker`, `widgetShowsPrButton`).
-- An extension-side todos store keyed by ticket id, persisted in workspace state at `nomeda.ticketWork.todos`.
+- An extension-side todos store keyed by ticket id, persisted in workspace state at `ghola.ticketWork.todos`.
 
 When the Atlassian Suite is disabled or its tokens are cleared, the widget falls back to "ticket id known, but cannot fetch description" — todos already extracted persist (the workspace-state store survives integration loss), but new extraction is blocked until tokens return. The Ticket button still works in this degraded state (the URL only needs `jiraBase` and the ticket id, both of which remain locally known); the PR button is hidden until the Bitbucket token returns.
 
@@ -108,14 +108,8 @@ If the user explicitly disables this mode (toggles the module off in the Modules
 
 The per-ticket notes file is for cross-session continuity at the ticket level. The file's purpose is to give the next session enough context to pick the ticket up without re-discovering it.
 
-What lives in the per-ticket notes:
+What lives in the per-ticket notes — the section list (`Ticket Summary`, `Implementation Notes`, `Changes Made`, `Edge Cases`, `Testing Procedures`, `QA Findings`, `Session Handoff`), each section's structure, and the file's YAML frontmatter — is defined authoritatively by `tool.obsidian-notes`' ticket-note template; this mode does not redefine it. `parameters.notesSections` selects which of those sections appear and in what order. One ownership point specific to this mode:
 
-- **Ticket Summary** — pulled from Jira on first session (or pasted manually when the pull fails). One paragraph max — the summary as written, not embellished. This is the first thing the next session reads when re-entering the ticket.
-- **Implementation Notes** — running notes during execution. Decisions, alternatives considered, why one path was taken over another. TPM appends here as the work progresses.
-- **Changes Made** — SWE one-sentence explanations consolidated by TPM from SWE return messages. File-by-file shape, in chronological order across the session.
-- **Edge Cases** — items flagged by SWE or QA during the work, even if non-blocking. Surface here so the next session does not miss them.
-- **Testing Procedures** — how the change was (or should be) verified. Manual steps, build/test commands, what to look for. Often the highest-value section for the next session.
-- **QA Findings** — the QA verdict's Issues and Notes sections, consolidated by TPM. Pass/fail with the rationale, not just the verdict label.
 - **Session Handoff** — the `tool.session-handoff` module's domain. This mode ensures this heading exists in the file (it appears in the default `parameters.notesSections`) but does NOT write the dated `## Session Handoff (<date>)` blocks itself. That writing is delegated to `tool.session-handoff` per its own protocol.
 
 What does NOT go in the per-ticket notes:

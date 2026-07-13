@@ -9,7 +9,7 @@ export function formatBanner(input: BannerInput): string {
   const moduleCount = input.enabledModules.length;
   const agents = input.composedAgentIds.join(', ') || '(none)';
   const lines = [
-    '== Nomeda session ==',
+    '== Ghola session ==',
     `modules loaded: ${moduleCount}`,
     `agents composed: ${agents}`,
     '----------------------------------------',

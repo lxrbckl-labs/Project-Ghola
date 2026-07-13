@@ -1,7 +1,7 @@
 {
   "id": "tool.session-handoff",
   "name": "Session Handoff",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Captures structured session wrap-ups in the project or ticket notes and surfaces the latest one when TPM resumes.",
   "proactive": true,
   "category": "workflow",
@@ -36,6 +36,12 @@
         "label": "Date Format",
         "description": "Format string for the date shown in each Session Handoff heading. Default YYYY-MM-DD is ISO-style and groups by day. Use YYYY-MM-DD HH:MM if you want finer granularity when multiple handoffs land on the same date.",
         "default": "YYYY-MM-DD"
+      },
+      "cloneTagHeading": {
+        "type": "boolean",
+        "label": "Clone-Tag Handoff Heading",
+        "description": "When on, and mode.cd supplies clone context for a shared clone-family home, TPM appends a clone suffix to each handoff heading (## Session Handoff (date) [clone: label @ branch]) so the provenance of the wrap-up is explicit. The resume matcher keys on the heading prefix, so the suffix never breaks resume surfacing. Turn off to always write the plain ## Session Handoff (date) heading.",
+        "default": true
       }
     }
   }

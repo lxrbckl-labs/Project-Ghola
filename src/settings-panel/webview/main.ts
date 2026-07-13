@@ -158,18 +158,18 @@ interface UIState {
   settingKeywordErrors: Record<string, string>;
   /** Free-text filter for the Modules tab. Ephemeral; cleared on tab switch. */
   moduleSearch: string;
-  /** Value of nomeda.cliCommand VS Code configuration. */
+  /** Value of ghola.cliCommand VS Code configuration. */
   cliCommand: string;
-  /** Value of nomeda.sessionCommand VS Code configuration. */
+  /** Value of ghola.sessionCommand VS Code configuration. */
   sessionCommand: string;
-  /** Current SWE agent counts and model preferences pulled from `nomeda.swe.*` VS Code configuration. */
+  /** Current SWE agent counts and model preferences pulled from `ghola.swe.*` VS Code configuration. */
   sweConfig: {
     performanceCores: number;
     efficiencyCores: number;
     performanceCoresModel: string;
     efficiencyCoresModel: string;
   };
-  /** Current QA agent count and model preference pulled from `nomeda.qa.*` VS Code configuration. */
+  /** Current QA agent count and model preference pulled from `ghola.qa.*` VS Code configuration. */
   qaConfig: { count: number; model: string };
   /** All named configurations known to the host. Updated by 'configurationsChanged'. */
   configurations: NamedConfiguration[];
@@ -215,15 +215,15 @@ interface UIState {
     string,
     Record<string, string> | Record<string, { value: string; enabled: boolean; description?: string }>
   >;
-  /** Registered Claude CLI aliases (mirrors `nomeda.cliAliases`). */
+  /** Registered Claude CLI aliases (mirrors `ghola.cliAliases`). */
   aliases: CliAlias[];
   /**
    * Currently-selected alias from the launch dropdown (mirrors
-   * `nomeda.selectedAlias`). Empty string falls back to the legacy
+   * `ghola.selectedAlias`). Empty string falls back to the legacy
    * `cliCommand` text input.
    */
   selectedAlias: string;
-  /** Shell rc file the aliases are persisted into (mirrors `nomeda.aliasFile`). */
+  /** Shell rc file the aliases are persisted into (mirrors `ghola.aliasFile`). */
   aliasFile: string;
   /**
    * Whether the Jira API token is currently stored in SecretStorage.
@@ -515,7 +515,7 @@ function handleMessage(msg: HostToWebviewMessage): void {
     case 'aliasesSaved':
       if (!msg.ok) {
         // Best-effort surface; toast UX is future work — match `settingsSaved`.
-        console.error('[nomeda] alias save failed', msg.error);
+        console.error('[ghola] alias save failed', msg.error);
       }
       break;
     case 'settingsSaved':
@@ -524,7 +524,7 @@ function handleMessage(msg: HostToWebviewMessage): void {
         render();
       } else {
         // Best-effort surface; real toast UX is future work.
-        console.error('[nomeda] save failed', msg.error);
+        console.error('[ghola] save failed', msg.error);
       }
       break;
     case 'composedPromptUpdated':
@@ -853,7 +853,7 @@ function renderGeneral(wrapper: HTMLElement): void {
   }
 
   wrapper.appendChild(textEl('h1', 'Session'));
-  wrapper.appendChild(textEl('p', 'Configure the command that launches your Nomeda agent team, then start a session.', 'subtitle'));
+  wrapper.appendChild(textEl('p', 'Configure the command that launches your Ghola agent team, then start a session.', 'subtitle'));
 
   // Launch row: [Package] [CLI Alias] [Initiation Command] [Configuration] [Play]
   // Package sits at the far left, Play at the far right, with the three
@@ -866,7 +866,7 @@ function renderGeneral(wrapper: HTMLElement): void {
   // Selecting an alias names the shell-registered Claude CLI invocation the
   // launcher should use; the empty option falls back to the legacy command.
   // Fields carry no visible label; each control surfaces its description via a
-  // native `title` tooltip on hover — Nomeda's standard hover-help mechanism.
+  // native `title` tooltip on hover — Ghola's standard hover-help mechanism.
   const aliasField = el('div', { class: 'session-launch-field' });
   const aliasPicker = renderAliasPickerDropdown();
   aliasPicker.title = 'The Claude CLI alias used to launch this session.';
@@ -876,13 +876,13 @@ function renderGeneral(wrapper: HTMLElement): void {
   const sessionField = el('div', { class: 'session-launch-field' });
   const sessionInp = el('input', { class: 'setting-input session-command-input' }) as HTMLInputElement;
   sessionInp.type = 'text';
-  sessionInp.title = 'The trigger word sent to the CLI after it boots to start the Nomeda session.';
+  sessionInp.title = 'The trigger word sent to the CLI after it boots to start the Ghola session.';
   sessionInp.value = state.sessionCommand;
   sessionInp.addEventListener('blur', () => {
     state.sessionCommand = sessionInp.value;
     vscode.postMessage({
       type: 'updateConfiguration',
-      section: 'nomeda',
+      section: 'ghola',
       key: 'sessionCommand',
       value: sessionInp.value,
     });
@@ -900,19 +900,19 @@ function renderGeneral(wrapper: HTMLElement): void {
   const sessionBtn = el('button', {
     class: 'icon-button framed session-action-button session-play-button',
     type: 'button',
-    'aria-label': 'Open Nomeda session',
-    title: 'Open a new Nomeda session',
+    'aria-label': 'Open Ghola session',
+    title: 'Open a new Ghola session',
   }) as HTMLButtonElement;
   sessionBtn.innerHTML = PLAY_ICON_SVG;
   sessionBtn.addEventListener('click', () => vscode.postMessage({ type: 'openSession' }));
 
   // Update Extension button — sits beside the Play button at the end of the row.
-  // Delegates to the nomeda.updateExtension command on the host.
+  // Delegates to the ghola.updateExtension command on the host.
   const updateBtn = el('button', {
     class: 'icon-button framed session-action-button update-extension-btn',
     type: 'button',
     'aria-label': `Update Extension (current version ${root.dataset.version || 'dev'})`,
-    title: 'Update the Nomeda extension: pull latest from the remote repository, rebuild, reinstall, and reload.',
+    title: 'Update the Ghola extension: pull latest from the remote repository, rebuild, reinstall, and reload.',
   }) as HTMLButtonElement;
   const updateBtnIcon = el('span', { class: 'update-btn-icon' });
   updateBtnIcon.innerHTML = UPDATE_EXTENSION_ICON_SVG;
@@ -1409,7 +1409,7 @@ function renderAliasPickerDropdown(): HTMLElement {
     state.selectedAlias = select.value;
     vscode.postMessage({
       type: 'updateConfiguration',
-      section: 'nomeda',
+      section: 'ghola',
       key: 'selectedAlias',
       value: select.value,
     });
@@ -1566,7 +1566,7 @@ function renderAliasRow(a: CliAlias, index: number): HTMLElement {
       state.selectedAlias = '';
       vscode.postMessage({
         type: 'updateConfiguration',
-        section: 'nomeda',
+        section: 'ghola',
         key: 'selectedAlias',
         value: '',
       });
@@ -3029,7 +3029,7 @@ function renderLinqpadBanner(
   configBtn.addEventListener('click', () => {
     vscode.postMessage({
       type: 'openVSCodeSettings',
-      query: 'nomeda.linqpadConnectionsPath',
+      query: 'ghola.linqpadConnectionsPath',
     });
   });
   actions.appendChild(configBtn);
@@ -3237,7 +3237,7 @@ const AGENTS: { id: 'tpm' | 'swe' | 'qa'; name: string }[] = [
 /**
  * Session tab "Instruction" panel: the CLAUDE.md bootstrap snippet a user
  * pastes into their Claude Code CLAUDE.md / user memory so the configured
- * Initiation Command boots the Nomeda TPM. Reuses the unscoped
+ * Initiation Command boots the Ghola TPM. Reuses the unscoped
  * `agent-config-header` + `pre.prompt` classes so it matches the Agents tabs.
  * The trigger word mirrors the configured Session Command.
  */
@@ -3246,11 +3246,11 @@ function renderSessionInstruction(): HTMLElement {
 
   const trigger = (state.sessionCommand || 'initiate').trim() || 'initiate';
   const snippet =
-    `## Nomeda Initiation\n\n` +
-    `When I send the word \`${trigger}\` (the Nomeda Initiation Command), read the file at ` +
-    `the path in the $NOMEDA_TPM_PROMPT_FILE environment variable and adopt it as your ` +
-    `system prompt - you become the Nomeda TPM and run its startup sequence. The composed ` +
-    `SWE and QA prompts are at $NOMEDA_SWE_PROMPT_FILE and $NOMEDA_QA_PROMPT_FILE; read the ` +
+    `## Ghola Initiation\n\n` +
+    `When I send the word \`${trigger}\` (the Ghola Initiation Command), read the file at ` +
+    `the path in the $GHOLA_TPM_PROMPT_FILE environment variable and adopt it as your ` +
+    `system prompt - you become the Ghola TPM and run its startup sequence. The composed ` +
+    `SWE and QA prompts are at $GHOLA_SWE_PROMPT_FILE and $GHOLA_QA_PROMPT_FILE; read the ` +
     `matching file before spawning a subagent so it boots into the right role.`;
 
   // Header: plain title. Copy is exposed by hovering the prompt body below,
@@ -3286,7 +3286,7 @@ function renderAgentsList(wrapper: HTMLElement): void {
   wrapper.appendChild(
     textEl(
       'p',
-      'The three agent cores that make up a Nomeda team. Click the chevron (›) to view an agent\'s configuration and composed instructions.',
+      'The three agent cores that make up a Ghola team. Click the chevron (›) to view an agent\'s configuration and composed instructions.',
       'subtitle',
     ),
   );
@@ -3556,11 +3556,11 @@ function renderSweConfigBlock(): HTMLElement {
       state.sweConfig.performanceCoresModel,
       (next) => {
         state.sweConfig.performanceCores = next;
-        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'swe.performanceCores', value: next });
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.performanceCores', value: next });
       },
       (next) => {
         state.sweConfig.performanceCoresModel = next;
-        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'swe.performanceCoresModel', value: next });
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.performanceCoresModel', value: next });
       },
     ),
   );
@@ -3572,11 +3572,11 @@ function renderSweConfigBlock(): HTMLElement {
       state.sweConfig.efficiencyCoresModel,
       (next) => {
         state.sweConfig.efficiencyCores = next;
-        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'swe.efficiencyCores', value: next });
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.efficiencyCores', value: next });
       },
       (next) => {
         state.sweConfig.efficiencyCoresModel = next;
-        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'swe.efficiencyCoresModel', value: next });
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.efficiencyCoresModel', value: next });
       },
     ),
   );
@@ -3600,11 +3600,11 @@ function renderQaConfigBlock(): HTMLElement {
       state.qaConfig.model,
       (next) => {
         state.qaConfig.count = next;
-        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'qa.count', value: next });
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'qa.count', value: next });
       },
       (next) => {
         state.qaConfig.model = next;
-        vscode.postMessage({ type: 'updateConfiguration', section: 'nomeda', key: 'qa.model', value: next });
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'qa.model', value: next });
       },
     ),
   );
@@ -4287,7 +4287,7 @@ function renderFeedbackCard(entry: FeedbackEntry): HTMLElement {
 
 function renderSessions(wrapper: HTMLElement): void {
   wrapper.appendChild(textEl('h1', 'Sessions'));
-  wrapper.appendChild(textEl('p', 'Open a Nomeda session terminal in the editor area.', 'subtitle'));
+  wrapper.appendChild(textEl('p', 'Open a Ghola session terminal in the editor area.', 'subtitle'));
   const open = el('button', { class: 'primary' });
   open.textContent = 'Open Session';
   open.addEventListener('click', () => vscode.postMessage({ type: 'openSession' }));
@@ -4305,7 +4305,7 @@ function renderSessions(wrapper: HTMLElement): void {
  * library / resume picker, and read-only status chips mirroring the
  * mode.war sub-toggles. Mostly an observability surface — the only
  * cooperative actions are "Awaken All" and per-mission "Resume", both of
- * which just write a request into `.nomeda/control.json` for the TPM agent
+ * which just write a request into `.ghola/control.json` for the TPM agent
  * to pick up out of band; nothing here directly wakes/retires a ghola.
  *
  * The rail item that reaches this function only appears while `mode.war`
@@ -4511,7 +4511,7 @@ function renderWarRoom(wrapper: HTMLElement): void {
  * Prominent banner shown while a "gholaAwakenAll" kill-switch request is
  * pending team stand-down (`control.awakenAll === true`). Purely
  * informational — the actual stand-down is cooperative: the TPM agent polls
- * `.nomeda/control.json` out of band and clears it once the team has stood
+ * `.ghola/control.json` out of band and clears it once the team has stood
  * down, at which point the next `warRoomData` push stops rendering this.
  */
 function renderWarRoomAwakenAllBanner(control: NonNullable<WarRoomData['control']>): HTMLElement {
@@ -5083,7 +5083,7 @@ function renderWarRoomCounts(counts: NonNullable<WarRoomData['counts']>): HTMLEl
  * status chips only — not editable here; the note below points to where
  * they're actually configured. Also hosts the Awaken All control and the
  * god-console directive input, both of which write cooperative requests into
- * `.nomeda/control.json` for the TPM agent to pick up out of band.
+ * `.ghola/control.json` for the TPM agent to pick up out of band.
  */
 function renderWarRoomControls(
   settings: NonNullable<WarRoomData['settings']>,
@@ -5193,7 +5193,7 @@ function renderWarRoomGodConsole(control: WarRoomData['control']): HTMLElement {
  * Emergency "Awaken All" affordance: a danger-styled button that requests a
  * cooperative team stand-down, plus a one-line caption explaining what it
  * does and does not do (it is a request, not a kill — the TPM agent polls
- * `.nomeda/control.json` and stands the team down on its own schedule).
+ * `.ghola/control.json` and stands the team down on its own schedule).
  */
 function renderWarRoomAwakenAllControl(): HTMLElement {
   const wrap = el('div', { class: 'warroom-awaken-control' });

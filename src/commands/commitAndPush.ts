@@ -17,7 +17,7 @@ const COMMIT_MESSAGE_FORMAT_KEY = `${COMMIT_PUSH_MODULE_ID}::commitMessageFormat
 const DEFAULT_COMMIT_MESSAGE_FORMAT = '[TICKET] <type>: <summary>';
 
 /**
- * Register the `nomeda.commitAndPush` command. Dispatches a one-shot Claude
+ * Register the `ghola.commitAndPush` command. Dispatches a one-shot Claude
  * agent into a dedicated terminal that reads the module's procedure file and
  * commits the already-staged changes on the current branch, then pushes.
  * Returns the disposable so the caller can push it onto context.subscriptions.
@@ -26,14 +26,14 @@ export function registerCommitAndPushCommand(
   context: vscode.ExtensionContext,
   deps: CommandDeps,
 ): vscode.Disposable {
-  return vscode.commands.registerCommand('nomeda.commitAndPush', async () => {
+  return vscode.commands.registerCommand('ghola.commitAndPush', async () => {
     try {
       // Guard: refuse when the module is disabled. The view's `when` clause
       // normally hides the button, but the command can still be invoked from
       // the palette, so we re-check here.
       if (deps.loader.find(COMMIT_PUSH_MODULE_ID)?.isEnabled !== true) {
         vscode.window.showWarningMessage(
-          'Nomeda: Commit and Push module is disabled. Enable it in the Modules tab.',
+          'Ghola: Commit and Push module is disabled. Enable it in the Modules tab.',
         );
         return;
       }
@@ -60,15 +60,15 @@ export function registerCommitAndPushCommand(
       // Build the self-contained prompt. The template is embedded as plain
       // descriptive text, never interpolated into a shell command.
       const prompt =
-        `[Nomeda Commit Task] Read the procedure file at ${mdPath} and follow it EXACTLY, then stop. ` +
+        `[Ghola Commit Task] Read the procedure file at ${mdPath} and follow it EXACTLY, then stop. ` +
         `Commit message format template: ${sanitizedFmt} ` +
         `Rules: commit ONLY what is already staged (do not run git add), on the CURRENT branch, then push. ` +
         `Never force-push, branch, reset, rebase, or stash. If nothing is staged, do nothing and report.`;
 
-      await deps.session.launch({ terminalName: 'Nomeda Commit', promptOverride: prompt });
+      await deps.session.launch({ terminalName: 'Ghola Commit', promptOverride: prompt });
     } catch (err) {
       vscode.window.showErrorMessage(
-        `Nomeda: failed to dispatch commit and push — ${(err as Error).message}`,
+        `Ghola: failed to dispatch commit and push — ${(err as Error).message}`,
       );
     }
   });

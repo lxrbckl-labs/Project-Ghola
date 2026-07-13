@@ -6,7 +6,7 @@ Invoke this module when the user types a trigger from the grammar below, or proa
 
 ## Dependency
 
-This module requires `integration.atlassian-suite` to be enabled with a Bitbucket token set. The Atlassian Suite owns the per-product token slots (`nomeda.atlassianSuite.bitbucketToken`) and the AtlassianBridge that this module's host-side client uses to authenticate. Reusing the bridge means the user is never re-prompted for credentials, and tokens never appear in this module's surfaces — they stay in SecretStorage where the suite put them.
+This module requires `integration.atlassian-suite` to be enabled with a Bitbucket token set. The Atlassian Suite owns the per-product token slots (`ghola.atlassianSuite.bitbucketToken`) and the AtlassianBridge that this module's host-side client uses to authenticate. Reusing the bridge means the user is never re-prompted for credentials, and tokens never appear in this module's surfaces — they stay in SecretStorage where the suite put them.
 
 If `integration.atlassian-suite` is not loaded, or its Bitbucket token slot is empty, refuse the trigger in one sentence that names the suite and the slot, and point the user at the Modules tab. Do not attempt to fall back to a different auth mechanism or to prompt the user for a token in chat — the suite owns that surface end-to-end.
 
@@ -95,7 +95,7 @@ Within a snapshot, ordinals are stable. If the user resolves comments 1, 2, and 
 - **No token echo.** The host-side client owns auth — tokens never appear in chat, logs, or error messages. Already enforced by the client.
 - **No git writes / no Jira writes.** Read-only git only. This module never touches Jira.
 - **No new code in the work repo outside what SWEs are dispatched to do.** TPM does not author code in this flow; SWEs do.
-- **Generated reply must not include severity, rating, attribution, or any Nomeda-internal filter metadata.** It's a public Bitbucket comment.
+- **Generated reply must not include severity, rating, attribution, or any Ghola-internal filter metadata.** It's a public Bitbucket comment.
 - **Don't replace the user's words in manual replies.** When the user supplies reply text, post it verbatim (no generation step).
 - **No batching across PRs.** A single `address` invocation operates on one PR at a time. If the user wants to address comments on a different PR, end the current batch and start a fresh one.
 - **No reordering of the snapshot mid-batch.** Once ordinals are assigned, they remain stable until a fresh `address comments` refresh. Do not renumber after a partial post.

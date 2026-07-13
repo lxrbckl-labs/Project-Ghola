@@ -1,6 +1,6 @@
 # Module authoring guide
 
-A Nomeda module is a folder under this directory containing a `manifest.json`
+A Ghola module is a folder under this directory containing a `manifest.json`
 matching `src/manifest/schema.json`, plus any prompt fragment `.md` files it
 declares. The composer emits the Session Manifest from these manifests;
 agents read fragment content on demand via the Read tool.

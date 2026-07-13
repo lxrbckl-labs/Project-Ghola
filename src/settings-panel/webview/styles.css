@@ -1490,7 +1490,7 @@ button.module-row-chevron:focus-visible {
 
 /* Small section above the composed prompt on the SWE and QA subpages.
    Hosts the count fields that drive the SWE_*_COUNT / QA_AGENT_COUNT env vars
-   passed to a launched Nomeda session terminal. */
+   passed to a launched Ghola session terminal. */
 .agent-config {
   display: flex;
   flex-direction: column;

@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 /**
- * A single Claude CLI alias registered with Nomeda. The `alias` is the bash
+ * A single Claude CLI alias registered with Ghola. The `alias` is the bash
  * alias name (e.g. `claude-1`) and `command` is the shell expansion it points
  * at (e.g. `CLAUDE_CONFIG_DIR=$HOME/.claude command claude`).
  *
@@ -16,8 +16,8 @@ export interface CliAlias {
   command: string;
 }
 
-const OPEN_MARKER = '# >>> nomeda-managed-aliases >>>';
-const CLOSE_MARKER = '# <<< nomeda-managed-aliases <<<';
+const OPEN_MARKER = '# >>> ghola-managed-aliases >>>';
+const CLOSE_MARKER = '# <<< ghola-managed-aliases <<<';
 
 /**
  * Validate a single alias entry. Returns `null` when valid, otherwise a
@@ -51,7 +51,7 @@ export function validateAlias(entry: CliAlias): string | null {
 }
 
 /**
- * Render the Nomeda-managed alias block. Each entry becomes a single
+ * Render the Ghola-managed alias block. Each entry becomes a single
  * `alias <name>='<command>'` line. Single quotes inside the command are
  * escaped via the standard shell trick: close the quote, emit an escaped
  * literal single quote, reopen the quote (`'\''`).
@@ -67,10 +67,10 @@ function renderBlock(aliases: CliAlias[]): string {
 }
 
 /**
- * Return `existing` with the Nomeda-managed alias block replaced (if present)
+ * Return `existing` with the Ghola-managed alias block replaced (if present)
  * or appended (if absent). All content outside the sentinel markers is
  * preserved verbatim — including trailing whitespace and blank lines — so
- * users can hand-edit anything in their rc file that Nomeda does not own.
+ * users can hand-edit anything in their rc file that Ghola does not own.
  */
 export function rewriteAliasBlock(existing: string, aliases: CliAlias[]): string {
   const block = renderBlock(aliases);

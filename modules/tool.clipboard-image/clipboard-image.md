@@ -68,7 +68,7 @@ On macOS, a minimal helper script that satisfies the contract:
 
     #!/bin/bash
     # Requires: brew install pngpaste
-    TMPFILE="$(mktemp /tmp/nomeda-clipboard-XXXXXX.png)"
+    TMPFILE="$(mktemp /tmp/ghola-clipboard-XXXXXX.png)"
     if pngpaste "$TMPFILE" 2>/dev/null; then
       echo "$TMPFILE"
       exit 0

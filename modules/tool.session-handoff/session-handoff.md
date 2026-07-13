@@ -8,7 +8,7 @@ This module depends on `tool.obsidian-notes` for file location — handoffs are 
 
 ## What a session handoff looks like
 
-A session handoff is a dated markdown block appended to the bottom of the active notes file. The shape:
+A session handoff is a dated markdown block appended to the bottom of the active notes file — the file whose location and structure `tool.obsidian-notes` defines — under that file's `Session Handoff` anchor heading. This module owns the block's shape; `tool.obsidian-notes` owns the surrounding file. The shape:
 
 ```markdown
 ## Session Handoff (<date>)
@@ -31,6 +31,8 @@ A session handoff is a dated markdown block appended to the bottom of the active
 
 The date in the heading uses `parameters.dateFormat`. The sub-sections present in the block — and the order they appear in — come from `parameters.sectionsToInclude` (comma-separated, trimmed, case-folded for the section name). Each session adds a **new** `## Session Handoff (...)` block; TPM never overwrites or rewrites a previous block, even on the same date — multiple wrap-ups in one day produce multiple blocks in chronological order.
 
+When the active home is a shared clone family (see `mode.cd`) and `parameters.cloneTagHeading` is true, the heading also carries a clone suffix — `## Session Handoff (<date>) [clone: <label> @ <branch>]` — where the label and branch come as clone context supplied by `mode.cd` (the clone's `basename(cwd)` and its current branch). The suffix is appended AFTER the `(<date>)`, never inside it, so the block shape is otherwise unchanged. When `parameters.cloneTagHeading` is false, or no clone context is supplied, the heading is the plain `## Session Handoff (<date>)`. This module still owns the heading; `mode.cd` only supplies the clone context it appends.
+
 If a sub-section listed in `parameters.sectionsToInclude` has no content for this session, write `- (none)` under it rather than omitting the heading. Empty sections are signal ("we did not have any blockers this session"); missing sections look like the wrap-up was rushed.
 
 ## When to write a handoff
@@ -38,7 +40,7 @@ If a sub-section listed in `parameters.sectionsToInclude` has no content for thi
 A handoff is a session-bookend operation, not a per-turn log. TPM writes a handoff in exactly these situations:
 
 - **The user signals they are wrapping up.** Phrases like "wrap up", "we're done for now", "ttyl", "log the session", "let's stop here", "write a handoff" all count. When TPM hears one, it proposes the handoff content to the user, waits for confirmation or corrections, then writes.
-- **`parameters.wrapUpTrigger` is `auto-on-quiet` AND the conversation has gone stale.** Nomeda does not have a true idle-detect, so "stale" here means the most recent turn read like a natural stopping point (a delivered result, no follow-up question, no further direction) and enough conversational distance has passed that TPM is reasonably confident the user is done. In this mode TPM proactively proposes a wrap-up — "looks like we're done here; want me to write a handoff?" — and waits. It never writes silently.
+- **`parameters.wrapUpTrigger` is `auto-on-quiet` AND the conversation has gone stale.** Ghola does not have a true idle-detect, so "stale" here means the most recent turn read like a natural stopping point (a delivered result, no follow-up question, no further direction) and enough conversational distance has passed that TPM is reasonably confident the user is done. In this mode TPM proactively proposes a wrap-up — "looks like we're done here; want me to write a handoff?" — and waits. It never writes silently.
 - **The user explicitly asks for one** ("write a handoff", "log the session to obsidian", equivalent). Same propose-then-write flow.
 
 TPM does **not** write a handoff:
@@ -64,7 +66,7 @@ When `parameters.sectionsToInclude` is customized — a user adds a section name
 When `parameters.surfaceOnResume` is true, TPM does the following at session start, before responding to the user's first request:
 
 1. Resolve the active notes file via `tool.obsidian-notes` (per-ticket notes for ticket-work mode, per-project notes for Directory Navigation mode, no notes file in ad-hoc mode).
-2. Read the file. Find the **most-recent** `## Session Handoff (<date>)` block — the last one in document order, since handoffs are appended chronologically.
+2. Read the file. Find the **most-recent** session handoff block — match on the `## Session Handoff (` heading prefix (so any ` [clone: ...]` suffix a clone-family home appends is tolerated) and take the last such block in document order, since handoffs are appended chronologically.
 3. Surface it to the user as part of the opening message. Format: "Picking up from `<date>` — last handoff says X is done, Y is in-progress, Z is pending. Want to continue from there?" Summarize the key bullets; do not paste the whole block verbatim unless the user asks for it.
 4. If the notes file does not exist, or exists but contains no `## Session Handoff` block, surface that — "no prior handoff for this notes file; treating as a fresh session." — and proceed normally.
 5. **Do not auto-continue work.** Surface the handoff and wait for the user's direction. The user may want to continue, may want to pivot, or may want to revisit a decision — TPM's job is to give them the context, not to make the call.
@@ -107,7 +109,7 @@ The body above applies identically to every agent. The notes below are short fra
 
 ### TPM
 
-You are the only role that reads or writes handoffs. On session start with this module loaded, run the resume protocol if `parameters.surfaceOnResume` is true — read the active notes file resolved by `tool.obsidian-notes`, locate the most-recent `## Session Handoff` block, and include the summary in your opening message before responding to the user's first request. Throughout the session, watch for wrap-up signals from the user (per "When to write a handoff"); when `parameters.wrapUpTrigger` is `auto-on-quiet`, also watch for stale-conversation cues and proactively propose a wrap-up. When wrapping up, draft the handoff content from session memory plus the SWE and QA returns you consolidated this session, propose it to the user, accept corrections, then write it through `tool.obsidian-notes`' write path. Append a new `## Session Handoff (<date>)` block — never overwrite, never rewrite a prior block, even on the same date. Date format comes from `parameters.dateFormat`; sub-section list and order comes from `parameters.sectionsToInclude`. If the Obsidian dependency is degraded, follow the messages in "Dependency on Obsidian Notes" — surface the degradation once at session start and continue.
+You are the only role that reads or writes handoffs. On session start with this module loaded, run the resume protocol if `parameters.surfaceOnResume` is true — read the active notes file resolved by `tool.obsidian-notes`, locate the most-recent `## Session Handoff` block, and include the summary in your opening message before responding to the user's first request. Throughout the session, watch for wrap-up signals from the user (per "When to write a handoff"); when `parameters.wrapUpTrigger` is `auto-on-quiet`, also watch for stale-conversation cues and proactively propose a wrap-up. When wrapping up, draft the handoff content from session memory plus the SWE and QA returns you consolidated this session, propose it to the user, accept corrections, then write it through `tool.obsidian-notes`' write path. Append a new `## Session Handoff (<date>)` block — never overwrite, never rewrite a prior block, even on the same date. When `mode.cd` supplies clone context and `parameters.cloneTagHeading` is true, append the ` [clone: <label> @ <branch>]` suffix to that heading. Date format comes from `parameters.dateFormat`; sub-section list and order comes from `parameters.sectionsToInclude`. If the Obsidian dependency is degraded, follow the messages in "Dependency on Obsidian Notes" — surface the degradation once at session start and continue.
 
 ### SWE
 

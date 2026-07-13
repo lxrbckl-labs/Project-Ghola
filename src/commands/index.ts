@@ -19,17 +19,17 @@ export function registerCommands(
   deps: CommandDeps,
 ): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand('nomeda.openSettings', () => {
+    vscode.commands.registerCommand('ghola.openSettings', () => {
       deps.panel.open();
     }),
-    vscode.commands.registerCommand('nomeda.openSession', async () => {
+    vscode.commands.registerCommand('ghola.openSession', async () => {
       try {
         // Compose + write the TPM, SWE, and QA prompts BEFORE creating the
         // terminal so all three files are on disk by the time the shell
         // evaluates `$(cat …)` in the default sessionCommand and by the time
-        // TPM later spawns a subagent and reads $NOMEDA_SWE_PROMPT_FILE /
-        // $NOMEDA_QA_PROMPT_FILE. Paths are the same well-known locations the
-        // launcher exposes via NOMEDA_{TPM,SWE,QA}_PROMPT_FILE. Fail-closed:
+        // TPM later spawns a subagent and reads $GHOLA_SWE_PROMPT_FILE /
+        // $GHOLA_QA_PROMPT_FILE. Paths are the same well-known locations the
+        // launcher exposes via GHOLA_{TPM,SWE,QA}_PROMPT_FILE. Fail-closed:
         // if any write throws the terminal is never created.
         await deps.panel.writeAllAgentPromptFiles();
         await deps.session.launch();
@@ -48,15 +48,15 @@ export function registerCommands(
           );
         }
       } catch (err) {
-        vscode.window.showErrorMessage(`Nomeda: failed to launch session — ${(err as Error).message}`);
+        vscode.window.showErrorMessage(`Ghola: failed to launch session — ${(err as Error).message}`);
       }
     }),
-    vscode.commands.registerCommand('nomeda.reloadModules', async () => {
+    vscode.commands.registerCommand('ghola.reloadModules', async () => {
       const dir = deps.resolveModulesDir();
       deps.logger.appendLine(`[command] reloading modules from ${dir}`);
       const handles = await deps.loader.discover(dir);
       vscode.window.setStatusBarMessage(
-        `Nomeda: discovered ${handles.length} module${handles.length === 1 ? '' : 's'} in ${path.basename(dir)}/`,
+        `Ghola: discovered ${handles.length} module${handles.length === 1 ? '' : 's'} in ${path.basename(dir)}/`,
         3000,
       );
     }),

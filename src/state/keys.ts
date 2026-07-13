@@ -4,18 +4,18 @@
  */
 
 export const WORKSPACE_STATE_KEYS = {
-  MODULE_SETTINGS: 'nomeda.moduleSettings',
-  ENABLED_MODULES: 'nomeda.enabledModules',
-  ENABLED_MODULES_INITIALIZED: 'nomeda.enabledModules.initialized',
-  CONFIGURATIONS: 'nomeda.configurations',
-  CONFIGURATIONS_SEEDED: 'nomeda.configurations.seeded',
-  CONFIGURATIONS_SEEDED_NAMES: 'nomeda.configurations.seededNames',
-  ACTIVE_CONFIGURATION_ID: 'nomeda.activeConfigurationId',
-  TICKET_WORK_TODOS: 'nomeda.ticketWork.todos',
-  ATLASSIAN_LAST_VALIDATION: 'nomeda.atlassianSuite.lastValidation',
+  MODULE_SETTINGS: 'ghola.moduleSettings',
+  ENABLED_MODULES: 'ghola.enabledModules',
+  ENABLED_MODULES_INITIALIZED: 'ghola.enabledModules.initialized',
+  CONFIGURATIONS: 'ghola.configurations',
+  CONFIGURATIONS_SEEDED: 'ghola.configurations.seeded',
+  CONFIGURATIONS_SEEDED_NAMES: 'ghola.configurations.seededNames',
+  ACTIVE_CONFIGURATION_ID: 'ghola.activeConfigurationId',
+  TICKET_WORK_TODOS: 'ghola.ticketWork.todos',
+  ATLASSIAN_LAST_VALIDATION: 'ghola.atlassianSuite.lastValidation',
 } as const;
 
 export const SET_CONTEXT_KEYS = {
-  TICKET_WORK_WIDGET_ENABLED: 'nomeda.ticketWork.widgetEnabled',
-  COMMIT_PUSH_ENABLED: 'nomeda.commitPush.enabled',
+  TICKET_WORK_WIDGET_ENABLED: 'ghola.ticketWork.widgetEnabled',
+  COMMIT_PUSH_ENABLED: 'ghola.commitPush.enabled',
 } as const;

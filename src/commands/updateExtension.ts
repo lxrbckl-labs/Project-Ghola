@@ -25,9 +25,9 @@ export function shellQuote(arg: string): string {
 }
 
 /**
- * Resolve the Project-Nomeda git checkout to pull/rebuild/reinstall from.
+ * Resolve the Project-Ghola git checkout to pull/rebuild/reinstall from.
  *
- *   (a) If `nomeda.repoPath` is set and points at a directory containing a
+ *   (a) If `ghola.repoPath` is set and points at a directory containing a
  *       `.git` entry, use it.
  *   (b) Otherwise fall back to `context.extensionPath` IF that path is itself
  *       a source checkout — it must contain BOTH `.git` and `esbuild.config.js`
@@ -37,7 +37,7 @@ export function shellQuote(arg: string): string {
  */
 function resolveRepoRoot(context: vscode.ExtensionContext): string | null {
   const configured = vscode.workspace
-    .getConfiguration('nomeda')
+    .getConfiguration('ghola')
     .get<string>('repoPath', '')
     .trim();
   if (configured && fs.existsSync(path.join(configured, '.git'))) {
@@ -70,11 +70,11 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
   const repoRoot = resolveRepoRoot(context);
   if (!repoRoot) {
     const choice = await vscode.window.showErrorMessage(
-      'Nomeda: could not locate a Project-Nomeda git checkout to update from. Set "nomeda.repoPath" to the absolute path of your clone.',
+      'Ghola: could not locate a Project-Ghola git checkout to update from. Set "ghola.repoPath" to the absolute path of your clone.',
       'Open Settings',
     );
     if (choice === 'Open Settings') {
-      void vscode.commands.executeCommand('workbench.action.openSettings', 'nomeda.repoPath');
+      void vscode.commands.executeCommand('workbench.action.openSettings', 'ghola.repoPath');
     }
     return;
   }
@@ -82,14 +82,14 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
   const scriptPath = path.join(repoRoot, 'scripts', 'reinstall.sh');
   if (!fs.existsSync(scriptPath)) {
     vscode.window.showErrorMessage(
-      `Nomeda: update script not found at ${scriptPath}.`,
+      `Ghola: update script not found at ${scriptPath}.`,
     );
     return;
   }
 
   // The INSTALLED extension's version is the correct left-hand side of the
   // update check: context.extensionPath now ships a VERSION file. We read it
-  // here and hand it to the script via NOMEDA_INSTALLED_VERSION so the script
+  // here and hand it to the script via GHOLA_INSTALLED_VERSION so the script
   // compares installed-vs-remote (the install can lag) rather than
   // clone-vs-remote (the maintainer's clone is never behind its own push).
   let installedVersion: string | undefined;
@@ -105,7 +105,7 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
   }
 
   updating = true;
-  const channel = vscode.window.createOutputChannel('Nomeda Update');
+  const channel = vscode.window.createOutputChannel('Ghola Update');
   channel.clear();
   channel.show(true);
 
@@ -116,7 +116,7 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
     const exitCode = await vscode.window.withProgress<number>(
       {
         location: vscode.ProgressLocation.Notification,
-        title: 'Updating Nomeda…',
+        title: 'Updating Ghola…',
         cancellable: false,
       },
       () =>
@@ -126,7 +126,7 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
           // shell sources the user's profile so those resolve.
           const child = spawn('bash', ['-lc', `bash ${shellQuote(scriptPath)}`], {
             cwd: repoRoot,
-            env: { ...process.env, NOMEDA_INSTALLED_VERSION: installedVersion ?? '' },
+            env: { ...process.env, GHOLA_INSTALLED_VERSION: installedVersion ?? '' },
           });
           child.stdout.on('data', (chunk: Buffer) => {
             const text = chunk.toString();
@@ -145,17 +145,17 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
 
     if (/\bALREADY_UP_TO_DATE\b/.test(buffer)) {
       await vscode.window.showInformationMessage(
-        'Nomeda is already up to date.',
+        'Ghola is already up to date.',
         { modal: true },
       );
       return;
     }
 
     if (exitCode === 0) {
-      const installedMatch = buffer.match(/\[ext\]\s+Installed:\s+nomeda v(\S+)/i);
+      const installedMatch = buffer.match(/\[ext\]\s+Installed:\s+ghola v(\S+)/i);
       const version = installedMatch ? installedMatch[1] : 'latest';
       const choice = await vscode.window.showInformationMessage(
-        `Nomeda updated to v${version}. Reload window to activate?`,
+        `Ghola updated to v${version}. Reload window to activate?`,
         { modal: true },
         'Reload Window',
         'Later',
@@ -167,7 +167,7 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
     }
 
     const choice = await vscode.window.showErrorMessage(
-      `Nomeda update failed (exit ${exitCode}).`,
+      `Ghola update failed (exit ${exitCode}).`,
       { modal: true },
       'Show Log',
     );
@@ -176,7 +176,7 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
     }
   } catch (err) {
     const choice = await vscode.window.showErrorMessage(
-      `Nomeda update failed — ${(err as Error).message}`,
+      `Ghola update failed — ${(err as Error).message}`,
       { modal: true },
       'Show Log',
     );
@@ -189,13 +189,13 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
 }
 
 /**
- * Register the `nomeda.updateExtension` command. Returns the disposable so the
+ * Register the `ghola.updateExtension` command. Returns the disposable so the
  * caller can push it onto `context.subscriptions` alongside the other commands.
  */
 export function registerUpdateExtensionCommand(
   context: vscode.ExtensionContext,
 ): vscode.Disposable {
-  return vscode.commands.registerCommand('nomeda.updateExtension', () =>
+  return vscode.commands.registerCommand('ghola.updateExtension', () =>
     runUpdate(context),
   );
 }

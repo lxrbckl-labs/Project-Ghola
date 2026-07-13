@@ -15,7 +15,7 @@ An explicit request can route to either agent, and SWE spec-writing is always on
 
 ## Where specs land
 
-Specs live OUTSIDE the work repo. The root is `parameters.specsDir` (default `~/.nomeda/tests`), and per-ticket spec files land in a subdir keyed by ticket id, e.g. `~/.nomeda/tests/CMMS-1234/TP-1.spec.ts`. The shared `playwright.config.ts` sits at the `specsDir` root, not inside each per-ticket subdir, so the same config governs every ticket's specs.
+Specs live OUTSIDE the work repo. The root is `parameters.specsDir` (default `~/.ghola/tests`), and per-ticket spec files land in a subdir keyed by ticket id, e.g. `~/.ghola/tests/CMMS-1234/TP-1.spec.ts`. The shared `playwright.config.ts` sits at the `specsDir` root, not inside each per-ticket subdir, so the same config governs every ticket's specs.
 
 The per-ticket subdir is created on demand the first time the agent writes specs for that ticket. Subsequent runs against the same ticket reuse the subdir. Specs persist across sessions; they are durable artifacts intended for re-running, not session-scoped scratch files. The work repo's git tree is never touched; the agent does not stage, commit, or otherwise interact with the work repo's VCS from this module.
 
@@ -132,10 +132,10 @@ Copyable helper the tester bakes into annotated specs:
 ```typescript
 async function annotate(page, text) {
   await page.evaluate((label) => {
-    let el = document.getElementById('nomeda-annotation');
+    let el = document.getElementById('ghola-annotation');
     if (!el) {
       el = document.createElement('div');
-      el.id = 'nomeda-annotation';
+      el.id = 'ghola-annotation';
       el.style.cssText = [
         'position:fixed', 'left:0', 'right:0', 'bottom:0', 'z-index:2147483647',
         'padding:14px 20px', 'background:rgba(0,0,0,0.82)', 'color:#fff',

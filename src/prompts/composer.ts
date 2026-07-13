@@ -125,7 +125,7 @@ export class PromptComposer {
       if (targeted.length === 0) continue;
 
       for (const fragment of targeted) {
-        const contentPath = `\${NOMEDA_ROOT}/modules/${handle.manifest.id}/${fragment.contentPath}`;
+        const contentPath = `\${GHOLA_ROOT}/modules/${handle.manifest.id}/${fragment.contentPath}`;
         const proactive = handle.manifest.proactive === true;
         const marker = proactive ? ' [proactive — consult at session start]' : '';
         const header = `- **${id}**${marker}`;
@@ -182,7 +182,7 @@ export class PromptComposer {
     );
     if (!fragment) return null;
 
-    const contentPath = `\${NOMEDA_ROOT}/modules/${handle.manifest.id}/${fragment.contentPath}`;
+    const contentPath = `\${GHOLA_ROOT}/modules/${handle.manifest.id}/${fragment.contentPath}`;
     const proactive = handle.manifest.proactive === true;
     const marker = proactive ? ' [proactive — consult at session start]' : '';
     const header = `- **${handle.manifest.id}**${marker}`;

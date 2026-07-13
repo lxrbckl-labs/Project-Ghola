@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://nomeda.local/schemas/module-manifest.json",
-  "title": "Nomeda Module Manifest",
+  "$id": "https://ghola.local/schemas/module-manifest.json",
+  "title": "Ghola Module Manifest",
   "type": "object",
   "required": ["id", "name", "version"],
   "additionalProperties": false,

@@ -25,11 +25,11 @@ const ATLASSIAN_MODULE_ID = 'integration.atlassian-suite';
  * which token authenticates which product — the user enters two distinct
  * tokens (one per product surface) and the bridge never mixes them.
  */
-const ATLASSIAN_JIRA_TOKEN_SECRET_KEY = 'nomeda.atlassianSuite.jiraToken';
-const ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY = 'nomeda.atlassianSuite.bitbucketToken';
+const ATLASSIAN_JIRA_TOKEN_SECRET_KEY = 'ghola.atlassianSuite.jiraToken';
+const ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY = 'ghola.atlassianSuite.bitbucketToken';
 
 /*
- * LEGACY: `nomeda.atlassianSuite.apiToken` — SecretStorage key from a
+ * LEGACY: `ghola.atlassianSuite.apiToken` — SecretStorage key from a
  * previous single-token design that stored one shared token used for both
  * Jira and Bitbucket. Intentionally orphaned in place: this codebase no
  * longer reads, writes, migrates, or deletes it. Users were informed that
@@ -109,10 +109,144 @@ export interface AtlassianBridge {
   onDidChangeValidation: vscode.Event<AtlassianValidationResult>;
 }
 
+/**
+ * ONE-TIME MIGRATION: copy persisted data from the legacy `nomeda.*` namespace
+ * to the current `ghola.*` namespace. This is the ONLY place in the codebase
+ * where the old `nomeda.*` literals intentionally survive the rename.
+ *
+ * Guarded by the `ghola.migratedFromNomeda` globalState flag so it runs at most
+ * once per installation. Every step is wrapped so a failure can never break
+ * activation, and the whole thing is a safe no-op on a fresh install (nothing
+ * old to copy). For each datum we copy old -> new ONLY when the new location is
+ * still unset, so a re-run (or a partial prior run) never clobbers current data.
+ *
+ * Secret VALUES are never logged or echoed.
+ */
+function migrateFromNomeda(context: vscode.ExtensionContext, logger: vscode.OutputChannel): void {
+  const MIGRATION_FLAG = 'ghola.migratedFromNomeda';
+  if (context.globalState.get<boolean>(MIGRATION_FLAG)) {
+    return;
+  }
+
+  // ── 1. workspaceState + globalState mementos ──
+  // Suffixes shared by both mementos; see src/state/keys.ts for the canonical
+  // list. The old keys were `nomeda.<suffix>`, the new keys `ghola.<suffix>`.
+  const mementoKeySuffixes = [
+    'moduleSettings',
+    'enabledModules',
+    'enabledModules.initialized',
+    'configurations',
+    'configurations.seeded',
+    'configurations.seededNames',
+    'activeConfigurationId',
+    'ticketWork.todos',
+    'atlassianSuite.lastValidation',
+    'ticketWork.widgetEnabled',
+    'commitPush.enabled',
+  ];
+  for (const memento of [context.workspaceState, context.globalState]) {
+    for (const suffix of mementoKeySuffixes) {
+      try {
+        const oldKey = `nomeda.${suffix}`;
+        const newKey = `ghola.${suffix}`;
+        const oldValue = memento.get(oldKey);
+        if (oldValue !== undefined && memento.get(newKey) === undefined) {
+          void memento.update(newKey, oldValue);
+        }
+      } catch (err) {
+        logger.appendLine(`[ghola] state migration skipped for "${suffix}": ${err}`);
+      }
+    }
+  }
+
+  // ── 2. SecretStorage ──
+  // Includes the legacy single-token `apiToken` key alongside the current
+  // per-product tokens. Secret VALUES are never logged.
+  void (async () => {
+    const secretSuffixes = ['jiraToken', 'bitbucketToken', 'apiToken'];
+    for (const suffix of secretSuffixes) {
+      try {
+        const oldKey = `nomeda.atlassianSuite.${suffix}`;
+        const newKey = `ghola.atlassianSuite.${suffix}`;
+        const oldSecret = await context.secrets.get(oldKey);
+        if (oldSecret !== undefined && (await context.secrets.get(newKey)) === undefined) {
+          await context.secrets.store(newKey, oldSecret);
+        }
+      } catch (err) {
+        logger.appendLine(`[ghola] secret migration skipped for "${suffix}"`);
+        void err;
+      }
+    }
+  })();
+
+  // ── 3. Config (settings.json) ──
+  // VS Code cannot silently move config keys, so we copy each present
+  // `nomeda.<k>` value into `ghola.<k>` at the SAME scope (workspace/global)
+  // when the new key has no value there. Best-effort; never throws.
+  void (async () => {
+    const configLeafKeys = [
+      'cliCommand',
+      'sessionCommand',
+      'selectedAlias',
+      'cliAliases',
+      'aliasFile',
+      'repoPath',
+      'modulesDir',
+      'linqpadConnectionsPath',
+      'newModulePrompt',
+      'linqpadInstallPrompt',
+      'swe.performanceCores',
+      'swe.performanceCoresModel',
+      'swe.efficiencyCores',
+      'swe.efficiencyCoresModel',
+      'qa.count',
+      'qa.model',
+    ];
+    const root = vscode.workspace.getConfiguration();
+    for (const key of configLeafKeys) {
+      try {
+        const oldInspect = root.inspect(`nomeda.${key}`);
+        const newInspect = root.inspect(`ghola.${key}`);
+        if (oldInspect?.workspaceValue !== undefined && newInspect?.workspaceValue === undefined) {
+          await root.update(`ghola.${key}`, oldInspect.workspaceValue, vscode.ConfigurationTarget.Workspace);
+        }
+        if (oldInspect?.globalValue !== undefined && newInspect?.globalValue === undefined) {
+          await root.update(`ghola.${key}`, oldInspect.globalValue, vscode.ConfigurationTarget.Global);
+        }
+      } catch (err) {
+        logger.appendLine(`[ghola] config migration skipped for "${key}": ${err}`);
+      }
+    }
+  })();
+
+  // ── 4. Runtime dir rename: <workspace>/.nomeda -> <workspace>/.ghola ──
+  try {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const oldDir = path.join(folder.uri.fsPath, '.nomeda');
+      const newDir = path.join(folder.uri.fsPath, '.ghola');
+      if (fsSync.existsSync(oldDir) && !fsSync.existsSync(newDir)) {
+        fsSync.renameSync(oldDir, newDir);
+      }
+    }
+  } catch (err) {
+    logger.appendLine(`[ghola] runtime dir migration skipped: ${err}`);
+  }
+
+  // Mark done so this never runs again. Best-effort; a failure here simply
+  // means the (idempotent) migration retries next activation.
+  void context.globalState.update(MIGRATION_FLAG, true);
+}
+
 export function activate(context: vscode.ExtensionContext): void {
-  const logger = vscode.window.createOutputChannel('Nomeda');
+  const logger = vscode.window.createOutputChannel('Ghola');
   context.subscriptions.push(logger);
-  logger.appendLine('[nomeda] activating v0.0.1');
+  logger.appendLine('[ghola] activating v0.0.1');
+
+  // One-time migration of persisted data from the old `nomeda.*` namespace to
+  // the current `ghola.*` namespace. Runs at most once (guarded by a
+  // globalState flag) and is fully best-effort: it must never throw out of
+  // activation, and it is a no-op on a fresh install where nothing old exists.
+  migrateFromNomeda(context, logger);
 
   const moduleState = new ModuleState(context.workspaceState);
   const loader = new ModuleLoader(moduleState, {
@@ -164,7 +298,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   /**
    * Read a single Atlassian-module setting from the flattened
-   * `nomeda.moduleSettings` workspace-state entry. Falls back to the
+   * `ghola.moduleSettings` workspace-state entry. Falls back to the
    * manifest's declared default (if any) when the user has not yet saved the
    * field — this mirrors the webview's own `state.settingsValues[key] ??
    * field.default` logic so that pre-populated default values are visible to
@@ -257,7 +391,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // webview-local state. `onStartupFinished` in activationEvents guarantees the
   // extension is active when restore happens.
   context.subscriptions.push(
-    vscode.window.registerWebviewPanelSerializer('nomedaSettings', {
+    vscode.window.registerWebviewPanelSerializer('gholaSettings', {
       async deserializeWebviewPanel(restored: vscode.WebviewPanel): Promise<void> {
         panel.revive(restored);
       },
@@ -277,7 +411,7 @@ export function activate(context: vscode.ExtensionContext): void {
   //     placed in any error path. `validate()` returns a sanitized shape that
   //     never contains the raw token.
   context.subscriptions.push(
-    vscode.commands.registerCommand('nomeda.atlassianSuite.setJiraToken', async () => {
+    vscode.commands.registerCommand('ghola.atlassianSuite.setJiraToken', async () => {
       const value = await vscode.window.showInputBox({
         prompt: 'Jira API token',
         password: true,
@@ -294,7 +428,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // `failed` result so no rejection can escape.
       void atlassianBridge.validate();
     }),
-    vscode.commands.registerCommand('nomeda.atlassianSuite.clearJiraToken', async () => {
+    vscode.commands.registerCommand('ghola.atlassianSuite.clearJiraToken', async () => {
       await context.secrets.delete(ATLASSIAN_JIRA_TOKEN_SECRET_KEY);
       tokenStatusEmitter.fire();
       // Re-run validation so the persisted result reflects "Jira token
@@ -302,7 +436,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // current state. The client handles the per-product `skipped` shape.
       void atlassianBridge.validate();
     }),
-    vscode.commands.registerCommand('nomeda.atlassianSuite.setBitbucketToken', async () => {
+    vscode.commands.registerCommand('ghola.atlassianSuite.setBitbucketToken', async () => {
       const value = await vscode.window.showInputBox({
         prompt: 'Bitbucket API token',
         password: true,
@@ -313,12 +447,12 @@ export function activate(context: vscode.ExtensionContext): void {
       tokenStatusEmitter.fire();
       void atlassianBridge.validate();
     }),
-    vscode.commands.registerCommand('nomeda.atlassianSuite.clearBitbucketToken', async () => {
+    vscode.commands.registerCommand('ghola.atlassianSuite.clearBitbucketToken', async () => {
       await context.secrets.delete(ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY);
       tokenStatusEmitter.fire();
       void atlassianBridge.validate();
     }),
-    vscode.commands.registerCommand('nomeda.atlassianSuite.validateToken', async () => {
+    vscode.commands.registerCommand('ghola.atlassianSuite.validateToken', async () => {
       // On-demand validation invoked by SWE-2's Validate button (and from
       // the Command Palette). Result lands via the validation event
       // listeners; we still return it so callers that want to await the
@@ -362,7 +496,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('nomedaTicketWidget', ticketWidgetProvider),
+    vscode.window.registerWebviewViewProvider('gholaTicketWidget', ticketWidgetProvider),
   );
 
   // Context-key sync — show widget only when module enabled AND ticketId set
@@ -389,7 +523,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Empty tree view that exists only to host the title-bar Commit-and-Push
   // button and welcome content; gated live on the tool.commit-push module.
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('nomedaCommitPush', new CommitPushViewProvider()),
+    vscode.window.registerTreeDataProvider('gholaCommitPush', new CommitPushViewProvider()),
   );
 
   const syncCommitPushContextKey = (): void => {
@@ -405,7 +539,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // intentionally runs after this chain so the panel renders with the applied
   // configuration in place.
   void loader.discover(resolveModulesDirFn(context)()).then(async (handles) => {
-    logger.appendLine(`[nomeda] discovered ${handles.length} module(s)`);
+    logger.appendLine(`[ghola] discovered ${handles.length} module(s)`);
     await seedBuiltInConfigurations(context, configurationsStore, logger);
     await panel.applyDefaultOnStartup();
 
@@ -429,12 +563,12 @@ export function activate(context: vscode.ExtensionContext): void {
     if (gholaEnabled && ledgerHandle && !ledgerHandle.isEnabled) {
       await loader.enable('tool.ghola-ledger');
       logger.appendLine(
-        '[nomeda] ghola-ledger backfill: mode.war is enabled but tool.ghola-ledger was disabled; auto-enabled it',
+        '[ghola] ghola-ledger backfill: mode.war is enabled but tool.ghola-ledger was disabled; auto-enabled it',
       );
     }
 
     if (context.extensionMode === vscode.ExtensionMode.Development) {
-      vscode.commands.executeCommand('nomeda.openSettings');
+      vscode.commands.executeCommand('ghola.openSettings');
     }
   });
 
@@ -448,8 +582,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // React to config changes that affect paths.
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('nomeda.modulesDir')) {
-        void vscode.commands.executeCommand('nomeda.reloadModules');
+      if (e.affectsConfiguration('ghola.modulesDir')) {
+        void vscode.commands.executeCommand('ghola.reloadModules');
       }
     }),
   );
@@ -457,7 +591,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // ───── War Room ledger watchers (War Mode) ────────────────────────
   // Two-watcher scheme (mirrors loader.watchManifests' 250ms debounce):
   //   A (bootstrap): watches the workspace pointer file
-  //     <workspaceFolder>/.nomeda/ledger-path. The launched `ghola` CLI writes
+  //     <workspaceFolder>/.ghola/ledger-path. The launched `ghola` CLI writes
   //     the absolute ledger-root path there on the first mission. On
   //     create/change we (re)build watcher B and refresh the War Room.
   //   B (ledger): created lazily once the pointer resolves to an existing dir,
@@ -468,7 +602,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Both watchers + the debounce timer are disposed on deactivate.
   const warRoomFolder = vscode.workspace.workspaceFolders?.[0];
   if (warRoomFolder) {
-    const pointerPath = path.join(warRoomFolder.uri.fsPath, '.nomeda', 'ledger-path');
+    const pointerPath = path.join(warRoomFolder.uri.fsPath, '.ghola', 'ledger-path');
     let ledgerWatcher: vscode.FileSystemWatcher | undefined;
     let warRoomDebounce: ReturnType<typeof setTimeout> | undefined;
 
@@ -506,7 +640,7 @@ export function activate(context: vscode.ExtensionContext): void {
     };
 
     const bootstrapWatcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(warRoomFolder, '.nomeda/ledger-path'),
+      new vscode.RelativePattern(warRoomFolder, '.ghola/ledger-path'),
     );
     const onPointerChanged = (): void => {
       rebuildLedgerWatcher();
@@ -518,7 +652,7 @@ export function activate(context: vscode.ExtensionContext): void {
     rebuildLedgerWatcher();
 
     // Watcher C (control): the ledger watcher (B) only sees `**/*.md` under the
-    // ledger root, so a CLI `*-ack` that writes ONLY <workspace>/.nomeda/control.json
+    // ledger root, so a CLI `*-ack` that writes ONLY <workspace>/.ghola/control.json
     // (no ledger .md touched) never refreshed the War Room (pending indicators
     // went stale and operators re-clicked). Watch the workspace control JSON so an
     // ack (or any control.json create/change/delete) re-posts the War Room. Reuses
@@ -526,7 +660,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // that follows the host's own control.json writes (each host writer already
     // calls postWarRoom directly, then this watcher fires once more, debounced).
     const controlWatcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(warRoomFolder, '.nomeda/control.json'),
+      new vscode.RelativePattern(warRoomFolder, '.ghola/control.json'),
     );
     controlWatcher.onDidCreate(scheduleWarRoomRefresh);
     controlWatcher.onDidChange(scheduleWarRoomRefresh);
@@ -572,7 +706,7 @@ const BUILT_IN_REMOVALS: string[] = ['Unconstrained'];
  * activation, adding any newly-introduced built-in exactly once without
  * duplicating existing presets or resurrecting ones the user deleted.
  *
- * Tracking is by preset NAME via `nomeda.configurations.seededNames` (an array
+ * Tracking is by preset NAME via `ghola.configurations.seededNames` (an array
  * of the built-in names already seeded). This replaces the legacy single
  * boolean `CONFIGURATIONS_SEEDED` gate, which short-circuited so a built-in
  * added after first install (e.g. "Self Upgrade") never reached the store.
@@ -628,7 +762,7 @@ async function seedBuiltInConfigurations(
       // pass then no-ops (no config named `from` remains, so `source` is
       // undefined), and the reconcile pass's existingNames dedupe prevents a
       // duplicate `to` from being added.
-      logger.appendLine(`[nomeda] built-in configuration rename "${from}" to "${to}" failed: ${err}`);
+      logger.appendLine(`[ghola] built-in configuration rename "${from}" to "${to}" failed: ${err}`);
       return;
     }
   }
@@ -712,7 +846,7 @@ async function seedBuiltInConfigurations(
       // removal pass then no-ops (no stored config carries the name, so `target`
       // is undefined), and the reconcile pass never re-adds a name absent from
       // BUILT_IN_CONFIGURATIONS.
-      logger.appendLine(`[nomeda] built-in configuration removal "${name}" failed: ${err}`);
+      logger.appendLine(`[ghola] built-in configuration removal "${name}" failed: ${err}`);
       return;
     }
   }
@@ -742,13 +876,13 @@ async function seedBuiltInConfigurations(
     // Keep the legacy boolean flag set for any other/older reader.
     await context.workspaceState.update(WORKSPACE_STATE_KEYS.CONFIGURATIONS_SEEDED, true);
   } catch (err) {
-    logger.appendLine(`[nomeda] built-in configuration seeding failed, will retry next activation: ${err}`);
+    logger.appendLine(`[ghola] built-in configuration seeding failed, will retry next activation: ${err}`);
   }
 }
 
 function resolveModulesDirFn(context: vscode.ExtensionContext): () => string {
   return () => {
-    const cfg = vscode.workspace.getConfiguration('nomeda');
+    const cfg = vscode.workspace.getConfiguration('ghola');
     const value = cfg.get<string>('modulesDir') ?? 'modules';
     // Default path: modules ship inside the installed extension, so resolve
     // against extensionPath. This makes the extension self-contained — it finds

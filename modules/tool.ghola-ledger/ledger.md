@@ -18,17 +18,17 @@ The CLI serializes every write behind an advisory lockfile so concurrent gholas 
 
 The ledger has one authoritative pointer and a resolution chain for where the actual data sits:
 
-- **Authoritative pointer:** `<workspace>/.nomeda/ledger-path` — a plain text file containing the absolute path to the ledger root, written by the CLI on first use. This is what the War Room's file-watcher reads to find the ledger; it has no other way to know where to look.
+- **Authoritative pointer:** `<workspace>/.ghola/ledger-path` — a plain text file containing the absolute path to the ledger root, written by the CLI on first use. This is what the War Room's file-watcher reads to find the ledger; it has no other way to know where to look.
 - **Preferred home:** the Obsidian vault, at a dedicated top-level `_Gholas/` directory (`<vault>/_Gholas/`). This is cross-session and cross-project — gholas persist independently of any one workspace being open.
-- **Workspace-local fallback:** `<workspace>/.nomeda/gholas/` when no Obsidian vault can be resolved. Ghola mode works fully with no vault present at all; the ledger just lives next to the workspace instead.
-- **Resolution order the CLI applies:** `--vault <path>` flag > `NOMEDA_VAULT` env > `SWT_OBSIDIAN_PATH` env > auto-discover a directory containing `.obsidian` > the workspace-local fallback. `--local` skips straight to the workspace-local fallback regardless of what would otherwise resolve. `--workspace <path>` overrides the workspace itself (default: cwd).
+- **Workspace-local fallback:** `<workspace>/.ghola/gholas/` when no Obsidian vault can be resolved. Ghola mode works fully with no vault present at all; the ledger just lives next to the workspace instead.
+- **Resolution order the CLI applies:** `--vault <path>` flag > `GHOLA_VAULT` env > `SWT_OBSIDIAN_PATH` env > auto-discover a directory containing `.obsidian` > the workspace-local fallback. `--local` skips straight to the workspace-local fallback regardless of what would otherwise resolve. `--workspace <path>` overrides the workspace itself (default: cwd).
 
 Do not guess or hardcode a ledger path in conversation or in a ghola brief — always resolve it through a `ghola` command (or read the pointer file) rather than assuming `_Gholas/` sits at a fixed location.
 
 ## Ledger layout
 
 ```
-<ledger-root>/                       <vault>/_Gholas/  OR  <workspace>/.nomeda/gholas/
+<ledger-root>/                       <vault>/_Gholas/  OR  <workspace>/.ghola/gholas/
   <subject>/                         one directory per subject (a ticket, a support app, a CD project)
     <ghola-slug>.md                  one file per ghola — frontmatter + accreted history
     _missions.md                     mission records for this subject (each carries an `integration` line)
@@ -120,7 +120,7 @@ Commands:
 | `progress` | `--subject S --id M --note "..."` | Appends a progress note to a mission record. |
 | `note` | `--subject S --text "..."` | Appends a self-tuning line to the subject's `operating-notes.md`. |
 | `alert` | `--add "..." --subject S \| --list --subject S [--json]` | Appends/lists per-subject `alerts.md` bullets (newest-last; surfaced in `board --json`). |
-| `awaken` | `--status \| --ack [--workspace <path>] [--json]` | Reads/acks the Awaken-All kill-switch field in `<workspace>/.nomeda/control.json` (`awakenAll`). The CLI never sets it true — only the host's War Room button does; `--ack` is for TPM to call after standing the whole team down. |
+| `awaken` | `--status \| --ack [--workspace <path>] [--json]` | Reads/acks the Awaken-All kill-switch field in `<workspace>/.ghola/control.json` (`awakenAll`). The CLI never sets it true — only the host's War Room button does; `--ack` is for TPM to call after standing the whole team down. |
 | `resume` | `--status \| --ack [--workspace <path>] [--json]` | Reads/acks a per-mission resume request (same control.json, field `resumeMission`). The CLI never sets it to a mission id — that's the host's Resume button's job; `--ack` is for TPM to call after reawakening that mission's crew. |
 | `directive` | `--status \| --ack [--workspace <path>] [--json]` | Reads/acks the god-console directive field (same control.json, field `directive`). The CLI never sets it non-null — that's the host/god-console's job; `--ack` is for TPM to call after acting on the directive. |
 | `declaredone` | `--status \| --ack [--workspace <path>] [--json]` | Reads/acks the operator's P4 Declare Done field (same control.json, field `declareDone`: mission-id or `null`). The CLI never sets it non-null — that's the host/Declare-Done-button's job; `--ack` is for TPM to call after marking the mission done, standing the crew down, and reporting completion. |
@@ -134,7 +134,7 @@ Commands:
 | `ls` | `--subject S [--json]` | Lists a subject's gholas — id, state, model, last-used, purpose, generation, parent, reliability. **This is the reuse-vs-regrow lookup** — always run it before spawning. |
 | `board` | `[--subject S] [--id M] [--json]` | Renders the war-room view (ASCII by default; `--json` mirrors the same data the War Room webview shows, plus extra fields — the host actually builds the webview's payload by parsing the ledger files directly, not by shelling out to `board --json`). With no `--subject`/`--id`, shows a summary across all subjects; subject scope includes alerts and roster generation/parent/reliability. |
 
-The `--vault`/`--workspace`/`--local` global flags above are accepted by every command, not just `mission`/`spawn`/etc. — including `awaken`, `resume`, `directive`, `declaredone`, and `escalate`, which key off `<workspace>/.nomeda/control.json` rather than the ledger root. `--json` is available on `ls`, `board`, `alert --list`, `record`, `awaken`, `resume`, `directive`, `declaredone`, `escalate`, `template list`, `template use`, and `mission list`/`mission resume` (the only `mission` subcommands that honor it — `mission start`, `mission done`, and `mission reopen` do not) — use it when you need to parse the result programmatically rather than read it as prose.
+The `--vault`/`--workspace`/`--local` global flags above are accepted by every command, not just `mission`/`spawn`/etc. — including `awaken`, `resume`, `directive`, `declaredone`, and `escalate`, which key off `<workspace>/.ghola/control.json` rather than the ledger root. `--json` is available on `ls`, `board`, `alert --list`, `record`, `awaken`, `resume`, `directive`, `declaredone`, `escalate`, `template list`, `template use`, and `mission list`/`mission resume` (the only `mission` subcommands that honor it — `mission start`, `mission done`, and `mission reopen` do not) — use it when you need to parse the result programmatically rather than read it as prose.
 
 ## Role-Specific Notes
 

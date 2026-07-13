@@ -52,7 +52,7 @@ The migration offer is surfaced only when **all** of the following hold:
 
 Before the offer is even surfaced, TPM verifies the following — silently if everything is fine, with a short heads-up if anything blocks:
 
-- The target directory does **not** already exist. The target is computed from `parameters.fastpathDirectory` + the workspace basename (e.g. `~/projects` + `Project-Nomeda` → `~/projects/Project-Nomeda`). If the target already exists, surface the conflict and stop — never overwrite an existing directory.
+- The target directory does **not** already exist. The target is computed from `parameters.fastpathDirectory` + the workspace basename (e.g. `~/projects` + `Project-Ghola` → `~/projects/Project-Ghola`). If the target already exists, surface the conflict and stop — never overwrite an existing directory.
 - For the `clone` strategy: the source workspace has a git remote configured (`git remote -v` returns at least one remote). For the `rsync` strategy: confirm there is state worth preserving (a working tree exists). For `ask`: both checks run so TPM can advise the user.
 - The user is in a writable shell — `bash` is available. The migration commands assume a bash environment in WSL.
 
@@ -68,7 +68,7 @@ The chosen strategy is `parameters.migrationStrategy`:
 
 Step by step, TPM:
 
-1. Confirms the target path with the user (e.g. "I'll set up `~/projects/Project-Nomeda` — sound right?").
+1. Confirms the target path with the user (e.g. "I'll set up `~/projects/Project-Ghola` — sound right?").
 2. Surfaces the chosen command for the user to run in their bash terminal — fully formed, copy-pasteable, with the actual remote URL or source path substituted in.
 3. Waits for confirmation that the command succeeded. Do not proceed on assumption — wait for the user to say it's done (or report what went wrong).
 4. If `parameters.postMigrationChecks` is `true`, walks through the post-migration sanity checks below.
@@ -92,9 +92,9 @@ Run when `parameters.postMigrationChecks` is `true`:
 
 ## Launcher Side-Effect (Read-Only Awareness)
 
-While this module is enabled, the Nomeda session launcher opens the bash terminal already `cd`'d into a WSL-native fast-path directory rather than the workspace folder. Resolution order:
+While this module is enabled, the Ghola session launcher opens the bash terminal already `cd`'d into a WSL-native fast-path directory rather than the workspace folder. Resolution order:
 
-1. **`fastpathDirectory`** — if the user has explicitly saved a value for this setting (the panel pre-fills `~/projects` as a UI placeholder, but the launcher only acts on a persisted value), it is treated as the parent directory. If `autoCdIntoRepo` is on (the default), the launcher checks for `<fastpathDirectory>/<basename(workspace)>` — e.g. `~/projects` + workspace `/mnt/c/Users/me/Project-Nomeda` → looks for `~/projects/Project-Nomeda`. If that subdirectory exists, the terminal opens there (the actual repo, not the parent).
+1. **`fastpathDirectory`** — if the user has explicitly saved a value for this setting (the panel pre-fills `~/projects` as a UI placeholder, but the launcher only acts on a persisted value), it is treated as the parent directory. If `autoCdIntoRepo` is on (the default), the launcher checks for `<fastpathDirectory>/<basename(workspace)>` — e.g. `~/projects` + workspace `/mnt/c/Users/me/Project-Ghola` → looks for `~/projects/Project-Ghola`. If that subdirectory exists, the terminal opens there (the actual repo, not the parent).
 2. If `autoCdIntoRepo` is on but no matching subdirectory is found, the launcher falls back to `<fastpathDirectory>` itself.
 3. If `autoCdIntoRepo` is off, the launcher cd's directly into `<fastpathDirectory>` without probing for a subdirectory.
 4. If `fastpathDirectory` has never been saved (or was saved as blank), the launcher falls back to its older auto-compute: translating `/mnt/<letter>/Users/<user>/<rest>` → `~/projects/<basename(rest)>`. Workspaces already on a WSL-native path (starting with `/home/` or the system home directory) are considered fast and the workspace path itself is used. **Scope limit:** auto-compute only recognises the `\Users\<user>\` sub-path convention. A path like `/mnt/e/workprojects/foo` does not match the pattern and the launcher falls back to the workspace folder unchanged — the user must set `fastpathDirectory` explicitly for non-standard mount layouts.

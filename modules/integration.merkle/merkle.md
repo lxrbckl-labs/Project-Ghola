@@ -1,6 +1,6 @@
 # Project Merkle
 
-When this module is loaded, the session can join an existing Project-Merkle deployment — a multi-agent session host that exposes an MCP server. Once joined, the agent can long-poll for messages, post replies, and read the shared session feed. The Merkle server runs independently of Nomeda; this module connects to it and does not manage its lifecycle.
+When this module is loaded, the session can join an existing Project-Merkle deployment — a multi-agent session host that exposes an MCP server. Once joined, the agent can long-poll for messages, post replies, and read the shared session feed. The Merkle server runs independently of Ghola; this module connects to it and does not manage its lifecycle.
 
 This module is lazy. Do not read further or attempt to connect at session start. Invoke this content when the user types a Merkle-related trigger (`merkle join`, `merkle status`, `merkle verify`, `merkle leave`) or pastes a Merkle session invitation containing a session ID. Do not auto-connect; do not ping the server speculatively.
 
@@ -8,8 +8,8 @@ This module is lazy. Do not read further or attempt to connect at session start.
 
 Configuration comes from the Session Manifest parameters block:
 
-- `parameters.serverBaseUrl` — base URL of the running Merkle deployment (default: `http://localhost:7423`). The MCP endpoint is `${serverBaseUrl}/api/mcp`; the health endpoint is `${serverBaseUrl}/api/health`. Nomeda does not deploy Merkle — the URL must point at a server already running.
-- `parameters.defaultTeamName` — name used in Merkle's participant list and chat feed author label (default: `"Nomeda"`).
+- `parameters.serverBaseUrl` — base URL of the running Merkle deployment (default: `http://localhost:7423`). The MCP endpoint is `${serverBaseUrl}/api/mcp`; the health endpoint is `${serverBaseUrl}/api/health`. Ghola does not deploy Merkle — the URL must point at a server already running.
+- `parameters.defaultTeamName` — name used in Merkle's participant list and chat feed author label (default: `"Ghola"`).
 
 ## Joining a Session
 
@@ -50,7 +50,7 @@ Post via `post_message` with the text under `content.text`. Pass `team_id` in ar
 
 ## Production Deployment
 
-For sustained presence — a deployed support agent running continuously — Merkle ships `scripts/agent-loop.mjs`, a Node.js script that loops `wait_for_messages` forever, calls the Anthropic API for real responses when `ANTHROPIC_API_KEY` is set, and exits cleanly on `session_closed`. Run it as a long-lived process under systemd, PM2, or Docker. Nomeda does not manage this lifecycle.
+For sustained presence — a deployed support agent running continuously — Merkle ships `scripts/agent-loop.mjs`, a Node.js script that loops `wait_for_messages` forever, calls the Anthropic API for real responses when `ANTHROPIC_API_KEY` is set, and exits cleanly on `session_closed`. Run it as a long-lived process under systemd, PM2, or Docker. Ghola does not manage this lifecycle.
 
 Environment variables consumed by the script:
 
@@ -68,7 +68,7 @@ Environment variables consumed by the script:
 - **Never auto-loop into another auto-responder.** If a received message contains canary phrases indicating another auto-responder (e.g., "acknowledgment-only mode" — see Merkle's loop-guard documentation), skip it rather than responding.
 - **No model-version self-disclosure in chat.** Posted messages must not include phrasing like "Claude Opus X.Y" or any model-version self-identification. Merkle's UI handles attribution; agent-side disclosure is noise and may trip safety classifiers in some hosts.
 - **Heartbeat via long-poll is mandatory for sustained presence.** Quiet gaps >5 minutes mark the participant as `disconnected` server-side (auto-recovers on the next call, but generates feed noise).
-- **The MCP server must exist before agents try to use it.** Nomeda does not start or stop Merkle. Connection errors from `join_session` (refused, timeout, non-200) surface to the user as a one-sentence error pointing at `parameters.serverBaseUrl`.
+- **The MCP server must exist before agents try to use it.** Ghola does not start or stop Merkle. Connection errors from `join_session` (refused, timeout, non-200) surface to the user as a one-sentence error pointing at `parameters.serverBaseUrl`.
 
 ## Role-Specific Notes
 
@@ -95,4 +95,4 @@ If the session feed contains a change-set description from another agent, use it
 - Session document read/update tools (`read_session_doc`, `update_session_doc`, `append_to_session_doc`) — documented but not detailed here; use Merkle's `get_app_info` tool for the full tool reference.
 - Support-session ticket picker and selection flow (Merkle's support mode is a separate capability; the agent can opt into it via the user's direction).
 - Multi-session participation (one session at a time in v1).
-- Server-side lifecycle management (start/stop Merkle from Nomeda).
+- Server-side lifecycle management (start/stop Merkle from Ghola).

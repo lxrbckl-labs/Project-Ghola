@@ -1,6 +1,6 @@
 # Statusline
 
-**Status: specification only, not yet wired.** This module captures the *intended* display preferences for a Nomeda VS Code status-bar entry, but no extension code currently renders it. There is no status-bar registration in `src/extension.ts` or anywhere else in `src/` that reads these settings, and none of the `show*` settings has a runtime consumer today. This fragment is a forward design contract, not a description of a live feature. When rendering code is eventually built, it should read the settings defined here; until then, the settings record preferences that nothing acts on.
+**Status: specification only, not yet wired.** This module captures the *intended* display preferences for a Ghola VS Code status-bar entry, but no extension code currently renders it. There is no status-bar registration in `src/extension.ts` or anywhere else in `src/` that reads these settings, and none of the `show*` settings has a runtime consumer today. This fragment is a forward design contract, not a description of a live feature. When rendering code is eventually built, it should read the settings defined here; until then, the settings record preferences that nothing acts on.
 
 **TPM must NOT tell the user a status-bar pill is live, and must NOT point at any extension code as its renderer.** That code does not exist. If the user asks whether the statusline is showing, the honest answer is that the module is a planned spec whose settings are captured but not yet rendered.
 
@@ -9,7 +9,7 @@
 The design target is a single bracketed pill in the right-hand status bar:
 
 ```
-[Nomeda vX.Y.Z │ 142k · 62% · 5h 41%]
+[Ghola vX.Y.Z │ 142k · 62% · 5h 41%]
 ```
 
 The pill is specified as up to four independently-gated segments. Each of the `parameters` below is a captured preference for a future renderer, not a switch that changes anything today:
@@ -27,8 +27,8 @@ The spec calls for each segment to be gated independently; the four `show*` sett
 
 If a segment's **data source** were unavailable at render time (the runtime payload missing, unparseable, or not yet populated), the intended behavior follows `parameters.fallbackToVersionOnly`:
 
-- **When `true`** (the default): all unavailable segments collapse but the version remains, producing the short form `[Nomeda vX.Y.Z]`. This would preserve a visible Nomeda surface even when token/context/rolling-window data is not yet flowing.
-- **When `false`**: each unavailable segment renders empty individually. In the worst case (no runtime payload at all) the pill would be sparse, e.g. `[Nomeda vX.Y.Z]` with no metrics, or `[Nomeda]` if version is also unavailable.
+- **When `true`** (the default): all unavailable segments collapse but the version remains, producing the short form `[Ghola vX.Y.Z]`. This would preserve a visible Ghola surface even when token/context/rolling-window data is not yet flowing.
+- **When `false`**: each unavailable segment renders empty individually. In the worst case (no runtime payload at all) the pill would be sparse, e.g. `[Ghola vX.Y.Z]` with no metrics, or `[Ghola]` if version is also unavailable.
 
 A segment whose `show*` toggle is off is **not** considered "unavailable"; it is intentionally suppressed, and the fallback logic would not apply to it.
 
@@ -51,8 +51,8 @@ This module neither implements nor fetches these sources; they are listed so TPM
 
 These are distinct states in the design and should not be conflated. All are conditional on a renderer existing; today none produces a visible pill because no renderer is wired:
 
-- **Module disabled** (no `tool.statusline` in the Session Manifest): the entire statusline is out of scope. The user sees no Nomeda status-bar entry.
-- **Module enabled, all `show*` settings off**: the pill would have no segments to render. Recommended future behavior is **suppress** (do not show an empty `[Nomeda]` pill) rather than render a bare label, since an empty pill conveys no information and adds visual noise. Flagged to future wiring as "suppress on no-segments-enabled."
+- **Module disabled** (no `tool.statusline` in the Session Manifest): the entire statusline is out of scope. The user sees no Ghola status-bar entry.
+- **Module enabled, all `show*` settings off**: the pill would have no segments to render. Recommended future behavior is **suppress** (do not show an empty `[Ghola]` pill) rather than render a bare label, since an empty pill conveys no information and adds visual noise. Flagged to future wiring as "suppress on no-segments-enabled."
 - **Module enabled, runtime payload empty**: would degrade per `parameters.fallbackToVersionOnly` as described above.
 
 ## What this module does NOT do

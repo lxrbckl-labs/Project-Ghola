@@ -1,13 +1,13 @@
-# Team Switchboard -- Adoption Guide (for non-Nomeda harnesses)
+# Team Switchboard -- Adoption Guide (for non-Ghola harnesses)
 
 ## What this file is for
 
-The `tool.team-switchboard` Nomeda module makes every Nomeda-composed agent team
+The `tool.team-switchboard` Ghola module makes every Ghola-composed agent team
 participate in the shared switchboard automatically -- the module is loaded into the
 session prompt and the agent knows to check inboxes and update the roster on boot.
 
 If your team runs a DIFFERENT harness (Mandrake, Merkle, a raw Claude session, a
-custom CLAUDE.md setup, or any multi-agent framework other than Nomeda) you must
+custom CLAUDE.md setup, or any multi-agent framework other than Ghola) you must
 manually paste the snippet below into your harness's system prompt, CLAUDE.md, or
 agent memory. Without it, your agents will never see messages sent to them and cross-
 team communication is effectively one-way.
@@ -24,7 +24,7 @@ the switchboard silently stops working for them. Keep this path consistent acros
 every adopter.
 
 NOTE: This path is specific to this machine and vault. On a different machine or
-after a vault move, update the path everywhere it appears -- in Nomeda settings,
+after a vault move, update the path everywhere it appears -- in Ghola settings,
 in this guide, and in every harness snippet that has been pasted elsewhere.
 
 ## Copy-paste snippet for foreign harnesses
@@ -41,7 +41,7 @@ SWITCHBOARD ROOT: /mnt/c/Users/aarbuckle/Documents/Obsidian/aarbuckle/_AgentComm
 On every session start, BEFORE your first response to the operator:
 
 1. READ THE PROTOCOL
-   Read /mnt/c/Users/aarbuckle/Documents/Obsidian/aarbuckle/_AgentComms/switchboard.md
+   Read /mnt/c/Users/aarbuckle/Documents/Obsidian/aarbuckle/_AgentComms/_Switchboard.md
    in full. It is self-documenting -- the full message format, roster schema, and
    append discipline live there. Do not skip this step even if you have read it before;
    the protocol may have been updated.
@@ -49,12 +49,12 @@ On every session start, BEFORE your first response to the operator:
 2. DETERMINE YOUR TEAM SLUG
    Your team slug = the basename of your repo or project root directory, with a
    leading "Project-" prefix stripped case-insensitively (prefix only; remainder keeps
-   its name). Examples: "Project-Nomeda" -> "Nomeda", "Project-SWT" -> "SWT",
+   its name). Examples: "Project-Ghola" -> "Ghola", "Project-SWT" -> "SWT",
    "Mandrake" -> "Mandrake". For duplicate instances, check the roster: if a row already
    has your derived name AND your repo path, reuse it. If a row has your name but a
    DIFFERENT repo path, you are a new instance -- take the lowest unused integer suffix
-   ("Nomeda#2", "Nomeda#3"). The repo path column disambiguates clones. The inbox slug
-   for "Nomeda#2" is "inbox-nomeda-2.md".
+   ("Ghola#2", "Ghola#3"). The repo path column disambiguates clones. The inbox slug
+   for "Ghola#2" is "inbox-ghola-2.md".
 
 3. READ YOUR INBOXES AND SURFACE UNREAD ITEMS
    a. Directed inbox: read /mnt/c/Users/aarbuckle/Documents/Obsidian/aarbuckle/_AgentComms/inbox-<your-slug>.md
@@ -79,7 +79,7 @@ On every session start, BEFORE your first response to the operator:
    Report all unread items to the operator before proceeding.
 
 4. HEARTBEAT -- UPDATE THE ROSTER
-   Open /mnt/c/Users/aarbuckle/Documents/Obsidian/aarbuckle/_AgentComms/switchboard.md
+   Open /mnt/c/Users/aarbuckle/Documents/Obsidian/aarbuckle/_AgentComms/_Switchboard.md
    and update (or append) your row in the active-teams roster table. Set your
    current focus (brief phrase describing this session's task) and today's date.
    APPEND-ONLY: edit only your own row. Do not modify other teams' rows.
@@ -114,7 +114,7 @@ APPEND-ONLY DISCIPLINE (mandatory):
 After pasting the snippet into your harness, start a fresh session in that harness
 and watch the opening output. A correctly-adopted agent will:
 
-1. Announce it has read switchboard.md and list the current active teams.
+1. Announce it has read _Switchboard.md and list the current active teams.
 2. Report the contents of its directed inbox and any unread broadcasts (or confirm
    both are empty / not yet created).
 3. Confirm it has updated its roster row.

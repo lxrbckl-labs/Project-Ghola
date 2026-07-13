@@ -31,7 +31,7 @@
       "outputFormat": {
         "type": "string",
         "label": "Output Format",
-        "description": "Format for the user-facing boot diagnostics line(s). detailed emits [nomeda] check step-name — detail per step. compact emits a single line summarizing the full boot phase. silent emits nothing (steps still run, but the user sees only TPM's first response). Default detailed is the most informative.",
+        "description": "Format for the user-facing boot diagnostics line(s). detailed emits [ghola] check step-name — detail per step. compact emits a single line summarizing the full boot phase. silent emits nothing (steps still run, but the user sees only TPM's first response). Default detailed is the most informative.",
         "default": "detailed"
       },
       "failureBehavior": {
@@ -43,7 +43,7 @@
       "includeTimings": {
         "type": "boolean",
         "label": "Include Timings",
-        "description": "When on, each step's elapsed time is appended to the boot diagnostics line (e.g. [nomeda] check proactive-modules — 312ms). Useful for diagnosing slow boots. When off, no timings are shown. Off is the typical default for normal use; turn on temporarily when investigating slow startups.",
+        "description": "When on, each step's elapsed time is appended to the boot diagnostics line (e.g. [ghola] check proactive-modules — 312ms). Useful for diagnosing slow boots. When off, no timings are shown. Off is the typical default for normal use; turn on temporarily when investigating slow startups.",
         "default": false
       }
     }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 //
-// ghola.mjs — Phase 1 command layer for Ghola Mode (Project-Nomeda).
+// ghola.mjs — Phase 1 command layer for Ghola Mode (Project-Ghola).
 //
 // A self-contained Node CLI, invoked directly (no package.json script entry):
 //   node scripts/ghola.mjs <command> [subcommand] --flag value ...
@@ -16,22 +16,22 @@
 // process.cwd() with an optional --workspace <path> override.
 //
 // Ledger-root resolution precedence:
-//   --vault <path> > NOMEDA_VAULT env > SWT_OBSIDIAN_PATH env
+//   --vault <path> > GHOLA_VAULT env > SWT_OBSIDIAN_PATH env
 //   > auto-discover (search known roots for a directory containing a
 //     .obsidian marker)
-//   > workspace-local fallback: <workspace>/.nomeda/gholas/
+//   > workspace-local fallback: <workspace>/.ghola/gholas/
 // An explicit vault (flag or env) is trusted verbatim and created with
 // mkdir -p if it does not yet exist (so a scratch test dir can be pointed at
 // directly); auto-discovery requires the .obsidian marker because it is
 // guessing rather than being told. When a real vault resolves, the ledger
 // root is <vault>/_Gholas/. When nothing resolves, the ledger root is the
-// workspace-local fallback <workspace>/.nomeda/gholas/ (that directory IS
+// workspace-local fallback <workspace>/.ghola/gholas/ (that directory IS
 // the ledger root — nothing further is nested under it), so ghola mode
 // works even with no Obsidian vault present at all.
 //
 // ── Pointer file (how the extension learns where the ledger is) ──────────
 // The AUTHORITATIVE pointer lives in the WORKSPACE at
-// <workspace>/.nomeda/ledger-path and contains the absolute path to the
+// <workspace>/.ghola/ledger-path and contains the absolute path to the
 // ledger root (trailing newline). Phase 3's War Room file-watcher runs in
 // the extension host, which has NO vault path and only knows the workspace
 // — so it reads this workspace pointer to learn where to watch. A
@@ -71,14 +71,14 @@
 // and destroyed within this script, never ledger content.
 //
 // ── Ledger layout (created on demand) ────────────────────────────────────
-//   <ledger-root>/                       <vault>/_Gholas/ OR <workspace>/.nomeda/gholas/
+//   <ledger-root>/                       <vault>/_Gholas/ OR <workspace>/.ghola/gholas/
 //     .ledger-path                       convenience copy of the pointer
 //     <subject>/
 //       <ghola-slug>.md                  one file per ghola (frontmatter + body)
 //       _missions.md                     mission records for this subject
 //       operating-notes.md               self-tuning notes (scaffolded lazily)
 //     _archive/<subject>/<ghola-slug>.md soft-archived gholas (moved, not deleted)
-//   <workspace>/.nomeda/ledger-path      AUTHORITATIVE pointer (extension reads this)
+//   <workspace>/.ghola/ledger-path      AUTHORITATIVE pointer (extension reads this)
 //
 // Run with --help (or no arguments) for the full command list.
 
@@ -290,8 +290,8 @@ function resolveVaultOrNull(flags) {
     ensureDirSync(p);
     return p;
   }
-  if (process.env.NOMEDA_VAULT) {
-    const p = path.resolve(process.env.NOMEDA_VAULT);
+  if (process.env.GHOLA_VAULT) {
+    const p = path.resolve(process.env.GHOLA_VAULT);
     ensureDirSync(p);
     return p;
   }
@@ -317,7 +317,7 @@ function resolveContext(flags) {
   const vault = flags.local ? null : resolveVaultOrNull(flags);
   const root = vault
     ? path.join(vault, '_Gholas')
-    : path.join(workspace, '.nomeda', 'gholas');
+    : path.join(workspace, '.ghola', 'gholas');
   return { workspace, vault, root };
 }
 
@@ -326,7 +326,7 @@ function resolveContext(flags) {
 // ─────────────────────────────────────────────────────────────────────────
 
 function workspacePointerPath(workspace) {
-  return path.join(workspace, '.nomeda', 'ledger-path');
+  return path.join(workspace, '.ghola', 'ledger-path');
 }
 
 // The cooperative kill-switch + resume + directive + declare-done control
@@ -352,7 +352,7 @@ function workspacePointerPath(workspace) {
 // full-content overwrites via atomicWriteFileSync (temp+rename) — never a
 // delete.
 function controlFilePath(workspace) {
-  return path.join(workspace, '.nomeda', 'control.json');
+  return path.join(workspace, '.ghola', 'control.json');
 }
 
 function localPointerPath(root) {
@@ -363,13 +363,13 @@ function lockFilePath(root) {
   return path.join(root, '.ghola.lock');
 }
 
-// The control lock lives beside control.json under the WORKSPACE .nomeda dir
+// The control lock lives beside control.json under the WORKSPACE .ghola dir
 // (NOT the ledger root), because control.json is a workspace-scoped file that
 // two independent writers touch: this CLI and the VS Code host. Both implement
 // the IDENTICAL lock protocol on this exact path so their read-modify-write of
 // control.json is serialized across processes (see withControlLock below).
 function controlLockFilePath(workspace) {
-  return path.join(workspace, '.nomeda', 'control.lock');
+  return path.join(workspace, '.ghola', 'control.lock');
 }
 
 function subjectDir(root, subject) {
@@ -520,7 +520,7 @@ function withLock(root, fn) {
 // processes (this CLI's *-ack commands + the host's War Room buttons). Without
 // a shared lock, concurrent writers read the same "before" state and clobber
 // each other (a lost kill-switch, a lost resolve). This mirrors the ledger
-// withLock semantics but on <workspace>/.nomeda/control.lock. PINNED PROTOCOL
+// withLock semantics but on <workspace>/.ghola/control.lock. PINNED PROTOCOL
 // (the host implements the identical one on the same file):
 //   - Acquire: exclusive create (openSync 'wx'); on EEXIST retry with ~20ms
 //     backoff up to a ~2000ms timeout. The lock file holds a UNIQUE NONCE
@@ -2588,10 +2588,10 @@ Global flags (accepted by any command):
   --workspace <path>   override the workspace (default: cwd); pointer + fallback ledger live here
   --local              force the workspace-local ledger (skip vault resolution entirely)
 Ledger-root resolution order:
-  --local              -> <workspace>/.nomeda/gholas/  (forced, skips everything below)
-  --vault > NOMEDA_VAULT env > SWT_OBSIDIAN_PATH env > auto-discover .obsidian
-  > <workspace>/.nomeda/gholas/  (workspace-local fallback when no vault exists)
-The authoritative pointer file is always written to <workspace>/.nomeda/ledger-path.
+  --local              -> <workspace>/.ghola/gholas/  (forced, skips everything below)
+  --vault > GHOLA_VAULT env > SWT_OBSIDIAN_PATH env > auto-discover .obsidian
+  > <workspace>/.ghola/gholas/  (workspace-local fallback when no vault exists)
+The authoritative pointer file is always written to <workspace>/.ghola/ledger-path.
 
 Commands:
   mission start   --subject S --goal "..." [--grounded-in "..."] [--budget "..."] [--id ID]
@@ -2609,7 +2609,7 @@ Commands:
                                                                              progress history preserved. Already-open is a
                                                                              no-op; not-found -> clear non-zero error.)
   awaken          --status | --ack [--workspace <path>] [--json]            read/ack the kill-switch control file
-                                                                             (<workspace>/.nomeda/control.json; the
+                                                                             (<workspace>/.ghola/control.json; the
                                                                              CLI never sets awakenAll true — that is
                                                                              the host/human's job via the War Room
                                                                              button. --ack is called by TPM only

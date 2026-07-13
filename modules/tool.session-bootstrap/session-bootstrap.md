@@ -37,7 +37,7 @@ Disable individual steps via the kv-table's Enabled checkbox without deleting th
 
 The format is controlled by `parameters.outputFormat`:
 
-- **`detailed`** (default) — emit one line per step in the form `[nomeda] ✓ step-name — detail` on success, or `[nomeda] ✗ step-name — error reason` on failure. The `detail` is whatever the step produced (e.g. `[nomeda] ✓ branch-detection — feature/foo (base main)`). This is the most informative format.
+- **`detailed`** (default) — emit one line per step in the form `[ghola] ✓ step-name — detail` on success, or `[ghola] ✗ step-name — error reason` on failure. The `detail` is whatever the step produced (e.g. `[ghola] ✓ branch-detection — feature/foo (base main)`). This is the most informative format.
 - **`compact`** — emit a single line summarizing the entire boot phase, e.g. `Boot: 5/5 steps OK (312ms)` or `Boot: 4/5 steps OK, 1 failed (config-load)`. Useful when the per-step output is noise for an experienced user.
 - **`silent`** — emit nothing. The steps still run and their side effects (cached branch name, surfaced advisories from proactive modules) still apply, but the user sees only TPM's first response. Note that proactive modules consulted in the `proactive-modules` step may still emit their own opening messages — `silent` controls the bootstrap's diagnostics, not the downstream modules.
 
@@ -51,7 +51,7 @@ The behavior on step failure is controlled by `parameters.failureBehavior`:
 
 ## Timings
 
-When `parameters.includeTimings` is true, append the elapsed wall time to each step's diagnostic line (`[nomeda] ✓ proactive-modules — 312ms` or, when there is also a step detail, `[nomeda] ✓ branch-detection — feature/foo (base main) — 48ms`). When false, omit timings entirely. The flag is intended for diagnosing slow boots; keep it off in normal use.
+When `parameters.includeTimings` is true, append the elapsed wall time to each step's diagnostic line (`[ghola] ✓ proactive-modules — 312ms` or, when there is also a step detail, `[ghola] ✓ branch-detection — feature/foo (base main) — 48ms`). When false, omit timings entirely. The flag is intended for diagnosing slow boots; keep it off in normal use.
 
 ## Module-Disabled Vs Feature-Disabled
 

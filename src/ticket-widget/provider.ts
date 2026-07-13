@@ -145,9 +145,9 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
 
   /**
    * @param context Extension context — used to read flattened module settings
-   *   from workspaceState under `nomeda.moduleSettings`.
+   *   from workspaceState under `ghola.moduleSettings`.
    * @param moduleSettingsEvent Event fired by the host whenever
-   *   `nomeda.moduleSettings` is rewritten. We re-pull config and refresh.
+   *   `ghola.moduleSettings` is rewritten. We re-pull config and refresh.
    * @param moduleEnabledEvent Loader event fired when modules are toggled.
    *   We refresh because enabling/disabling the ticket-work module flips
    *   what defaults apply.
@@ -737,7 +737,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
   <head>
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="${csp}" />
-    <title>Nomeda Ticket Widget</title>
+    <title>Ghola Ticket Widget</title>
     <style>
       body {
         padding: 8px 12px;

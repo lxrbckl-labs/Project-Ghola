@@ -2,7 +2,7 @@
   "id": "tool.setup-walkthrough",
   "name": "Setup Walkthrough",
   "version": "0.1.2",
-  "description": "Agent-driven first-time setup playbook that walks new Nomeda users through Obsidian, Atlassian credentials, default module selection, and the SCM-sidebar Ticket Widget.",
+  "description": "Agent-driven first-time setup playbook that walks new Ghola users through Obsidian, Atlassian credentials, default module selection, and the SCM-sidebar Ticket Widget.",
   "proactive": true,
   "category": "workflow",
   "kind": "capability",
@@ -22,7 +22,7 @@
       "stages": {
         "type": "keyValue",
         "label": "Stages",
-        "description": "User-managed list of walkthrough stages. Each entry is a stage name plus what TPM covers in that stage. Default seeds match the core Nomeda setup; reorder, add, disable individual stages without removing them.",
+        "description": "User-managed list of walkthrough stages. Each entry is a stage name plus what TPM covers in that stage. Default seeds match the core Ghola setup; reorder, add, disable individual stages without removing them.",
         "default": {
           "obsidian": { "value": "Confirm or set the Obsidian vault path. Walk through tool.obsidian-notes' auto-discovery toggle and the projectsSubfolder convention.", "enabled": true },
           "atlassian": { "value": "Walk through integration.atlassian-suite credential setup — Jira email, API token in SecretStorage, Jira base URL, Bitbucket workspace.", "enabled": true },

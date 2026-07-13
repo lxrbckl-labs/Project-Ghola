@@ -1,7 +1,7 @@
 // Built-in configuration presets seeded once into the ConfigurationsStore on
 // first activation. These are ordinary, fully-editable NamedConfiguration
 // records once seeded — the user can rename, edit, or delete them. Seeding is
-// guarded by the `nomeda.configurations.seeded` workspace-state flag so the
+// guarded by the `ghola.configurations.seeded` workspace-state flag so the
 // presets are never duplicated on subsequent launches and user-created configs
 // are never stomped.
 //

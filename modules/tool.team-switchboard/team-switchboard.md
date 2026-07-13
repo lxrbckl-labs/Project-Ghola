@@ -6,7 +6,7 @@ When this module is loaded, the session participates in a shared cross-team comm
 
 Locate this module's entry in the Session Manifest. Its `parameters` object may appear as `(defaults)`, be absent entirely, or be a live JSON object.
 
-- If the entry shows `(defaults)` or a parameter key is absent, the default for that parameter applies. Defaults: `commsRoot` = `""` (derive at runtime), `teamName` = `""` (auto-derive), `staleAfterDays` = `14`, `checkInboxOnBoot` = `true`, `heartbeatOnBoot` = `true`.
+- If the entry shows `(defaults)` or a parameter key is absent, the default for that parameter applies. Defaults: `commsRoot` = `""` (derive at runtime), `teamName` = `""` (auto-derive), `staleAfterDays` = `14`, `checkInboxOnBoot` = `true`, `heartbeatOnBoot` = `true`, `handledMessageRetentionDays` = `3`, `detectParentProject` = `true`, `mergeDeadChildren` = `true`.
 - If `parameters` is a live object, read each key present and fall back to the documented default for any key that is missing.
 
 ### Resolving `commsRoot`
@@ -21,9 +21,9 @@ Locate this module's entry in the Session Manifest. Its `parameters` object may 
 `parameters.teamName` is the name this team registers and is addressed by.
 
 - Non-empty string: use it as-is. This is the canonical team name for this session.
-- Empty string or absent: auto-derive from the repo or project basename. Strip the leading `Project-` prefix case-insensitively (prefix only — the remainder keeps its original casing). For example: `Project-Nomeda` -> `Nomeda`, `project-swt` -> `SWT`. To disambiguate duplicate instances: check the roster. If a row already has your derived name AND your repo path, the row is yours — reuse it. If a row has your derived name but a DIFFERENT repo path, you are a new instance — take the lowest unused integer suffix (`Nomeda#2`, `Nomeda#3`, etc.).
+- Empty string or absent: auto-derive from the repo or project basename. Strip the leading `Project-` prefix case-insensitively (prefix only — the remainder keeps its original casing). For example: `Project-Ghola` -> `Ghola`, `project-swt` -> `SWT`. To disambiguate duplicate instances: check the roster. If a row already has your derived name AND your repo path, the row is yours — reuse it. If a row has your derived name but a DIFFERENT repo path, you are a new instance — take the lowest unused integer suffix (`Ghola#2`, `Ghola#3`, etc.).
 
-The inbox filename is the slug of the team name: lowercased, spaces and punctuation replaced with hyphens. For example: `Nomeda` -> `inbox-nomeda.md`, `Nomeda#2` -> `inbox-nomeda-2.md`.
+The inbox filename is the slug of the team name: lowercased, spaces and punctuation replaced with hyphens. For example: `Ghola` -> `inbox-ghola.md`, `Ghola#2` -> `inbox-ghola-2.md`.
 
 ## Canonical location and files
 
@@ -31,11 +31,11 @@ The comms root is `<commsRoot>/` (resolved above). All paths below are relative 
 
 | File | Purpose |
 |------|---------|
-| `switchboard.md` | Protocol header + roster table listing all teams |
+| `_Switchboard.md` | Protocol header + roster table listing all teams |
 | `inbox-<slug>.md` | Directed messages TO the team named by `<slug>` |
 | `inbox-all.md` | Broadcast messages visible to all teams |
 
-### switchboard.md format
+### _Switchboard.md format
 
 The file opens with a self-documenting protocol header (created verbatim during bootstrap) followed by the roster table. The header is intentionally self-documenting so any team — even one without this module loaded — can read it and participate by hand.
 
@@ -58,22 +58,22 @@ lets multiple teams touch these files at the same time without clobbering each o
 
 | File | Purpose |
 |------|---------|
-| `switchboard.md` | This file: protocol + team roster |
+| `_Switchboard.md` | This file: protocol + team roster |
 | `inbox-<team>.md` | Directed messages TO that team |
 | `inbox-all.md` | Broadcast messages to every team |
 
 `<team>` is the team name lowercased with spaces and punctuation replaced by hyphens
-(e.g. `Nomeda` -> `inbox-nomeda.md`).
+(e.g. `Ghola` -> `inbox-ghola.md`).
 
 ## Identity
 
 Your team name is your repo/project name with a leading `Project-` stripped
 case-insensitively (prefix only; the remainder keeps its name).
-Example: `Project-Nomeda` -> `Nomeda`. For duplicate instances, check the roster: if a
+Example: `Project-Ghola` -> `Ghola`. For duplicate instances, check the roster: if a
 row already has your name AND your repo path, reuse it. If a row has your name but a
 DIFFERENT repo path, you are a new instance -- take the lowest unused integer suffix
-(`Nomeda#2`, `Nomeda#3`). The repo path column disambiguates clones. The inbox slug for
-`Nomeda#2` is `inbox-nomeda-2.md`.
+(`Ghola#2`, `Ghola#3`). The repo path column disambiguates clones. The inbox slug for
+`Ghola#2` is `inbox-ghola-2.md`.
 
 ## On session start, a participating team should:
 
@@ -154,8 +154,8 @@ NNN is a zero-padded monotonic integer (`#001`, `#002`, ...). Read the file, fin
 
 Before performing any switchboard operation, verify the comms root and its files exist.
 
-1. If `_AgentComms/` does not exist, create the directory and both `switchboard.md` and `inbox-all.md` using the formats above. Surface to the operator once: "Team Switchboard: bootstrapped `_AgentComms/` at `<path>`."
-2. If `switchboard.md` does not exist, create it using the full self-documenting protocol header from the "### switchboard.md format" section above (substituting the resolved `commsRoot` path for `<commsRoot>/`), followed by the roster table header row. Do not add any team rows yet. Note: the header is intentionally self-documenting so teams without this module can read the file and participate by hand.
+1. If `_AgentComms/` does not exist, create the directory and both `_Switchboard.md` and `inbox-all.md` using the formats above. Surface to the operator once: "Team Switchboard: bootstrapped `_AgentComms/` at `<path>`."
+2. If `_Switchboard.md` does not exist, create it using the full self-documenting protocol header from the "### _Switchboard.md format" section above (substituting the resolved `commsRoot` path for `<commsRoot>/`), followed by the roster table header row. Do not add any team rows yet. Note: the header is intentionally self-documenting so teams without this module can read the file and participate by hand.
 3. If `inbox-all.md` does not exist, create it as an empty file.
 4. If this team's `inbox-<slug>.md` does not exist, create it with the `broadcasts-read-through: 0` header and no message items.
 
@@ -171,11 +171,21 @@ Because this module is `proactive` with `trigger: session-start`, TPM performs t
 
 **Step 3 — Heartbeat (if `parameters.heartbeatOnBoot` is true).** Find this team's row in the roster table (match on Team name AND repo path). If the row exists, update the `Currently working on` and `Last active` columns in-place — edit only that row, do not rewrite the table. If the row is absent, append it. Use the operator's stated focus for the current session as the `Currently working on` value; if no focus is established yet, use `(session start)` and update the row once the operator states their goal. Use today's date as `Last active`.
 
+**Step 3b — Parent-project detection (if `parameters.detectParentProject` is true).** Reusing the roster data already loaded for the heartbeat, run the path-containment check in "Parent-project detection" below against this team's repo path. Fold the results into the compact opening message:
+
+- If a parent is detected: `Detected parent project: <Parent> (this workspace is nested under <parent repo path>). Roster row grouped under it.` Then set this team's own `Parent` column value per the roster-grouping mechanics.
+- If this team IS a parent of one or more registered children: `You are the parent of N child channel(s): <child list>. Combined view available on request.`
+- If neither, say nothing about parentage.
+
+This is presentation and an own-row annotation only — it never moves an inbox and never edits another team's row.
+
 **Step 4 — Inbox check (if `parameters.checkInboxOnBoot` is true).** Read this team's `inbox-<slug>.md` and `inbox-all.md`. Surface a concise summary to the operator:
 
 - **Directed messages**: list each unread item (checkbox `[ ]`) as one line: `<date> from <Sender> [subject]`. Count: "N unread directed message(s)." Do not dump full bodies unless the operator asks.
 - **Broadcasts**: find entries in `inbox-all.md` whose sequence number is GREATER than this team's `broadcasts-read-through:` integer marker. If the marker is `0` (or absent), all broadcasts are unread. List each as: `#NNN <date> from <Sender> [subject]`. Count: "N unread broadcast(s)."
 - If both inboxes are empty or fully read, say: "Inbox clear."
+
+**Step 5 — Prune handled messages (after the inbox check).** Run one prune pass over this team's OWN `inbox-<slug>.md` per "Pruning handled directed messages" above: delete directed `[x]` items whose sent date is `parameters.handledMessageRetentionDays` (default 3) or more days before today. This runs after Step 4 so the inbox summary reflects what was present this session. Keep it lightweight. If any items were pruned, add one line to the opening message: "pruned N handled message(s) older than <days>d." If nothing was pruned, stay silent about it. A prune error must NEVER fail the boot — on any error, skip the prune, optionally note it once, and continue the session normally.
 
 Combine the heartbeat confirmation and inbox summary into a single, compact opening message rather than multiple separate messages.
 
@@ -191,7 +201,7 @@ When the operator asks you to send a message to another team (e.g. "tell Mandrak
 - [ ] YYYY-MM-DD from <Sender> [subject]: body
 ```
 
-The optional priority suffix goes after the subject bracket: `- [ ] YYYY-MM-DD from Nomeda [API contract change] (priority: high): The /users endpoint now returns a 'role' field...`
+The optional priority suffix goes after the subject bracket: `- [ ] YYYY-MM-DD from Ghola [API contract change] (priority: high): The /users endpoint now returns a 'role' field...`
 
 4. Confirm to the operator: "Message sent to `<Recipient>` — appended to `inbox-<slug>.md`."
 
@@ -238,6 +248,29 @@ broadcasts-read-through: 7
 
 A broadcast is unread if its sequence number is greater than your marker. `broadcasts-read-through: 0` (or absent) means all broadcasts are unread. Sequence numbers (not dates) drive unread-detection so same-day or out-of-order broadcasts are never silently skipped.
 
+## Pruning handled directed messages
+
+`[x]` is a TRANSIENT handled-marker, not a permanent record. Instead of leaving handled messages crossed out in your inbox forever, this module deletes them once they have aged past a retention window. Crossing out still happens the moment you handle a message (so a just-read item and any reply history stay visible during the window); deletion supersedes the cross-out after `parameters.handledMessageRetentionDays` days (default 3).
+
+**What gets pruned — the exact rule.** A directed message line in THIS team's own `inbox-<slug>.md` is pruned when ALL of the following hold:
+
+1. It is a directed message item (a `- [x] ...` or `- [ ] ...` line), not the `broadcasts-read-through:` header and not a stray note.
+2. It is already handled: the checkbox is `[x]`. A `[ ]` (unhandled) item is NEVER pruned, no matter how old — an unmet message must survive until it is handled.
+3. Its SENT date (the `YYYY-MM-DD` the line carries) is `handledMessageRetentionDays` or more days before today. Formally: `today - sentDate >= handledMessageRetentionDays` (whole days). With the default 3, a message sent on the 10th is pruned on or after the 13th.
+
+**Age clock.** Use the SENT date already embedded in the message line as the age clock — no separate handled-date is recorded. This deliberately uses existing data: adding a second timestamp when flipping to `[x]` would mean rewriting the line's format and give teams-without-this-module something they cannot produce. The small cost is that a message handled late (e.g. read 5 days after it was sent, with a 3-day window) is eligible to prune immediately; in practice directed messages are handled within a session or two of arrival, so the sent date is a close-enough proxy and never deletes anything still marked `[ ]`.
+
+**"Today."** Obtain the current date the same way the heartbeat obtains it for the `Last active` column — from the session's current date (the `tool.time` module or the session context), never hardcoded. Compare dates in ISO `YYYY-MM-DD` form.
+
+**Scope — read this carefully. The prune is intentionally narrow:**
+
+- ONLY your OWN `inbox-<slug>.md`. Never another team's inbox.
+- ONLY directed `[x]` items. Never `[ ]` items.
+- NEVER `inbox-all.md`. Broadcasts are not pruned by this rule at all. Deleting a broadcast line would corrupt every team's `broadcasts-read-through:` math (a team whose marker is below the deleted number could never reconcile) — broadcasts age out by marker, not by deletion.
+- NEVER the roster in `_Switchboard.md`. Stale roster rows are kept per the "Stale teams" rule; only handled directed messages are subject to this prune.
+
+**How to prune.** Re-read your `inbox-<slug>.md` immediately before writing (the same re-read-right-before-write discipline every mutation here uses). Identify the exact `[x]` lines that meet the rule, and delete only those lines — leave the `broadcasts-read-through:` header, every `[ ]` item, and every not-yet-expired `[x]` item exactly as they are. If a line's date is missing or unparseable, treat it as NOT prunable and leave it in place. If nothing qualifies, make no write at all.
+
 ## Concurrency discipline
 
 This is a shared, multi-writer file system. The rules below prevent one team's writes from clobbering another's.
@@ -245,14 +278,50 @@ This is a shared, multi-writer file system. The rules below prevent one team's w
 - **APPEND-ONLY for new content.** When adding a roster row, a message, or a broadcast, INSERT into the correct location — do not rewrite the whole file. Use the Read tool to load the current file contents, identify the exact insertion point, and write only the new lines.
 - **Single-line edits only for mutations.** When flipping a checkbox (`[ ]` -> `[x]`), updating the `broadcasts-read-through:` marker, or updating a roster row, edit only that single line. No other lines change.
 - **Never delete another team's content.** Roster rows, inbox messages, and broadcasts are permanent records. You may update your own roster row and flip your own received-message checkboxes. You never delete rows written by other teams.
+- **Controlled exception — pruning your OWN handled directed messages.** This is the one carve-out the module performs autonomously: at session start a team may delete EXPIRED handled (`[x]`) directed messages from its OWN `inbox-<slug>.md`, per "Pruning handled directed messages." This is still a single-team-owns-its-own-inbox operation done with the same re-read-right-before-write discipline. (Cross-team dead-channel reclamation is a separate exception, sanctioned and governed by the canonical vault `_Switchboard.md`, always operator-confirmed and tombstone-based — never a silent delete — so it too does not contradict "never delete another team's content.") The invariant otherwise stands in full: never rewrite a whole shared file, never delete another team's content, never delete roster rows, never delete `[ ]` (unhandled) items, and never delete broadcasts in `inbox-all.md`.
 - **Roster write scope.** You own one row: the row matching your team name and repo path. Update only that row. Do not touch other teams' rows even if their data looks stale or incorrect.
 - **No file lock — low but non-zero race risk.** APPEND-ONLY + single-line edits make clobbering very unlikely, but two teams appending to the exact same file within the same instant could still race. At human/session cadence this is low-risk. Keep each write to a single insertion or a single changed line to minimize the window.
 
-These rules allow multiple teams to share `switchboard.md`, `inbox-all.md`, and `inbox-<slug>.md` without overwriting each other's work.
+These rules allow multiple teams to share `_Switchboard.md`, `inbox-all.md`, and `inbox-<slug>.md` without overwriting each other's work.
 
 ## Routing via the roster
 
-The roster's `Currently working on` column serves as a lightweight routing table. When the operator asks "which team would know about X?", scan the `Currently working on` column in `switchboard.md` for teams whose focus overlaps with X. Report the matches with their team names and repo paths. No message is needed — this is a read-only lookup.
+The roster's `Currently working on` column serves as a lightweight routing table. When the operator asks "which team would know about X?", scan the `Currently working on` column in `_Switchboard.md` for teams whose focus overlaps with X. Report the matches with their team names and repo paths. No message is needed — this is a read-only lookup.
+
+## Parent-project detection
+
+The vault accumulates near-duplicate channels because a clone of one project often lives INSIDE another project's working copy — e.g. a `cmms-api` checkout at `/home/aarbuckle/projects/cmms4/cmms-api` is nested under the `cmms4` workspace. This section recognizes that WORKSPACE NESTING so the roster can group a child under its parent, without ever merging live channels. It is enabled by `parameters.detectParentProject` (default true).
+
+**Two different axes — do not conflate them.** *Repo identity* is defined by the git remote (a `cmms-api` clone is its own distinct repo). *Workspace nesting* is defined by the filesystem path (that same clone sits inside the parent's checkout). Parent detection here uses PATH NESTING only — never the team name, never the `#N` suffix, never the git remote. A channel can be a distinct repo by remote AND a child by path at the same time; this feature speaks only to the path axis.
+
+### The rule
+
+Team B is a CHILD of team A iff B's repo path is a PROPER subdirectory of A's repo path, where both paths are read from the roster's `Repo path` column.
+
+- **Nearest ancestor wins.** If several roster teams are ancestors of B's path, B's direct parent is the one with the LONGEST matching path prefix (the deepest containing directory); shallower ancestors are grandparents. This produces a CHAIN, not a flat group (e.g. `cmms4` -> `cmms-api` at `/cmms4/cmms-api` -> an `e2e` instance at `/cmms4/cmms-api/e2e`).
+- **The `#N` suffix is NOT the parent signal.** The suffix is assigned by registration order (lowest unused integer), so `inbox-cmms-api-2` is NOT necessarily the child of `cmms2` — resolve the parent purely from the path. Path containment is the only reliable signal.
+
+### Edge cases
+
+- **Segment-boundary compare.** Normalize both paths to absolute form and compare with a trailing separator so `/cmms4/cmms-api` is NOT treated as an ancestor of `/cmms4/cmms-api2`. Require a real path-segment boundary, never a bare string prefix.
+- **Same-path teams are SIBLINGS, not parent/child.** If two teams share the exact same repo path (co-located instances, e.g. `cmms-api#3` and `#7` both at `/cmms4/cmms-api`), neither is the other's parent; they share the same real parent. Path equality is never a parent relationship.
+- **Multi-level chains render indented by depth** in the roster grouping — a grandchild is shown under its direct parent, not flattened up to the top-level project.
+- **Ancestor directory exists on disk but is NOT registered as a team.** B stands alone (no live parent row to group under), but note the INFERRED parent directory so the operator can see the intended grouping.
+- **Symlink / trailing-slash normalization.** Resolve `..`, symlinks, and trailing slashes before comparing, so a symlinked child still matches its parent and roster entries with inconsistent trailing slashes compare correctly.
+
+### Roster grouping
+
+Grouping is expressed by a `Parent` column value on THIS team's OWN roster row only. Set it to your detected direct parent's team name (blank for a top-level team). This is an additive, single-line-edit annotation under the same discipline as every other roster mutation: edit only your own row, never another team's row, and never move or rename an inbox. Chains are rendered by depth (child under direct parent, grandchild under child).
+
+### Combined read view
+
+A parent MAY read its children's `inbox-<slug>.md` files to present a COMBINED view of the family's channels on operator request. This is read-only aggregation: children keep their own inboxes for RECEIVING directed mail, so addressing is unchanged and no files are moved. The combined view never merges or writes across inboxes — it only reads them together.
+
+### Dead-channel reclamation
+
+When `parameters.mergeDeadChildren` is true and this team is a parent, the agent MAY offer to reclaim a child channel that is DEAD. "Dead" is defined strictly: the child's roster row is stale past `parameters.staleAfterDays` AND its inbox holds no unhandled `[ ]` directed items (nothing is still owed to it). Both conditions must hold; a child with any unhandled `[ ]` item is never dead, regardless of age.
+
+Reclamation is ALWAYS operator-confirmed and never automatic — `mergeDeadChildren` only controls whether the OFFER appears, not whether the fold happens. Crucially, actually folding or removing ANOTHER team's dead inbox is a CROSS-TEAM action: its mechanics, the pointer left behind, and the authorization for one team to touch another team's inbox are governed by the canonical protocol in the vault `_Switchboard.md`. This module surfaces the offer and defers the cross-team fold to that doc. Absent that sanctioned canonical procedure, the agent does not fold another team's inbox — it stops at presenting the offer and the dead-child list.
 
 ## Stale teams
 
@@ -277,7 +346,7 @@ Exact formats — use these verbatim when creating or appending content:
 - [ ] YYYY-MM-DD from <You> [re: <original subject>]: body
 ```
 
-**Handled marker** (flip in your OWN inbox after reading; local only — not a reply):
+**Handled marker** (flip in your OWN inbox after reading; local only — not a reply. Transient: pruned from your inbox once its sent date is older than `handledMessageRetentionDays`, default 3 — see "Pruning handled directed messages"):
 ```
 - [x] YYYY-MM-DD from <Sender> [subject]: body
 ```

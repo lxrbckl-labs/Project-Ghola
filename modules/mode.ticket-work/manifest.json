@@ -41,7 +41,7 @@
       "notesSections": {
         "type": "string",
         "label": "Notes Sections",
-        "description": "Comma-separated list of top-level sections the per-ticket notes file should contain, in the order TPM writes them when creating the file. Trim entries you do not use or extend with custom sections to taste. Note that Session Handoff in this list is the heading the tool.session-handoff module manages — Ticket Work mode ensures the heading exists but defers the writing of that block to that module.",
+        "description": "Comma-separated list of top-level sections the per-ticket notes file should contain, in the order TPM writes them when creating the file. Trim entries you do not use or extend with custom sections to taste. Note that Session Handoff in this list is the heading the tool.session-handoff module manages — Ticket Work mode ensures the heading exists but defers the writing of that block to that module. The section structure, YAML frontmatter, update discipline, and per-type templates are defined authoritatively by tool.obsidian-notes; this list only selects which of that module's ticket-note catalog sections appear and in what order.",
         "default": "Ticket Summary, Implementation Notes, Changes Made, Edge Cases, Testing Procedures, QA Findings, Session Handoff"
       },
       "untrustedJiraInput": {

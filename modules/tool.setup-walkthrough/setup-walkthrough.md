@@ -1,8 +1,8 @@
 # Setup Walkthrough
 
-When this module is loaded, TPM acts as the agent-driven first-time-setup playbook for new Nomeda users — replacing the need to read SETUP.md cold. The module is proactive: it detects fresh-install state at session start and offers to walk the user through Obsidian vault setup, Atlassian credentials, default module selection, and the SCM-sidebar Ticket Widget. Only TPM reads this fragment; SWE and QA are not involved in the walkthrough.
+When this module is loaded, TPM acts as the agent-driven first-time-setup playbook for new Ghola users — replacing the need to read SETUP.md cold. The module is proactive: it detects fresh-install state at session start and offers to walk the user through Obsidian vault setup, Atlassian credentials, default module selection, and the SCM-sidebar Ticket Widget. Only TPM reads this fragment; SWE and QA are not involved in the walkthrough.
 
-The walkthrough is a conversation, not a wizard. TPM presents one stage at a time (or the full list, depending on `parameters.paceMode`), waits for the user, and only moves on when the user signals they're done. The point is for the user to leave the session with a working Nomeda configuration and an understanding of why each piece exists — not a checked box.
+The walkthrough is a conversation, not a wizard. TPM presents one stage at a time (or the full list, depending on `parameters.paceMode`), waits for the user, and only moves on when the user signals they're done. The point is for the user to leave the session with a working Ghola configuration and an understanding of why each piece exists — not a checked box.
 
 ## Fresh-install detection
 
@@ -10,7 +10,7 @@ At session start, TPM consults `parameters.freshInstallSignal` to decide whether
 
 ### `no-prior-handoff` (default)
 
-TPM treats fresh-install as "no `## Session Handoff` block exists in the active mode's notes file, or no notes file exists yet, or `tool.obsidian-notes` is unresolved (vault path missing or unreadable)." This is reliable when `tool.obsidian-notes` is enabled because the first real Nomeda session writes a handoff block on exit; absence means the user has not yet completed a session.
+TPM treats fresh-install as "no `## Session Handoff` block exists in the active mode's notes file, or no notes file exists yet, or `tool.obsidian-notes` is unresolved (vault path missing or unreadable)." This is reliable when `tool.obsidian-notes` is enabled because the first real Ghola session writes a handoff block on exit; absence means the user has not yet completed a session.
 
 ### `empty-feedback-log`
 
@@ -22,13 +22,13 @@ Every session start, regardless of state. Intended for testing the walkthrough f
 
 ### `manual-only`
 
-TPM never auto-offers. The walkthrough only fires when the user explicitly asks ("walk me through setup", "run the setup walkthrough"). Use when the user has already configured Nomeda but wants the walkthrough available as a reference gesture.
+TPM never auto-offers. The walkthrough only fires when the user explicitly asks ("walk me through setup", "run the setup walkthrough"). Use when the user has already configured Ghola but wants the walkthrough available as a reference gesture.
 
 ## Walkthrough flow
 
 At session start, when fresh-install is detected and `parameters.autoOfferOnFreshInstall` is true, TPM surfaces:
 
-> "Looks like this is a fresh setup — want me to walk you through Nomeda's configuration? (about 5 stages, ~5 minutes)"
+> "Looks like this is a fresh setup — want me to walk you through Ghola's configuration? (about 5 stages, ~5 minutes)"
 
 The offer is a single sentence appended as a separate paragraph; it does not block the user's first real request. If the user accepts ("yes", "sure", "walk me through it"), TPM enters the walkthrough per `parameters.paceMode`. If the user declines or ignores the offer, TPM records the decision and does not re-offer in the same session — but will re-offer in the next session unless `parameters.completionTracking` has the walkthrough marked done.
 
@@ -61,7 +61,7 @@ TPM lists all enabled stages with one-line summaries and asks "Which would you l
 
 ## Default seeded stages
 
-The `parameters.stages` kv-table seeds with the five core Nomeda setup stages. The user can reorder, add, or disable any of them through the Modules tab:
+The `parameters.stages` kv-table seeds with the five core Ghola setup stages. The user can reorder, add, or disable any of them through the Modules tab:
 
 ### `obsidian`
 
@@ -81,7 +81,7 @@ Points out the Ticket Widget in the Source Control sidebar. Explains when it app
 
 ### `first-session`
 
-Suggests a low-stakes first real session — open a small ticket in Ticket Work mode, let TPM extract acceptance criteria into todos, make a tiny code change, run the pre-PR trio (build, test, format), commit. The user learns Nomeda by doing one full cycle, not by reading docs. The stage ends with TPM offering to start that session right now or noting it for the user's next session.
+Suggests a low-stakes first real session — open a small ticket in Ticket Work mode, let TPM extract acceptance criteria into todos, make a tiny code change, run the pre-PR trio (build, test, format), commit. The user learns Ghola by doing one full cycle, not by reading docs. The stage ends with TPM offering to start that session right now or noting it for the user's next session.
 
 ## Completion tracking
 

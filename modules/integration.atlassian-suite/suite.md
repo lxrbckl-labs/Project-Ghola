@@ -1,6 +1,6 @@
 # Atlassian Suite
 
-When this module is loaded, the session has a credential store with live API capability for Atlassian-hosted projects (Jira + Bitbucket Cloud). The credentials sit in two places: the user's Atlassian email is a regular module setting (`email`), and API tokens (one for Jira, one for Bitbucket) are stored in VS Code SecretStorage under `nomeda.atlassianSuite.jiraToken` and `nomeda.atlassianSuite.bitbucketToken` respectively. TPM never reads the token values directly — they are held by the host and used for live API calls.
+When this module is loaded, the session has a credential store with live API capability for Atlassian-hosted projects (Jira + Bitbucket Cloud). The credentials sit in two places: the user's Atlassian email is a regular module setting (`email`), and API tokens (one for Jira, one for Bitbucket) are stored in VS Code SecretStorage under `ghola.atlassianSuite.jiraToken` and `ghola.atlassianSuite.bitbucketToken` respectively. TPM never reads the token values directly — they are held by the host and used for live API calls.
 
 ## Token model
 
@@ -11,9 +11,9 @@ An Atlassian unified API token (generated at id.atlassian.com) works for both pr
 ## Current capabilities
 
 - Stores the Atlassian email, Jira base URL (`jiraBase`), and Bitbucket workspace slug (`bitbucketWorkspace`) as regular module settings.
-- Stores two independent API tokens in SecretStorage: `nomeda.atlassianSuite.jiraToken` (for Jira) and `nomeda.atlassianSuite.bitbucketToken` (for Bitbucket).
+- Stores two independent API tokens in SecretStorage: `ghola.atlassianSuite.jiraToken` (for Jira) and `ghola.atlassianSuite.bitbucketToken` (for Bitbucket).
 - **Validation probes** (run automatically after a token is set **or cleared**, and when the user triggers re-validation from the settings panel): Jira via `GET /rest/api/3/myself`, Bitbucket via `GET /2.0/workspaces/{slug}`. These confirm the token is accepted and extract the account display name for UI feedback. When a token is cleared, its product's probe returns `skipped` (not `failed`) because the missing-token check short-circuits before any request is made.
-- The Ticket Widget (owned by `mode.ticket-work`, registered as `nomedaTicketWidget`) consumes this module's probes and credentials to surface ticket and PR state in the UI.
+- The Ticket Widget (owned by `mode.ticket-work`, registered as `gholaTicketWidget`) consumes this module's probes and credentials to surface ticket and PR state in the UI.
 - **Domain probes** (run by consumer modules such as the Ticket Widget in `mode.ticket-work`, when a token is set or cleared — via `onDidChangeValidation` — and when module settings such as `jiraBase` or `bitbucketWorkspace` are saved): `checkTicketExists` verifies ticket existence via the Jira token; `findOpenPrForBranch` looks up an open PR for the current branch via the Bitbucket token. These are independent of the validation probes.
 - `getTicketDetails(key)` — fetches `?fields=summary,status,description` from `${jiraBase}/rest/api/3/issue/${key}` and returns `{ exists: boolean, status?: string, summary?: string, description?: unknown (ADF JSON tree), error?: string }`. Used by `mode.ticket-work` for ticket pulls and by `tool.ac-to-testing` for AC extraction from descriptions.
 - `adfExtractAcceptanceCriteria(adf, headingMarker)` — pure helper that walks an ADF (Atlassian Document Format) JSON tree and extracts a list of acceptance-criteria items using a three-branch heuristic: first taskList in the doc, then the first list following a heading whose text matches headingMarker (case-insensitive), then the first bullet/ordered list as fallback. Returns `{ items: AcItem[], source: 'taskList' | 'ac-heading-list' | 'first-list' | 'none' }`. Used by `tool.ac-to-testing` and `mode.ticket-work`'s Ticket Widget for AC extraction.

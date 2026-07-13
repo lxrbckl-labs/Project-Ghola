@@ -6,7 +6,7 @@ This module is **proactive**: TPM reads it once, at session start, before respon
 
 This module depends on `tool.obsidian-notes` (optional — for per-app knowledge files when `parameters.knowledgeFilePerApp` is true), `tool.session-handoff` (for wrap-up), `tool.database-access` (for investigative queries when available), and `tool.lenses` (for the structural dispatch pattern — but support mode uses its OWN support-specific lenses defined in `parameters.investigationLenses`, not the review/planning lenses from that module). All dependencies are soft: if any is disabled or degraded, this mode degrades gracefully — see "Dependency failure modes" below.
 
-In this version of Nomeda there is no mode-selector UI on the panel; Support mode is active whenever this module is present in the Session Manifest. Support mode is mutually exclusive with `mode.cd` and `mode.ticket-work` — only one session mode is active at a time. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
+In this version of Ghola there is no mode-selector UI on the panel; Support mode is active whenever this module is present in the Session Manifest. Support mode is mutually exclusive with `mode.cd` and `mode.ticket-work` — only one session mode is active at a time. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
 
 ## What Support mode does (at a glance)
 
@@ -66,11 +66,11 @@ SWEs include the script language in their investigation output — they do not a
 
 When `parameters.knowledgeFilePerApp` is true and `tool.obsidian-notes` is loaded, TPM maintains a per-app knowledge file at `<vault>/Support/<APP>.md`. This file accumulates cross-session findings so the next support session for that app starts with institutional memory rather than a blank slate.
 
-What lives in knowledge files:
+The knowledge file's section list (`Overview`, `Architecture and Dependencies`, `Known issues and resolutions`, `Gotchas and Quirks`, `Investigation Patterns`, `Related Apps`), each section's structure, and the file's YAML frontmatter are defined authoritatively by `tool.obsidian-notes`' support-app template; this mode does not redefine them. Support mode's contribution is the curated content TPM writes into those sections:
 
-- **Known issues and resolutions** — a running list of issues investigated and how they were resolved. One entry per issue, written as a dated heading with a short description and the resolution. The next session scanning this file immediately knows "we saw this before and fixed it by X."
-- **Gotchas and quirks** — app-specific behaviors that surprised the team during investigation. Architecture notes, non-obvious dependencies, configuration traps. The kind of thing you tell a new team member on their first day supporting this app.
-- **Common investigation patterns** — if a class of issue keeps recurring (e.g., "asset endpoint 500s are usually a missing tenant header"), note the pattern and the fastest path to confirm it. Saves the next session from re-running the full 3-lens investigation for a known pattern.
+- Known issues and their resolutions — past support issues and the fix that worked, logged as dated entries (issue class / symptom -> resolution), so a recurring problem is recognized and resolved fast instead of re-investigated from scratch.
+- Gotchas and quirks the investigation surfaced — app-specific behaviors that surprised the team, non-obvious dependencies, configuration traps.
+- Recurring investigation patterns — if a class of issue keeps recurring (e.g., "asset endpoint 500s are usually a missing tenant header"), note the pattern and the fastest path to confirm it, so the next session can short-cut the full 3-lens investigation for a known pattern.
 
 What does NOT go in knowledge files:
 

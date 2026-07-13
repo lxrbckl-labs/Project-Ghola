@@ -20,9 +20,9 @@ When resolution yields a single path (or the user picks one from a multi-match l
 
 > `<openCommand> <resolved-path>`
 
-For example, with `openCommand: code` and a resolved path of `~/projects/Project-Nomeda`:
+For example, with `openCommand: code` and a resolved path of `~/projects/Project-Ghola`:
 
-> `code ~/projects/Project-Nomeda`
+> `code ~/projects/Project-Ghola`
 
 TPM does **not** execute this command. The user runs it themselves in their bash terminal. This preserves their ability to abort, adapt, or run a different command if the resolution is wrong.
 

@@ -2,7 +2,7 @@
   "id": "tool.statusline",
   "name": "Statusline",
   "version": "0.1.1",
-  "description": "Renders a Nomeda status display in the VS Code status bar showing version, cumulative tokens, context-window usage, and 5-hour rolling-window usage.",
+  "description": "Renders a Ghola status display in the VS Code status bar showing version, cumulative tokens, context-window usage, and 5-hour rolling-window usage.",
   "proactive": false,
   "category": "utility",
   "kind": "capability",
@@ -16,7 +16,7 @@
       "showVersion": {
         "type": "boolean",
         "label": "Show Version",
-        "description": "When on, the statusline includes the current Nomeda extension version (e.g. v0.42.1) so the user can confirm at a glance which build they are running. When off, the version is hidden. On is the typical default; turn off only if the line is space-constrained on a small monitor.",
+        "description": "When on, the statusline includes the current Ghola extension version (e.g. v0.42.1) so the user can confirm at a glance which build they are running. When off, the version is hidden. On is the typical default; turn off only if the line is space-constrained on a small monitor.",
         "default": true
       },
       "showCumulativeTokens": {
@@ -46,7 +46,7 @@
       "fallbackToVersionOnly": {
         "type": "boolean",
         "label": "Fallback To Version Only",
-        "description": "When on, the statusline gracefully degrades to a version-only display when the runtime payload that supplies token/context/rolling-window data is missing or unparseable. When off, all sections fall back to empty if their data source is unavailable, producing a sparse line. On preserves visibility of the Nomeda surface even in degraded states; off favors show nothing rather than incomplete data.",
+        "description": "When on, the statusline gracefully degrades to a version-only display when the runtime payload that supplies token/context/rolling-window data is missing or unparseable. When off, all sections fall back to empty if their data source is unavailable, producing a sparse line. On preserves visibility of the Ghola surface even in degraded states; off favors show nothing rather than incomplete data.",
         "default": true
       }
     }

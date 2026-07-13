@@ -28,8 +28,8 @@ const AUTO_CD_INTO_REPO_KEY = 'autoCdIntoRepo';
 
 /**
  * Optional per-launch overrides. When omitted, `launch()` behaves exactly as the
- * default Sessions-tab play button: it creates the `Nomeda Session` terminal,
- * writes the NOMEDA_{TPM,SWE,QA}_PROMPT_FILE scaffolding, and sends the trigger
+ * default Sessions-tab play button: it creates the `Ghola Session` terminal,
+ * writes the GHOLA_{TPM,SWE,QA}_PROMPT_FILE scaffolding, and sends the trigger
  * word as phase-2 input. `promptOverride` switches to a one-shot dispatch mode
  * (used by the Commit-and-Push button) that skips the agent-prompt-file
  * scaffolding and sends a self-contained prompt instead of the trigger word.
@@ -68,7 +68,7 @@ export class SessionLauncher {
 
     // Read configuration fresh at every launch so edits made in VS Code
     // Settings between play-button clicks take effect without a reload.
-    const cfg = vscode.workspace.getConfiguration('nomeda');
+    const cfg = vscode.workspace.getConfiguration('ghola');
     // Alias-first resolution: when the user has picked an entry from the
     // Sessions-tab alias dropdown (`selectedAlias`), launch that alias name
     // verbatim and rely on bash's alias lookup. Fall back to the raw
@@ -78,11 +78,11 @@ export class SessionLauncher {
     const cliCommand = (selectedAlias !== '' ? selectedAlias : cfg.get<string>('cliCommand', 'claude')).trim();
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate').trim();
 
-    // Base env shared by all launches. The NOMEDA_{TPM,SWE,QA}_PROMPT_FILE
+    // Base env shared by all launches. The GHOLA_{TPM,SWE,QA}_PROMPT_FILE
     // scaffolding is only needed for a full TPM session that may spawn
     // subagents, so it is omitted in one-shot dispatch mode.
     const env: Record<string, string> = {
-      NOMEDA_ROOT: this.extensionPath,
+      GHOLA_ROOT: this.extensionPath,
       SWE_PERFORMANCE_CORES: String(cfg.get<number>('swe.performanceCores', 2)),
       SWE_EFFICIENCY_CORES: String(cfg.get<number>('swe.efficiencyCores', 1)),
       SWE_AGENT_COUNT: String(
@@ -101,16 +101,16 @@ export class SessionLauncher {
       // composed prompts. The SWE/QA files exist so TPM can read them via
       // its Read tool and inject the content into the prompt passed to the
       // Agent tool when spawning a SWE or QA subagent.
-      env.NOMEDA_TPM_PROMPT_FILE = resolveAgentPromptFilePath('tpm');
-      env.NOMEDA_SWE_PROMPT_FILE = resolveAgentPromptFilePath('swe');
-      env.NOMEDA_QA_PROMPT_FILE = resolveAgentPromptFilePath('qa');
+      env.GHOLA_TPM_PROMPT_FILE = resolveAgentPromptFilePath('tpm');
+      env.GHOLA_SWE_PROMPT_FILE = resolveAgentPromptFilePath('swe');
+      env.GHOLA_QA_PROMPT_FILE = resolveAgentPromptFilePath('qa');
     }
 
     // Singleton terminal: dispose any already-open terminal with the same name
     // (by name-match, so stale duplicates from prior builds are cleared too)
     // before creating a fresh one, so hitting run replaces the prior session
-    // rather than stacking a second "Nomeda Session" tab.
-    const terminalName = options?.terminalName ?? 'Nomeda Session';
+    // rather than stacking a second "Ghola Session" tab.
+    const terminalName = options?.terminalName ?? 'Ghola Session';
     for (const t of vscode.window.terminals) {
       if (t.name === terminalName) {
         t.dispose();
@@ -174,7 +174,7 @@ export class SessionLauncher {
     }
     // WSL / native Linux / macOS: prefer bash explicitly so the session is
     // predictable regardless of the user's login shell. /bin/bash is present
-    // on every WSL distro Nomeda targets; if it is missing, fall through to
+    // on every WSL distro Ghola targets; if it is missing, fall through to
     // VS Code's default shell.
     if (fs.existsSync('/bin/bash')) return '/bin/bash';
     if (fs.existsSync('/usr/bin/bash')) return '/usr/bin/bash';
@@ -283,7 +283,7 @@ export class SessionLauncher {
 
   /**
    * Read a single field from a module's persisted settings. The panel stores
-   * settings under workspace-state key `nomeda.moduleSettings` as a flat
+   * settings under workspace-state key `ghola.moduleSettings` as a flat
    * dictionary keyed by `moduleId::fieldKey` — match that shape here so we
    * stay in sync without depending on the panel.
    */

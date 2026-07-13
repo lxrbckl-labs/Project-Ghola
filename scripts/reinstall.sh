@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
 # reinstall.sh — pull (when needed), rebuild, repackage, and reinstall the
-# Nomeda VS Code extension from this git checkout. Invoked by the
-# "Nomeda: Update Extension" command (src/commands/updateExtension.ts), which
+# Ghola VS Code extension from this git checkout. Invoked by the
+# "Ghola: Update Extension" command (src/commands/updateExtension.ts), which
 # runs it under a `bash -lc` login shell so the user's interactive PATH (nvm
 # node/npm, the `code` CLI) is available — the extension-host PATH is not.
 #
 # Markers parsed by the command handler:
 #   [ext] ALREADY_UP_TO_DATE        -> installed version already matches remote
-#   [ext] Installed: nomeda v<VER>  -> install succeeded, <VER> is the new version
+#   [ext] Installed: ghola v<VER>  -> install succeeded, <VER> is the new version
 #   [ext] ERROR: <msg>              -> hard failure (also exits non-zero)
 #
 # Flags:
@@ -19,7 +19,7 @@ set -euo pipefail
 
 # ── Self-locate ─────────────────────────────────────────────────────────────
 # The script lives at <repo>/scripts/reinstall.sh, so the repo root (which is
-# also the extension root — Nomeda's extension is at the repo root, no
+# also the extension root — Ghola's extension is at the repo root, no
 # vscode-extension/ subdir) is two directories up from the resolved script.
 SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
@@ -84,10 +84,10 @@ if [ "$LOCAL_ONLY" -eq 0 ]; then
   fi
 
   # INSTALLED version: the version of the extension build currently installed in
-  # VS Code, passed in by the "Nomeda: Update Extension" command (which reads it
+  # VS Code, passed in by the "Ghola: Update Extension" command (which reads it
   # from the installed extension's VERSION file). Empty when the script is run
   # directly from the terminal — that's fine; see the gate below.
-  INSTALLED_VERSION="$(printf '%s' "${NOMEDA_INSTALLED_VERSION:-}" | tr -d '[:space:]')"
+  INSTALLED_VERSION="$(printf '%s' "${GHOLA_INSTALLED_VERSION:-}" | tr -d '[:space:]')"
 
   # LOCAL version: the working-tree VERSION file (REPO_ROOT is the clone root
   # where VERSION lives; cwd is REPO_ROOT). Drives the pull decision only.
@@ -174,4 +174,4 @@ if [ -z "$VERSION" ]; then
   echo "[ext] ERROR: could not read installed version from VERSION" >&2
   exit 1
 fi
-echo "[ext] Installed: nomeda v$VERSION"
+echo "[ext] Installed: ghola v$VERSION"

@@ -1,8 +1,8 @@
 {
   "id": "tool.obsidian-notes",
   "name": "Obsidian Notes",
-  "version": "0.1.1",
-  "description": "Gives the agents an Obsidian vault as their durable knowledge base, with TPM-only writes and optional auto-discovery of the vault location at session start.",
+  "version": "0.2.0",
+  "description": "Gives the agents an Obsidian vault as their durable knowledge base and is the authoritative catalog for note structure (templates, frontmatter, wikilinks, and update discipline), with TPM-only writes and optional auto-discovery of the vault location at session start.",
   "proactive": true,
   "category": "knowledge",
   "kind": "capability",
@@ -36,6 +36,12 @@
         "label": "Additional Search Roots",
         "description": "Comma-separated list of extra absolute paths to include when auto-discovering the vault, on top of the built-in WSL and Windows defaults. Useful when your vault lives outside the standard Documents or home-directory locations. Has no effect when Auto-Discover Vault is off or when Vault Path is set explicitly.",
         "default": ""
+      },
+      "writeFrontmatter": {
+        "type": "boolean",
+        "label": "Write Frontmatter",
+        "description": "When on, every notes file this module writes opens with a YAML frontmatter block (title, type, created, updated, tags, plus per-type fields) as defined in the module's frontmatter schema. Turn off to write the section skeletons without any frontmatter block; all other structure conventions still apply.",
+        "default": true
       }
     }
   }

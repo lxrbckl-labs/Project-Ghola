@@ -18,8 +18,8 @@
       "specsDir": {
         "type": "string",
         "label": "Specs Dir",
-        "description": "Directory under which Playwright specs are written. Per-project subdir is created as needed (e.g. ~/.nomeda/tests/CMMS-1234/). Specs persist across sessions for re-running. Customize for projects with team-shared spec locations.",
-        "default": "~/.nomeda/tests"
+        "description": "Directory under which Playwright specs are written. Per-project subdir is created as needed (e.g. ~/.ghola/tests/CMMS-1234/). Specs persist across sessions for re-running. Customize for projects with team-shared spec locations.",
+        "default": "~/.ghola/tests"
       },
       "configTemplate": {
         "type": "string",
