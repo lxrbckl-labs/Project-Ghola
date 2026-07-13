@@ -1,12 +1,12 @@
 # Team Switchboard
 
-When this module is loaded, the session participates in a shared cross-team communication layer via a set of Obsidian markdown files. Team Switchboard maintains a roster of active teams and routes directed messages and broadcasts through per-team inbox files. This module is **proactive**: TPM reads it once at session start, before responding to the user's first request, and performs the boot sequence described below. For the rest of the session, the module activates when the operator asks to send a message, check the inbox, or look up which team owns a given focus area.
+When this module is loaded, the session participates in a shared cross-team communication layer via a set of Obsidian markdown files. Team Switchboard maintains a roster of active teams and routes directed messages and broadcasts through per-team inbox files. This module is **on-demand**: TPM does NOT read or act on it automatically at session start. Do not heartbeat, register, or check mail automatically at session start. The module only activates when the operator explicitly asks about cross-team comms — e.g. asks to check mail, check the inbox, look at the roster, send a message to another team, heartbeat/register this team's presence, or look up which team owns a given focus area. When one of those requests comes in, TPM reads this module and performs the relevant procedure below.
 
 ## Reading parameters
 
 Locate this module's entry in the Session Manifest. Its `parameters` object may appear as `(defaults)`, be absent entirely, or be a live JSON object.
 
-- If the entry shows `(defaults)` or a parameter key is absent, the default for that parameter applies. Defaults: `commsRoot` = `""` (derive at runtime), `teamName` = `""` (auto-derive), `staleAfterDays` = `14`, `checkInboxOnBoot` = `true`, `heartbeatOnBoot` = `true`, `handledMessageRetentionDays` = `3`, `detectParentProject` = `true`, `mergeDeadChildren` = `true`.
+- If the entry shows `(defaults)` or a parameter key is absent, the default for that parameter applies. Defaults: `commsRoot` = `""` (derive at runtime), `teamName` = `""` (auto-derive), `staleAfterDays` = `14`, `checkInboxOnBoot` = `false`, `heartbeatOnBoot` = `false`, `handledMessageRetentionDays` = `3`, `detectParentProject` = `true`, `mergeDeadChildren` = `true`. There is no automatic session-start run — `checkInboxOnBoot` and `heartbeatOnBoot` only matter once the operator has already asked for an on-demand switchboard check; they control whether that on-demand check includes the inbox summary / roster heartbeat, not whether anything happens at session start.
 - If `parameters` is a live object, read each key present and fall back to the documented default for any key that is missing.
 
 ### Resolving `commsRoot`
@@ -75,12 +75,14 @@ DIFFERENT repo path, you are a new instance -- take the lowest unused integer su
 (`Ghola#2`, `Ghola#3`). The repo path column disambiguates clones. The inbox slug for
 `Ghola#2` is `inbox-ghola-2.md`.
 
-## On session start, a participating team should:
+## When the operator asks to check the switchboard / mail / register, a participating team should:
 
 1. **Heartbeat** — update your row in the Roster below with what you are currently
    working on and today's date. If you have no row, append one.
 2. **Check inbox** — read `inbox-<your-team>.md` and `inbox-all.md` for unread items and
    surface them to your operator.
+
+This is on-demand only — do not perform these steps automatically at session start.
 
 ## Sending a message
 
@@ -161,15 +163,15 @@ Before performing any switchboard operation, verify the comms root and its files
 
 Do not recreate files that already exist — check first, create only if absent.
 
-## Session-start behavior
+## On-demand switchboard check
 
-Because this module is `proactive` with `trigger: session-start`, TPM performs the following boot sequence before responding to the user's first request.
+Because this module is on-demand with `trigger: user-request`, TPM does NOT perform the sequence below automatically. It runs ONLY when the operator explicitly asks about cross-team comms — e.g. "check the switchboard," "any mail?," "check my inbox," "register us on the switchboard," or similar. When such a request comes in, perform the following steps.
 
 **Step 1 — Resolve identity and location.** Resolve `commsRoot` and `teamName` per the rules above. If either cannot be resolved, surface the blockage to the operator and skip the remaining steps.
 
 **Step 2 — Bootstrap if needed.** Run the self-heal check. Create any missing files.
 
-**Step 3 — Heartbeat (if `parameters.heartbeatOnBoot` is true).** Find this team's row in the roster table (match on Team name AND repo path). If the row exists, update the `Currently working on` and `Last active` columns in-place — edit only that row, do not rewrite the table. If the row is absent, append it. Use the operator's stated focus for the current session as the `Currently working on` value; if no focus is established yet, use `(session start)` and update the row once the operator states their goal. Use today's date as `Last active`.
+**Step 3 — Heartbeat (if `parameters.heartbeatOnBoot` is true).** Find this team's row in the roster table (match on Team name AND repo path). If the row exists, update the `Currently working on` and `Last active` columns in-place — edit only that row, do not rewrite the table. If the row is absent, append it. Use the operator's stated focus for the current session as the `Currently working on` value; if no focus is established yet, use `(unspecified)` and update the row once the operator states their goal. Use today's date as `Last active`.
 
 **Step 3b — Parent-project detection (if `parameters.detectParentProject` is true).** Reusing the roster data already loaded for the heartbeat, run the path-containment check in "Parent-project detection" below against this team's repo path. Fold the results into the compact opening message:
 
@@ -185,9 +187,9 @@ This is presentation and an own-row annotation only — it never moves an inbox 
 - **Broadcasts**: find entries in `inbox-all.md` whose sequence number is GREATER than this team's `broadcasts-read-through:` integer marker. If the marker is `0` (or absent), all broadcasts are unread. List each as: `#NNN <date> from <Sender> [subject]`. Count: "N unread broadcast(s)."
 - If both inboxes are empty or fully read, say: "Inbox clear."
 
-**Step 5 — Prune handled messages (after the inbox check).** Run one prune pass over this team's OWN `inbox-<slug>.md` per "Pruning handled directed messages" above: delete directed `[x]` items whose sent date is `parameters.handledMessageRetentionDays` (default 3) or more days before today. This runs after Step 4 so the inbox summary reflects what was present this session. Keep it lightweight. If any items were pruned, add one line to the opening message: "pruned N handled message(s) older than <days>d." If nothing was pruned, stay silent about it. A prune error must NEVER fail the boot — on any error, skip the prune, optionally note it once, and continue the session normally.
+**Step 5 — Prune handled messages (after the inbox check).** Run one prune pass over this team's OWN `inbox-<slug>.md` per "Pruning handled directed messages" above: delete directed `[x]` items whose sent date is `parameters.handledMessageRetentionDays` (default 3) or more days before today. This runs after Step 4 so the inbox summary reflects what was present this on-demand check. Keep it lightweight. If any items were pruned, add one line to the summary message: "pruned N handled message(s) older than <days>d." If nothing was pruned, stay silent about it. A prune error must NEVER fail the check — on any error, skip the prune, optionally note it once, and continue the session normally.
 
-Combine the heartbeat confirmation and inbox summary into a single, compact opening message rather than multiple separate messages.
+Combine the heartbeat confirmation and inbox summary into a single, compact message rather than multiple separate messages.
 
 ## Sending messages
 
@@ -224,7 +226,7 @@ When the operator asks to broadcast to all teams:
 
 ### Directed messages
 
-When you read a directed message (either at session start or on operator request), flip the checkbox from `[ ]` to `[x]` on that line. Edit only that single line — do not rewrite the surrounding file. This `[x]` flip is a LOCAL handled-marker for your own inbox only; the sender does not read your inbox and will never see it.
+When you read a directed message (on operator request), flip the checkbox from `[ ]` to `[x]` on that line. Edit only that single line — do not rewrite the surrounding file. This `[x]` flip is a LOCAL handled-marker for your own inbox only; the sender does not read your inbox and will never see it.
 
 To deliver a reply so the sender actually receives it, append a NEW directed message to the ORIGINAL SENDER's inbox file:
 
@@ -278,7 +280,7 @@ This is a shared, multi-writer file system. The rules below prevent one team's w
 - **APPEND-ONLY for new content.** When adding a roster row, a message, or a broadcast, INSERT into the correct location — do not rewrite the whole file. Use the Read tool to load the current file contents, identify the exact insertion point, and write only the new lines.
 - **Single-line edits only for mutations.** When flipping a checkbox (`[ ]` -> `[x]`), updating the `broadcasts-read-through:` marker, or updating a roster row, edit only that single line. No other lines change.
 - **Never delete another team's content.** Roster rows, inbox messages, and broadcasts are permanent records. You may update your own roster row and flip your own received-message checkboxes. You never delete rows written by other teams.
-- **Controlled exception — pruning your OWN handled directed messages.** This is the one carve-out the module performs autonomously: at session start a team may delete EXPIRED handled (`[x]`) directed messages from its OWN `inbox-<slug>.md`, per "Pruning handled directed messages." This is still a single-team-owns-its-own-inbox operation done with the same re-read-right-before-write discipline. (Cross-team dead-channel reclamation is a separate exception, sanctioned and governed by the canonical vault `_Switchboard.md`, always operator-confirmed and tombstone-based — never a silent delete — so it too does not contradict "never delete another team's content.") The invariant otherwise stands in full: never rewrite a whole shared file, never delete another team's content, never delete roster rows, never delete `[ ]` (unhandled) items, and never delete broadcasts in `inbox-all.md`.
+- **Controlled exception — pruning your OWN handled directed messages.** This is the one carve-out the module performs autonomously: during an on-demand switchboard check a team may delete EXPIRED handled (`[x]`) directed messages from its OWN `inbox-<slug>.md`, per "Pruning handled directed messages." This is still a single-team-owns-its-own-inbox operation done with the same re-read-right-before-write discipline. (Cross-team dead-channel reclamation is a separate exception, sanctioned and governed by the canonical vault `_Switchboard.md`, always operator-confirmed and tombstone-based — never a silent delete — so it too does not contradict "never delete another team's content.") The invariant otherwise stands in full: never rewrite a whole shared file, never delete another team's content, never delete roster rows, never delete `[ ]` (unhandled) items, and never delete broadcasts in `inbox-all.md`.
 - **Roster write scope.** You own one row: the row matching your team name and repo path. Update only that row. Do not touch other teams' rows even if their data looks stale or incorrect.
 - **No file lock — low but non-zero race risk.** APPEND-ONLY + single-line edits make clobbering very unlikely, but two teams appending to the exact same file within the same instant could still race. At human/session cadence this is low-risk. Keep each write to a single insertion or a single changed line to minimize the window.
 
@@ -368,15 +370,15 @@ broadcasts-read-through: <N>
 
 ## Session-end behavior
 
-At the end of a session, the agent may optionally refresh its roster row's `Currently working on` and `Last active` columns to reflect the session's final focus and today's date. This is a courtesy update — the required heartbeat is the session-START one (Step 3 above). If the session ends abruptly or the operator does not explicitly wrap up, skipping the session-end roster update is acceptable.
+At the end of a session, if the operator explicitly wraps up via the switchboard, the agent may refresh its roster row's `Currently working on` and `Last active` columns to reflect the session's final focus and today's date. This remains on-demand like every other switchboard operation — there is no automatic session-end update to mirror, since there is no automatic session-start heartbeat either (Step 3 above only runs when asked). If the operator does not explicitly ask for it, skipping the session-end roster update is the default.
 
 ## Module-disabled vs parameter-disabled
 
 These are distinct cases:
 
 - **Module disabled** (no `tool.team-switchboard` in the Session Manifest): no switchboard operations are available. If the operator asks to send a message to another team, surface that the module is not loaded and direct them to enable it in the Modules tab.
-- **Module enabled, `heartbeatOnBoot` is false**: the roster is not updated at session start. The agent can still update the roster on explicit request.
-- **Module enabled, `checkInboxOnBoot` is false**: the inbox is not read at session start. The agent checks it on explicit request only.
-- **Module enabled, `commsRoot` unresolvable**: surface the blockage once at session start (see "Resolving commsRoot" above) and skip all boot steps. Switchboard operations are blocked until the path is resolved.
+- **Module enabled, `heartbeatOnBoot` is false**: when the operator asks for an on-demand switchboard check, the roster is not updated as part of it. The agent can still update the roster if the operator explicitly asks it to register/heartbeat.
+- **Module enabled, `checkInboxOnBoot` is false**: when the operator asks for an on-demand switchboard check, the inbox is not read as part of it. The agent checks it if the operator explicitly asks to see mail.
+- **Module enabled, `commsRoot` unresolvable**: surface the blockage once, when the operator's on-demand request triggers resolution (see "Resolving commsRoot" above), and skip the remaining steps. Switchboard operations are blocked until the path is resolved.
 
 Do not merge these cases.

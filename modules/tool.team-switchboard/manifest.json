@@ -1,12 +1,12 @@
 {
   "id": "tool.team-switchboard",
   "name": "Team Switchboard",
-  "version": "0.1.0",
-  "description": "Enables cross-team agent communication via a shared Obsidian switchboard — a roster of active teams plus per-team inboxes; the agent heartbeats its presence and checks its inbox at session start.",
-  "proactive": true,
+  "version": "0.1.1",
+  "description": "Enables cross-team agent communication via a shared Obsidian switchboard — a roster of active teams plus per-team inboxes; the agent heartbeats its presence and checks its inbox on demand, when the operator asks about cross-team comms.",
+  "proactive": false,
   "category": "orchestration",
   "kind": "capability",
-  "trigger": "session-start",
+  "trigger": "user-request",
   "tier": "recommended",
   "contributes": {
     "promptFragments": [
@@ -51,15 +51,15 @@
       },
       "checkInboxOnBoot": {
         "type": "boolean",
-        "label": "Check inbox on session start",
-        "default": true,
-        "description": "When on, the agent reads inbox-<team>.md and inbox-all.md at session start and surfaces a concise summary of unread messages (sender, subject, date) to the operator. When off, the agent only reads the inbox when explicitly asked — useful for sessions where inbox noise would be distracting or the operator checks manually."
+        "label": "Check inbox when asked",
+        "default": false,
+        "description": "There is no automatic session-start check anymore — the switchboard only activates when the operator explicitly asks about cross-team comms. When on, that on-demand check also reads inbox-<team>.md and inbox-all.md and surfaces a concise summary of unread messages (sender, subject, date) to the operator. When off, the agent still checks the inbox on explicit request, but skips the summary framing — useful for sessions where inbox noise would be distracting."
       },
       "heartbeatOnBoot": {
         "type": "boolean",
-        "label": "Update roster on session start",
-        "default": true,
-        "description": "When on, the agent refreshes its row in _Switchboard.md at session start (current focus + today's date), adding the row if this team has never registered. When off, the roster row is only updated on explicit request — useful when you want to control exactly what 'currently working on' shows or when you are running a read-only review session that should not advertise presence."
+        "label": "Update roster when asked",
+        "default": false,
+        "description": "There is no automatic session-start heartbeat anymore — the roster is only touched when the operator explicitly asks the switchboard to register or check in. When on, that on-demand request also refreshes this team's row in _Switchboard.md (current focus + today's date), adding the row if this team has never registered. When off, the operator's request is treated as a read-only lookup and the roster row is left untouched — useful for a review session that should not advertise presence even when explicitly asked to check the switchboard."
       }
     }
   }
