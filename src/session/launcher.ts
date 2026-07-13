@@ -106,8 +106,19 @@ export class SessionLauncher {
       env.NOMEDA_QA_PROMPT_FILE = resolveAgentPromptFilePath('qa');
     }
 
+    // Singleton terminal: dispose any already-open terminal with the same name
+    // (by name-match, so stale duplicates from prior builds are cleared too)
+    // before creating a fresh one, so hitting run replaces the prior session
+    // rather than stacking a second "Nomeda Session" tab.
+    const terminalName = options?.terminalName ?? 'Nomeda Session';
+    for (const t of vscode.window.terminals) {
+      if (t.name === terminalName) {
+        t.dispose();
+      }
+    }
+
     const terminal = vscode.window.createTerminal({
-      name: options?.terminalName ?? 'Nomeda Session',
+      name: terminalName,
       shellPath,
       shellArgs,
       cwd,

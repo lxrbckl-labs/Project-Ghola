@@ -177,7 +177,10 @@ export class SettingsPanel implements vscode.Disposable {
 
   open(): void {
     if (this.panel) {
-      this.panel.reveal(vscode.ViewColumn.Active);
+      // Strict singleton: a panel already exists, so surface it instead of
+      // creating a second one. Reveal in its CURRENT column (never force-move to
+      // Active) so reopening doesn't yank the tab across editor groups.
+      this.panel.reveal(this.panel.viewColumn);
       return;
     }
     const panel = vscode.window.createWebviewPanel(
@@ -209,7 +212,11 @@ export class SettingsPanel implements vscode.Disposable {
    */
   revive(panel: vscode.WebviewPanel): void {
     if (this.panel) {
-      this.panel.reveal(vscode.ViewColumn.Active);
+      // A live singleton already exists (the user reopened before restore, or VS
+      // Code handed back several persisted duplicates): keep the existing panel
+      // in its current column and dispose the incoming restore so a reload can
+      // never stack a second panel — this also collapses legacy duplicates.
+      this.panel.reveal(this.panel.viewColumn);
       panel.dispose();
       return;
     }
