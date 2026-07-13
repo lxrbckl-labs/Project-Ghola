@@ -416,6 +416,11 @@ const UPLOAD_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" heig
 // Path adapted from GitHub Octicons (MIT).
 const KEY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.5 0a5.5 5.5 0 1 1-1.288 10.848l-.932.932a.75.75 0 0 1-.53.22H7v.75a.75.75 0 0 1-.22.53l-.5.5a.75.75 0 0 1-.53.22H5v.75a.75.75 0 0 1-.22.53l-.5.5a.75.75 0 0 1-.53.22h-2A1.75 1.75 0 0 1 0 14.25v-2c0-.2.079-.39.22-.53l5.932-5.932A5.5 5.5 0 0 1 10.5 0zm0 1.5a4 4 0 0 0-3.957 4.585.75.75 0 0 1-.21.65L1.5 12.56v1.69c0 .136.114.25.25.25h1.69l.06-.06v-.94c0-.2.079-.39.22-.53l.5-.5a.75.75 0 0 1 .53-.22h.94l.06-.06v-.94c0-.2.079-.39.22-.53l.5-.5a.75.75 0 0 1 .53-.22h.94l1.815-1.815a.75.75 0 0 1 .65-.21A4 4 0 1 0 10.5 1.5zm1 2.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/></svg>`;
 
+// GitHub octocat glyph — leads the repo button in the Session header row. Single
+// path, fill=currentColor so it inherits the button's theme color (no asset/CSP
+// concern). Path adapted from GitHub Octicons (MIT), mark-github 16px.
+const GITHUB_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>`;
+
 function init(): void {
   render();
   vscode.postMessage({ type: 'ready' });
@@ -841,6 +846,47 @@ function renderContent(): HTMLElement {
 }
 
 function renderGeneral(wrapper: HTMLElement): void {
+  // Header row: project name (left) + action cluster (right). Sits ABOVE the
+  // cover hero and is appended unconditionally so it still shows when no cover
+  // image is bundled. The action cluster holds the relocated Update Extension
+  // button and, to its right, a GitHub button that opens the repo externally.
+  const nameRow = el('div', { class: 'session-name-row' });
+  nameRow.appendChild(textEl('span', 'PROJECT GHOLA', 'session-name-label'));
+
+  const nameActions = el('div', { class: 'session-name-actions' });
+
+  // Update Extension button — relocated here from the launch row. Delegates to
+  // the ghola.updateExtension command on the host; renders [icon][version].
+  const updateBtn = el('button', {
+    class: 'icon-button framed session-action-button update-extension-btn',
+    type: 'button',
+    'aria-label': `Update Extension (current version ${root.dataset.version || 'dev'})`,
+    title: 'Update the Ghola extension: pull latest from the remote repository, rebuild, reinstall, and reload.',
+  }) as HTMLButtonElement;
+  const updateBtnIcon = el('span', { class: 'update-btn-icon' });
+  updateBtnIcon.innerHTML = UPDATE_EXTENSION_ICON_SVG;
+  const updateBtnVersion = textEl('span', root.dataset.version || 'dev', 'update-btn-version');
+  updateBtn.append(updateBtnIcon, updateBtnVersion);
+  updateBtn.addEventListener('click', () => vscode.postMessage({ type: 'updateExtension' }));
+
+  // GitHub button — far right. Opens the repo via the existing openExternal
+  // message (https-only, validated host-side); inline SVG glyph inherits theme.
+  const githubBtn = el('button', {
+    class: 'icon-button framed session-action-button session-github-button',
+    type: 'button',
+    'aria-label': 'Open the Project Ghola repository on GitHub',
+    title: 'Open the Project Ghola repository on GitHub',
+  }) as HTMLButtonElement;
+  githubBtn.innerHTML = GITHUB_ICON_SVG;
+  githubBtn.addEventListener('click', () => vscode.postMessage({
+    type: 'openExternal',
+    url: 'https://github.com/lxRbckl/Project-Ghola',
+  } as unknown as WebviewToHostMessage));
+
+  nameActions.append(updateBtn, githubBtn);
+  nameRow.appendChild(nameActions);
+  wrapper.appendChild(nameRow);
+
   // Hero banner: pixel-art cover image injected by the host as `data-cover-uri`
   // on the `#app` root (mirrors how `data-version` is read). Rendered as the
   // first child of the Session page. When the URI is empty/absent (image not
@@ -906,26 +952,12 @@ function renderGeneral(wrapper: HTMLElement): void {
   sessionBtn.innerHTML = PLAY_ICON_SVG;
   sessionBtn.addEventListener('click', () => vscode.postMessage({ type: 'openSession' }));
 
-  // Update Extension button — sits beside the Play button at the end of the row.
-  // Delegates to the ghola.updateExtension command on the host.
-  const updateBtn = el('button', {
-    class: 'icon-button framed session-action-button update-extension-btn',
-    type: 'button',
-    'aria-label': `Update Extension (current version ${root.dataset.version || 'dev'})`,
-    title: 'Update the Ghola extension: pull latest from the remote repository, rebuild, reinstall, and reload.',
-  }) as HTMLButtonElement;
-  const updateBtnIcon = el('span', { class: 'update-btn-icon' });
-  updateBtnIcon.innerHTML = UPDATE_EXTENSION_ICON_SVG;
-  const updateBtnVersion = textEl('span', root.dataset.version || 'dev', 'update-btn-version');
-  updateBtn.append(updateBtnIcon, updateBtnVersion);
-  updateBtn.addEventListener('click', () => vscode.postMessage({ type: 'updateExtension' }));
-
-  // Assemble the launch row in visual order: Package (far left), the three
-  // fields, then Play (far right). All five are direct children of
-  // .session-launch-row so the single row gap governs every adjacent pair
-  // uniformly; flex-wrap:nowrap keeps them on one line and flex-shrink:0 on
-  // .icon-button keeps the buttons fixed while the fields absorb any narrowing.
-  launchRow.appendChild(updateBtn);
+  // Assemble the launch row in visual order: the three fields, then Play (far
+  // right). All are direct children of .session-launch-row so the single row gap
+  // governs every adjacent pair uniformly; flex-wrap:nowrap keeps them on one
+  // line and flex-shrink:0 on .icon-button keeps the button fixed while the
+  // fields absorb any narrowing. (The Update Extension button was relocated to
+  // the header row above the cover hero.)
   launchRow.appendChild(aliasField);
   launchRow.appendChild(sessionField);
   launchRow.appendChild(configField);

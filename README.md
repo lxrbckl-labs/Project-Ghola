@@ -21,6 +21,16 @@ After installing, reload VS Code (`Ctrl+Shift+P` -> "Developer: Reload Window").
 
 **Note:** If you plan to use the in-app **Update Extension** button, set the `ghola.repoPath` setting to the absolute path of your `Project-Ghola` clone (VS Code Settings -> search "ghola.repoPath"). This is required when running an installed VSIX — the extension cannot infer the repo location on its own. Set it in **User** settings (not workspace settings) so it applies in every repo and is not accidentally committed as a machine-specific path. See [In-app update](#in-app-update-easy-path) for full details.
 
+> **Remote-WSL note:** Under Remote-WSL there is no WSL-side *User* `settings.json` (User settings live on the Windows client), so the "User settings" advice above does not apply as-is. Set `ghola.repoPath` in the **Machine / Remote [WSL] settings** instead: either via the Settings UI (`Ctrl+,` -> search "ghola.repoPath" -> the **Remote [WSL: <distro>]** tab), or directly in `~/.vscode-server/data/Machine/settings.json`:
+>
+> ```json
+> {
+>     "ghola.repoPath": "/home/<you>/projects/Project-Ghola"
+> }
+> ```
+>
+> This applies to every repo you open in that WSL remote. VS Code reads settings live, so no window reload is needed before retrying the update.
+
 ## Updating
 
 ### In-app update (easy path)
@@ -53,7 +63,7 @@ There is no marketplace. A `git push` updates the source repository only — it 
 - **Extension installs but never activates ("stuck on loading").** On a corporate or proxied network, watch the `npm ci` output for esbuild / native-binary download failures: a partial install leaves the build with no compiled output, so the packaged `.vsix` has no entry point. Re-run the install on a working network so the build actually produces `dist/extension.js`.
 - **`vsce` warnings during `npm run package`.** Packaging warnings (e.g. missing repository field) are non-fatal — the `ghola.vsix` still installs.
 - **Update reports "already up to date" but you expected changes.** Updates are keyed on the `version` in `package.json`; a maintainer must bump it for the updater to act. See [How updates propagate](#how-updates-propagate).
-- **In-app update fails to find the repo.** When running an installed VSIX, set `ghola.repoPath` to the absolute path of your clone (see [In-app update](#in-app-update-easy-path)).
+- **In-app update fails to find the repo** (error: `Ghola: could not locate a Project-Ghola git checkout to update from. Set "ghola.repoPath" to the absolute path of your clone.`). When running an installed VSIX, set `ghola.repoPath` to the absolute path of your clone (see [In-app update](#in-app-update-easy-path)). Under Remote-WSL, set it in the **Machine / Remote [WSL] settings** (`~/.vscode-server/data/Machine/settings.json`), not User settings, since there is no WSL-side User settings file.
 - **Changes not visible after an update.** Reload the window (`Ctrl+Shift+P` -> "Developer: Reload Window") — the update prompt offers this for you on success.
 
 ## Status

@@ -329,6 +329,33 @@ pre.prompt {
    at their natural size. The fields carry no visible labels (each surfaces its
    description via a hover title), so align-items:center vertically centres the bare
    input/dropdown controls against the 28x28 action buttons. */
+/* Session header row: project name (left) + action cluster (right), sitting
+   directly above the cover hero. justify-content:space-between pins the name to
+   the left edge and the action cluster to the right; align-items:center levels
+   the label text against the 28x28 framed buttons. Theme-safe via var(--vscode-*). */
+.session-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.session-name-label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--vscode-foreground);
+}
+
+/* Right-aligned button cluster: [Update Extension][GitHub]. 4px gap matches the
+   launch row so the two framed buttons sit at the same rhythm. */
+.session-name-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* Session page hero banner. Full width of the content area, holding the pixel-art
    cover as a centered cover-fit background. A 3:2 aspect-ratio capped by max-height
    keeps it a tasteful banner rather than dominating the page, and a faint bottom
