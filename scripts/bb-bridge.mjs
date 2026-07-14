@@ -22,11 +22,13 @@
 //   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
 //   node scripts/bb-bridge.mjs reply         --repo <slug> --pr <id> --parent <id> \
 //       [--inline-path <p> --inline-to <n> [--inline-from <n>]]   (body piped via stdin)
+//   node scripts/bb-bridge.mjs get-ticket    --key <KEY>
 //
 // Exit codes:
-//   0  bridge call succeeded (parsed result's status === 'ok')
+//   0  bridge call succeeded (parsed result's status === 'ok'; for
+//      get-ticket, parsed result's exists === true)
 //   1  bridge call reached the server but failed (non-2xx HTTP, or a parsed
-//      result whose status !== 'ok')
+//      result whose status !== 'ok'; for get-ticket, exists !== true)
 //   2  usage error: env not set, unknown subcommand, or a bad/missing
 //      required argument — nothing was sent to the bridge
 //
@@ -143,11 +145,13 @@ function printJson(obj) {
   console.log(JSON.stringify(obj, null, 2));
 }
 
-// POSTs `body` to `${GHOLA_BRIDGE_URL}${routePath}` with the bearer token,
-// prints the JSON result to stdout, and exits per the contract documented
-// at the top of this file. Never returns for a bridge-level failure (it
-// exits directly) — callers just `await` it and fall off the end on success.
-async function postToBridge(routePath, body) {
+// POSTs `body` to `${GHOLA_BRIDGE_URL}${routePath}` with the bearer token and
+// returns the parsed JSON response. Never returns on a bridge-level failure
+// (network error, or non-2xx HTTP) — those print + exit(1) directly per the
+// contract documented at the top of this file. Shared by postToBridge and
+// postToBridgeExists, which differ only in how they judge "success" once a
+// response body is in hand.
+async function callBridge(routePath, body) {
   const { url, token } = ensureBridgeEnv();
 
   let res;
@@ -184,11 +188,35 @@ async function postToBridge(routePath, body) {
     process.exit(1);
   }
 
+  return parsed;
+}
+
+// POSTs to the bridge, prints the JSON result to stdout, and exits 0 when
+// the parsed result's status === 'ok', else 1. Never returns for a
+// bridge-level failure (it exits directly) — callers just `await` it and
+// fall off the end on success.
+async function postToBridge(routePath, body) {
+  const parsed = await callBridge(routePath, body);
   printJson(parsed);
   if (parsed && parsed.status === 'ok') {
     process.exit(0);
   } else {
     console.error(`bb-bridge: ${routePath} did not return status 'ok'`);
+    process.exit(1);
+  }
+}
+
+// Same shape as postToBridge, but for endpoints (get-ticket) whose success
+// signal is `exists === true` rather than `status === 'ok'` — e.g. "ticket
+// not found" is a legitimate, well-formed response the agent needs to fall
+// back on, not a bridge-level error.
+async function postToBridgeExists(routePath, body) {
+  const parsed = await callBridge(routePath, body);
+  printJson(parsed);
+  if (parsed && parsed.exists === true) {
+    process.exit(0);
+  } else {
+    console.error(`bb-bridge: ${routePath} did not find the resource (exists !== true)`);
     process.exit(1);
   }
 }
@@ -249,6 +277,15 @@ async function cmdReply(flags) {
   await postToBridge('/reply', payload);
 }
 
+async function cmdGetTicket(flags) {
+  const usage = 'bb-bridge get-ticket --key <KEY>';
+  const key = requireFlag(flags, 'key', usage);
+  if (key.trim() === '') {
+    usageFail(`--key must not be empty. Usage: ${usage}`);
+  }
+  await postToBridgeExists('/get-ticket', { key });
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Entry point
 // ─────────────────────────────────────────────────────────────────────────
@@ -266,6 +303,7 @@ Usage:
   node scripts/bb-bridge.mjs reply         --repo <slug> --pr <id> --parent <id> \\
       [--inline-path <p> --inline-to <n> [--inline-from <n>]]
                                             (reply body is read from stdin)
+  node scripts/bb-bridge.mjs get-ticket    --key <KEY>
 
 Exit codes: 0 ok, 1 bridge-level failure, 2 usage error (env/args).
 `;
@@ -284,6 +322,7 @@ async function main() {
     resolve: cmdResolve,
     'mark-ready': cmdMarkReady,
     reply: cmdReply,
+    'get-ticket': cmdGetTicket,
   };
   const handler = routes[subcommand];
   if (!handler) {

@@ -132,30 +132,6 @@ export interface AtlassianValidationResult {
   lastCheckedAt: string;
 }
 
-// ─── Merkle test-connection types ─────────────────────────────────────────
-
-/**
- * Outcome of a manual "Test Connection" probe initiated from the
- * `integration.merkle` module's settings detail view. The host fetches
- * `${baseUrl}/api/health` and surfaces the result back to the webview.
- * No credentials are involved — Merkle's health endpoint is unauthenticated.
- */
-export interface MerkleTestResult {
-  status: 'ok' | 'error';
-  /** HTTP status code from the response, when one was received (vs. network failure). */
-  httpStatus?: number;
-  /** Short human-readable message; on error this names what went wrong. */
-  message?: string;
-  /** Echoed `name` field from the /api/health JSON body — should be `"project-merkle"`. */
-  name?: string;
-  /** Echoed `version` field. */
-  serverVersion?: string;
-  /** Echoed `time` field (ISO 8601 timestamp). */
-  serverTime?: string;
-  /** The baseUrl the test was run against — UI uses this to invalidate stale results when the user edits the field. */
-  testedBaseUrl: string;
-}
-
 // ─── War Room types (War Mode) ──────────────────────────────────────────
 
 /**
@@ -424,12 +400,14 @@ export type WebviewToHostMessage =
   /** Request the last cached validation result synchronously from the host. */
   | { type: 'atlassianValidationStatusRequested' }
   /**
-   * Trigger a manual "Test Connection" probe against the Project-Merkle
-   * deployment. `baseUrl` is the live value of the module's `serverBaseUrl`
-   * setting at click time — the host echoes it back on the result so the
-   * webview can invalidate the chip when the user edits the field afterwards.
+   * Trigger host-side auto-discovery of Support-mode app repo paths. The host
+   * scans the filesystem for each UNMAPPED `mode.support` app (a dir whose
+   * basename matches the app key case-insensitively AND contains a `.git`
+   * subdir), writes any found paths into the `appMap` setting (never
+   * overwriting an existing non-empty path), and replies with a
+   * `supportDiscoveryResult` message.
    */
-  | { type: 'merkleTestConnection'; baseUrl: string }
+  | { type: 'supportDiscoverPaths' }
   /** Open an external https: URL via vscode.env.openExternal. Only https: scheme is accepted. */
   | { type: 'openExternal'; url: string }
   /**
@@ -559,11 +537,19 @@ export type HostToWebviewMessage =
    */
   | { type: 'atlassianValidationResult'; result: AtlassianValidationResult | null }
   /**
-   * Sent after a `merkleTestConnection` probe completes. `result` is null
-   * when no test has been run yet in this session — the webview uses that to
-   * distinguish the untested initial state from a recorded outcome.
+   * Reply to `supportDiscoverPaths`. `found` maps each located app key to its
+   * discovered absolute repo path (already merged into the saved `appMap`),
+   * `notFound` lists the requested-but-unmapped keys still without a path,
+   * `scanned` is the number of directories the walk visited, and `error` is a
+   * short message set only when discovery hit an unexpected fault.
    */
-  | { type: 'merkleTestConnectionResult'; result: MerkleTestResult | null }
+  | {
+      type: 'supportDiscoveryResult';
+      found: Record<string, string>;
+      notFound: string[];
+      scanned: number;
+      error?: string;
+    }
   /** A fresh War Room payload for the tab to render. */
   | { type: 'warRoomData'; data: WarRoomData }
   /** Ask the webview to reveal a named section/tab (e.g. 'warroom'). */

@@ -72,27 +72,6 @@ interface AtlassianValidationResultMessage {
 // interface AtlassianValidateMessage { type: 'atlassianValidate'; }
 // interface AtlassianValidationStatusRequestedMessage { type: 'atlassianValidationStatusRequested'; }
 
-// ─── Merkle test-connection protocol types ──────────────────────────────────
-// Local re-declarations kept in sync with src/settings-panel/protocol.ts.
-
-interface MerkleTestResult {
-  status: 'ok' | 'error';
-  httpStatus?: number;
-  message?: string;
-  name?: string;
-  serverVersion?: string;
-  serverTime?: string;
-  testedBaseUrl: string;
-}
-
-interface MerkleTestConnectionResultMessage {
-  type: 'merkleTestConnectionResult';
-  result: MerkleTestResult | null;
-}
-
-// Webview → host send-site type (documented here, sent via postMessage):
-// interface MerkleTestConnectionMessage { type: 'merkleTestConnection'; baseUrl: string; }
-
 interface VsCodeApi {
   postMessage(msg: WebviewToHostMessage): void;
   setState(state: unknown): void;
@@ -259,17 +238,22 @@ interface UIState {
    */
   atlassianValidating: boolean;
   /**
-   * Last "Test Connection" result for the integration.merkle module, or null
-   * when no test has been run yet. Updated by 'merkleTestConnectionResult'
-   * messages. Stays cached across re-renders so the chip survives DOM
-   * rebuilds without re-running the probe.
+   * True while a `supportDiscoverPaths` scan is in flight (user clicked
+   * Discover paths in the `mode.support` module detail view). Set to true on
+   * click; cleared when a `supportDiscoveryResult` message arrives.
    */
-  merkleTestResult: MerkleTestResult | null;
+  supportDiscovering: boolean;
   /**
-   * True while a Merkle test-connection probe is in flight. Set to true on
-   * click; cleared when the 'merkleTestConnectionResult' message arrives.
+   * Last support-mode path-discovery result received from the host via
+   * 'supportDiscoveryResult'. Null means no scan has been run yet this
+   * session.
    */
-  merkleTesting: boolean;
+  supportDiscoveryResult: {
+    found: Record<string, string>;
+    notFound: string[];
+    scanned: number;
+    error?: string;
+  } | null;
   /** Feedback entries last received from the host via 'feedbackLoaded'. */
   feedbackEntries: FeedbackEntry[];
   /**
@@ -354,8 +338,8 @@ const state: UIState = {
   atlassianBitbucketTokenConfirming: false,
   atlassianValidation: null,
   atlassianValidating: false,
-  merkleTestResult: null,
-  merkleTesting: false,
+  supportDiscovering: false,
+  supportDiscoveryResult: null,
   feedbackEntries: [],
   feedbackPendingNoConfirm: new Set(),
   warRoomData: undefined,
@@ -448,10 +432,6 @@ function init(): void {
     }
     if (raw.type === 'atlassianValidationResult') {
       handleAtlassianValidationResult(raw as unknown as AtlassianValidationResultMessage);
-      return;
-    }
-    if (raw.type === 'merkleTestConnectionResult') {
-      handleMerkleTestConnectionResult(raw as unknown as MerkleTestConnectionResultMessage);
       return;
     }
     handleMessage(ev.data as HostToWebviewMessage);
@@ -577,6 +557,9 @@ function handleMessage(msg: HostToWebviewMessage): void {
       }
       break;
     }
+    case 'supportDiscoveryResult':
+      handleSupportDiscoveryResult(msg);
+      break;
     case 'linqpadConnections':
       state.linqpadConnections = {
         status: msg.status === 'ok' ? 'ok' : msg.status,
@@ -727,25 +710,41 @@ function handleAtlassianValidationResult(msg: AtlassianValidationResultMessage):
 }
 
 /**
- * Handle the merkleTestConnectionResult message. Updates the cached result
- * and clears the in-flight flag, then re-renders only the inline Merkle
- * serverBaseUrl input wrapper when the integration.merkle detail view is
- * open so the rest of the page keeps its scroll position.
+ * Handle the supportDiscoveryResult message. Updates discovery state and, if
+ * the `mode.support` module detail view is open, does a full re-render so
+ * both the discovery block and the `appMap` keyValue table (a separate
+ * element on the same detail page) pick up the newly-written paths. The
+ * cached keyValue draft is cleared first — otherwise the table would keep
+ * showing the stale pre-scan values even though `state.settingsValues`
+ * already has the fresh `appMap` (the host re-posts `settingsLoaded` before
+ * this message, per `discoverSupportPaths` in host.ts).
  */
-function handleMerkleTestConnectionResult(msg: MerkleTestConnectionResultMessage): void {
-  state.merkleTestResult = msg.result;
-  state.merkleTesting = false;
-  const isMerkleDetailOpen =
+function handleSupportDiscoveryResult(msg: {
+  type: 'supportDiscoveryResult';
+  found: Record<string, string>;
+  notFound: string[];
+  scanned: number;
+  error?: string;
+}): void {
+  state.supportDiscovering = false;
+  state.supportDiscoveryResult = {
+    found: msg.found,
+    notFound: msg.notFound,
+    scanned: msg.scanned,
+    error: msg.error,
+  };
+  // Discard the cached appMap draft so it re-seeds from the freshly-written
+  // state.settingsValues on next render instead of showing stale empties.
+  delete state.keyValueDrafts['mode.support::appMap'];
+  const isSupportDetailOpen =
     state.activeSection === 'modules' &&
     state.moduleView.mode === 'detail' &&
-    state.moduleView.moduleId === 'integration.merkle';
-  if (isMerkleDetailOpen) {
-    const wrapper = document.getElementById('merkle-test-input-wrapper');
-    if (wrapper) {
-      const fresh = renderMerkleServerBaseUrlField();
-      wrapper.replaceWith(fresh);
-      return;
-    }
+    state.moduleView.moduleId === 'mode.support';
+  if (isSupportDetailOpen) {
+    // A full re-render (rather than an in-place block swap, as the Atlassian
+    // validation handler does) is required here: the appMap keyValue table is
+    // a sibling element on the same detail page and also needs to pick up
+    // the re-seeded draft, so there is no single element to target-replace.
     render();
   }
 }
@@ -2070,9 +2069,13 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
     container.appendChild(validationBlock);
   }
 
-  // Project-Merkle module's manual "Test Connection" UI has moved inline next
-  // to the `serverBaseUrl` input itself — see `renderModuleSettingField` for
-  // the play-button + status-feedback wiring. No separate detail section here.
+  // Support mode: render the path-discovery block below the instructions,
+  // so operators can auto-fill empty appMap entries without hand-typing them.
+  if (m.id === 'mode.support') {
+    const discoveryBlock = renderSupportDiscoveryBlock();
+    discoveryBlock.id = 'support-discovery-block';
+    container.appendChild(discoveryBlock);
+  }
 
   // Feedback Logging module: render the feedback entry card UI below the
   // instructions. Scoped exclusively to this module's detail view.
@@ -2369,19 +2372,6 @@ function renderModuleSettingField(
     // Booleans theoretically could ship a keywordsPath, but the on/off shape
     // has no vocabulary to document. Still render if present — the agent reads
     // the same file, so the table keeps host + agent views in sync.
-    appendKeywordsTable(wrap, moduleId, settingKey, field);
-    return wrap;
-  }
-
-  // Project-Merkle module's `serverBaseUrl` field: hardcoded inline play-button
-  // + status-feedback rendering. Anything else falls through to the generic
-  // input rendering below. Hardcoded rather than generalised because the
-  // affordance is module-specific (mirrors the atlassian-suite pattern).
-  if (moduleId === 'integration.merkle' && settingKey === 'serverBaseUrl') {
-    wrap.appendChild(renderMerkleServerBaseUrlField());
-    if (field.description) {
-      wrap.appendChild(textEl('div', field.description, 'setting-desc'));
-    }
     appendKeywordsTable(wrap, moduleId, settingKey, field);
     return wrap;
   }
@@ -3912,189 +3902,6 @@ function renderAtlassianValidationBlock(): HTMLElement {
 }
 
 /**
- * Render the inline `serverBaseUrl` input wrapper for the integration.merkle
- * module: text input + adjacent play-button (▶) for triggering a test probe,
- * plus a short feedback line directly below the input. The input border
- * reflects the latest probe outcome (green/red), is muted while the result
- * is stale (URL edited since the last test), and reverts to the default
- * VS Code input border before any test has run.
- *
- * Hardcoded for `integration.merkle::serverBaseUrl` rather than generalised:
- * the affordance is module-specific (mirrors how atlassian-suite hardcodes
- * its token-management slots). The play button reads the live setting on
- * click rather than capturing it at render time, so the user can edit then
- * probe without an intermediate save.
- *
- * Returned wrapper carries the id `merkle-test-input-wrapper` so the result
- * handler can swap just this subtree on probe completion and keep scroll
- * position stable.
- */
-function renderMerkleServerBaseUrlField(): HTMLElement {
-  const wrapper = el('div', {
-    class: 'merkle-test-input-wrapper',
-    id: 'merkle-test-input-wrapper',
-  });
-
-  const baseUrlSetting = state.settingsValues['integration.merkle::serverBaseUrl'];
-  const currentBaseUrl =
-    typeof baseUrlSetting === 'string' && baseUrlSetting.length > 0
-      ? baseUrlSetting
-      : 'http://localhost:7423';
-
-  // Determine staleness up front so we can drive both the border class and
-  // the feedback element from one decision. Trim trailing slashes on both
-  // sides because the host trims before probing — so the echoed
-  // `testedBaseUrl` is always slash-free and the comparison must match.
-  const result = state.merkleTestResult;
-  const trimmedCurrent = currentBaseUrl.replace(/\/+$/, '');
-  const isStale =
-    result !== null && result.testedBaseUrl !== trimmedCurrent;
-
-  // ─── Row: input on the left, play button on the right. ────────────────
-  const row = el('div', { class: 'module-field-row' });
-
-  const inp = el('input', { class: 'setting-input' }) as HTMLInputElement;
-  inp.type = 'text';
-  inp.value = currentBaseUrl;
-
-  if (!state.merkleTesting && result !== null && !isStale) {
-    if (result.status === 'ok') {
-      inp.classList.add('merkle-test-input-ok');
-    } else {
-      inp.classList.add('merkle-test-input-error');
-    }
-  }
-
-  // Autosave on blur (matches the generic text-input renderer above).
-  inp.addEventListener('change', () => {
-    state.settingsValues['integration.merkle::serverBaseUrl'] = inp.value;
-    persistSettings();
-  });
-
-  // Live-edit handler: clear the success/error border the instant the user
-  // mutates the field so a stale green halo can't outlive the input it was
-  // describing. Also swaps the feedback text to the "URL changed — re-test"
-  // muted variant without re-rendering the whole detail view.
-  inp.addEventListener('input', () => {
-    inp.classList.remove('merkle-test-input-ok');
-    inp.classList.remove('merkle-test-input-error');
-    refreshMerkleTestFeedbackText(wrapper, inp.value);
-  });
-
-  row.appendChild(inp);
-
-  const playBtn = el('button', {
-    class: 'merkle-test-play-button',
-    type: 'button',
-    title: 'Test connection',
-    'aria-label': 'Test connection',
-  }) as HTMLButtonElement;
-  playBtn.textContent = state.merkleTesting ? '…' : '▶';
-  playBtn.disabled = state.merkleTesting;
-  playBtn.addEventListener('click', () => {
-    // Re-read at click time so the user can edit-and-probe without saving.
-    const latestSetting = state.settingsValues['integration.merkle::serverBaseUrl'];
-    const liveValue = inp.value;
-    const baseUrl =
-      liveValue.length > 0
-        ? liveValue
-        : typeof latestSetting === 'string' && latestSetting.length > 0
-          ? latestSetting
-          : 'http://localhost:7423';
-    state.merkleTesting = true;
-    const self = document.getElementById('merkle-test-input-wrapper');
-    if (self) {
-      const fresh = renderMerkleServerBaseUrlField();
-      self.replaceWith(fresh);
-    }
-    vscode.postMessage({
-      type: 'merkleTestConnection',
-      baseUrl,
-    } as unknown as WebviewToHostMessage);
-  });
-  row.appendChild(playBtn);
-
-  wrapper.appendChild(row);
-
-  // ─── Feedback line directly below the input. ─────────────────────────
-  const feedback = el('div', { class: 'merkle-test-feedback' });
-  applyMerkleTestFeedback(feedback, result, isStale);
-  wrapper.appendChild(feedback);
-
-  return wrapper;
-}
-
-/**
- * Populate a `.merkle-test-feedback` element with the current probe verdict.
- * Centralised so both the initial render and the live-edit `input` listener
- * can drive the same text/class state without duplicating the four-way
- * (pending / stale / ok / error) decision tree.
- */
-function applyMerkleTestFeedback(
-  feedback: HTMLElement,
-  result: MerkleTestResult | null,
-  isStale: boolean,
-): void {
-  feedback.classList.remove(
-    'merkle-test-feedback-ok',
-    'merkle-test-feedback-error',
-    'merkle-test-feedback-pending',
-    'merkle-test-feedback-stale',
-  );
-
-  if (state.merkleTesting) {
-    feedback.classList.add('merkle-test-feedback-pending');
-    feedback.textContent = 'Testing…';
-    return;
-  }
-
-  if (result === null) {
-    // No probe has run — hide the feedback line entirely. The play button
-    // is enough of a hint on its own.
-    feedback.textContent = '';
-    feedback.classList.add('merkle-test-feedback-pending');
-    return;
-  }
-
-  if (isStale) {
-    feedback.classList.add('merkle-test-feedback-stale');
-    feedback.textContent = 'URL changed — re-test';
-    return;
-  }
-
-  if (result.status === 'ok') {
-    feedback.classList.add('merkle-test-feedback-ok');
-    feedback.textContent = result.serverVersion
-      ? `Connected — project-merkle v${result.serverVersion}`
-      : 'Connected';
-    return;
-  }
-
-  feedback.classList.add('merkle-test-feedback-error');
-  const msg = result.message ?? 'connection failed';
-  feedback.textContent = result.httpStatus
-    ? `HTTP ${result.httpStatus} — ${msg}`
-    : `Network error: ${msg}`;
-}
-
-/**
- * Update only the feedback text in response to a live-edit `input` event,
- * re-evaluating staleness against the new input value without touching the
- * input element itself or its event listeners.
- */
-function refreshMerkleTestFeedbackText(
-  wrapper: HTMLElement,
-  liveValue: string,
-): void {
-  const feedback = wrapper.querySelector<HTMLElement>('.merkle-test-feedback');
-  if (!feedback) return;
-  const trimmed = liveValue.replace(/\/+$/, '');
-  const result = state.merkleTestResult;
-  const isStale = result !== null && result.testedBaseUrl !== trimmed;
-  applyMerkleTestFeedback(feedback, result, isStale);
-}
-
-/**
  * Render a single product status line (Jira or Bitbucket) inside the
  * validation block. Layout: [glyph] [Product] — [detail text]
  * The token value, auth header, and raw stack traces are never shown here;
@@ -4138,6 +3945,79 @@ function renderValidationStatusLine(
   row.appendChild(label);
 
   return row;
+}
+
+/**
+ * Support mode "Discover paths" block, shown in the `mode.support` module
+ * detail view below the instructions. Lets the operator trigger a host-side
+ * filesystem scan that auto-fills EMPTY `appMap` entries; never overwrites a
+ * path the operator has already set. Mirrors the three-state shape of
+ * `renderAtlassianValidationBlock` (idle prompt / in-progress / result), but
+ * collapses idle and result into a single persistent button since repeated
+ * scans are the expected usage (unlike the Atlassian one-shot validate).
+ */
+function renderSupportDiscoveryBlock(): HTMLElement {
+  const block = el('div', { class: 'support-discovery-block' });
+
+  const header = textEl('div', 'Discover Paths', 'details-header');
+  block.appendChild(header);
+
+  const discoverBtn = el('button', {
+    class: 'primary',
+    type: 'button',
+  }) as HTMLButtonElement;
+  discoverBtn.textContent = state.supportDiscovering ? 'Scanning…' : 'Discover paths';
+  discoverBtn.disabled = state.supportDiscovering;
+  discoverBtn.addEventListener('click', () => {
+    state.supportDiscovering = true;
+    // Re-render only this block in place.
+    const self = document.getElementById('support-discovery-block');
+    if (self) {
+      const fresh = renderSupportDiscoveryBlock();
+      fresh.id = 'support-discovery-block';
+      self.replaceWith(fresh);
+    }
+    vscode.postMessage({ type: 'supportDiscoverPaths' } as unknown as WebviewToHostMessage);
+  });
+  block.appendChild(discoverBtn);
+
+  const status = el('div', { class: 'support-discovery-status' });
+  const result = state.supportDiscoveryResult;
+  if (state.supportDiscovering) {
+    status.textContent = 'Scanning curated locations…';
+    status.classList.add('support-discovery-status--pending');
+  } else if (result === null) {
+    status.textContent =
+      'Scan curated locations for unmapped app repos and fill their paths automatically.';
+    status.classList.add('support-discovery-status--hint');
+  } else if (result.error) {
+    status.textContent = `Discovery failed — ${result.error}`;
+    status.classList.add('support-discovery-status--error');
+  } else {
+    const foundEntries = Object.entries(result.found);
+    const parts: string[] = [];
+    if (foundEntries.length > 0) {
+      parts.push(
+        `Found ${foundEntries.map(([key, path]) => `${key} at ${path}`).join(', ')}.`,
+      );
+    } else {
+      parts.push('No new paths found.');
+    }
+    if (result.notFound.length > 0) {
+      parts.push(`${result.notFound.join(', ')} not found.`);
+    }
+    status.textContent = parts.join(' ');
+  }
+  block.appendChild(status);
+
+  const note = textEl(
+    'div',
+    'Only fills empty appMap entries — paths you have already set are never overwritten.',
+    'support-discovery-note',
+  );
+  block.appendChild(note);
+
+  return block;
 }
 
 /**

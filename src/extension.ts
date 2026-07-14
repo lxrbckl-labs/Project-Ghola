@@ -6,6 +6,7 @@ import { TicketTodosStoreManager } from './ticket-widget/todos-store';
 import { registerCommands } from './commands';
 import { CommitPushViewProvider } from './commit-push/provider';
 import { AtlassianClient } from './integration/atlassian-client';
+import { adfToPlainText } from './integration/adf-to-text';
 import { BitbucketPrClient } from './integration/bitbucket-pr-client';
 import { startBitbucketBridge } from './integration/bitbucket-bridge-server';
 import { ModuleLoader } from './modules/loader';
@@ -234,14 +235,52 @@ export function activate(context: vscode.ExtensionContext): void {
   // token / workspace changes without rebuilding.
   const bitbucketPrClient = new BitbucketPrClient(atlassianBridge, readAtlassianSetting);
 
-  // Loopback bridge: exposes `bitbucketPrClient` to the CLI agent over a
-  // per-session bearer-authenticated HTTP server bound to 127.0.0.1. The
-  // Bitbucket API token stays host-side; the agent only receives the loopback
-  // URL + bearer token via the session env (wired into the launcher below).
-  // When the bridge fails to bind, `startBitbucketBridge` returns null and we
-  // inject no env — the CLI-side module then fails loud instead of silently
-  // targeting a phantom bridge.
-  const bbBridge = startBitbucketBridge(bitbucketPrClient, logger);
+  // Host-side Jira ticket fetcher passed into the loopback bridge. Reads the
+  // current email + jiraBase settings and the Jira token via the bridge, builds
+  // a fresh AtlassianClient (same pattern as the ticket widget), fetches the
+  // ticket, and converts the ADF `description` to plain text host-side so the
+  // CLI agent only ever sees text. The Jira token is confined to the client we
+  // construct here — it is never logged nor returned in the result.
+  const jiraGetTicket = async (
+    key: string,
+  ): Promise<{ exists: boolean; status?: string; summary?: string; description?: string; error?: string }> => {
+    try {
+      const email = readAtlassianSetting('email');
+      const jiraBase = readAtlassianSetting('jiraBase');
+      const jiraToken = await atlassianBridge.getJiraToken();
+      const client = new AtlassianClient({
+        email,
+        jiraToken,
+        jiraBase,
+        bitbucketWorkspace: '',
+      });
+      const result = await client.getTicketDetails(key);
+      if (!result.exists) {
+        return result.error ? { exists: false, error: result.error } : { exists: false };
+      }
+      const description =
+        result.description !== undefined ? adfToPlainText(result.description) : undefined;
+      return {
+        exists: true,
+        status: result.status,
+        summary: result.summary,
+        description: description || undefined,
+      };
+    } catch {
+      // Never surface an internal error (or the token) to the caller.
+      return { exists: false, error: 'ticket fetch failed' };
+    }
+  };
+
+  // Loopback bridge: exposes `bitbucketPrClient` (Bitbucket PR ops) and
+  // `jiraGetTicket` (Jira ticket reads) to the CLI agent over a per-session
+  // bearer-authenticated HTTP server bound to 127.0.0.1. The Bitbucket and Jira
+  // API tokens stay host-side; the agent only receives the loopback URL +
+  // bearer token via the session env (wired into the launcher below). When the
+  // bridge fails to bind, `startBitbucketBridge` returns null and we inject no
+  // env — the CLI-side module then fails loud instead of silently targeting a
+  // phantom bridge.
+  const bbBridge = startBitbucketBridge(bitbucketPrClient, jiraGetTicket, logger);
   if (bbBridge) {
     context.subscriptions.push({ dispose: () => bbBridge.dispose() });
     session.setBridge(bbBridge.url, bbBridge.token);

@@ -6,7 +6,7 @@ The `tool.team-switchboard` Ghola module makes every Ghola-composed agent team
 participate in the shared switchboard automatically -- the module is loaded into the
 session prompt and the agent knows to check inboxes and update the roster on boot.
 
-If your team runs a DIFFERENT harness (Mandrake, Merkle, a raw Claude session, a
+If your team runs a DIFFERENT harness (Mandrake, a raw Claude session, a
 custom CLAUDE.md setup, or any multi-agent framework other than Ghola) you must
 manually paste the snippet below into your harness's system prompt, CLAUDE.md, or
 agent memory. Without it, your agents will never see messages sent to them and cross-

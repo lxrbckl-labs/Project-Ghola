@@ -3,6 +3,7 @@ import * as fsSync from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { discoverAppPaths } from '../integration/support-discovery';
 import { validateManifest } from '../manifest/validator';
 import type { AtlassianBridge } from '../extension';
 import type { ModuleLoader } from '../modules/loader';
@@ -457,15 +458,15 @@ export class SettingsPanel implements vscode.Disposable {
         this.post({ type: 'atlassianValidationResult', result: lastResult });
         break;
       }
+      case 'supportDiscoverPaths':
+        await this.discoverSupportPaths();
+        break;
       case 'atlassianValidate':
         // Execute the command registered by SWE-1. The bridge fires onDidChangeValidation
         // when done, which the constructor subscription above will broadcast.
         // We do NOT call bridge.validate() directly so that all telemetry / hooks
         // stay routed through the single command path.
         await vscode.commands.executeCommand('ghola.atlassianSuite.validateToken');
-        break;
-      case 'merkleTestConnection':
-        await this.runMerkleTestConnection(msg.baseUrl);
         break;
       case 'openExternal': {
         // Only allow https: URLs — reject http: and any other scheme.
@@ -828,6 +829,73 @@ export class SettingsPanel implements vscode.Disposable {
       this.moduleSettingsEmitter.fire();
     } catch (err) {
       this.post({ type: 'settingsSaved', ok: false, error: (err as Error).message });
+    }
+  }
+
+  /**
+   * Host-side auto-discovery of Support-mode app repo paths. Scans the
+   * filesystem (see `discoverAppPaths`) for every UNMAPPED `mode.support` app —
+   * a key whose `appMap` value is empty/whitespace — and writes any found path
+   * back into the `appMap` setting. NEVER overwrites an existing non-empty
+   * path. On success it mirrors the `saveSettings` refresh side effects (fresh
+   * settings + configurations + composed prompts + module-settings event) and
+   * replies with a `supportDiscoveryResult`. Discovery itself never throws;
+   * this wrapper also guards the write path and still posts a result (with an
+   * `error`) on any fault.
+   */
+  private async discoverSupportPaths(): Promise<void> {
+    try {
+      const flat = this.context.workspaceState.get<Record<string, unknown>>(
+        WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
+        {},
+      );
+      const appMap = (flat['mode.support::appMap'] as Record<string, string>) ?? {};
+      // Derive keys from the current appMap; if empty, fall back to the module
+      // defaults so a pristine session can still discover the known apps.
+      const keys = Object.keys(appMap).length > 0
+        ? Object.keys(appMap)
+        : ['CMMS', 'HITS', 'TPS', 'MCP'];
+      // Only discover for keys with no usable path yet.
+      const emptyKeys = keys.filter((k) => {
+        const v = appMap[k];
+        return v === null || v === undefined || String(v).trim() === '';
+      });
+
+      const result = await discoverAppPaths(emptyKeys);
+
+      // Merge — never clobber an already non-empty path.
+      const nextMap: Record<string, string> = { ...appMap };
+      for (const [k, v] of Object.entries(result.found)) {
+        if (!nextMap[k] || !String(nextMap[k]).trim()) nextMap[k] = v;
+      }
+      const next = { ...flat, ['mode.support::appMap']: nextMap };
+      await this.context.workspaceState.update(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, next);
+
+      // Mirror the saveSettings refresh side effects so the panel + prompts
+      // reflect the newly written paths.
+      this.postSettings();
+      this.recomputeModified();
+      this.postConfigurations();
+      this.broadcastComposedPrompts();
+      this.moduleSettingsEmitter.fire();
+
+      this.post({
+        type: 'supportDiscoveryResult',
+        found: result.found,
+        notFound: result.notFound,
+        scanned: result.scanned,
+        error: result.error,
+      });
+    } catch (err) {
+      const message = (err as Error)?.message ?? 'discovery failed';
+      this.logger?.appendLine(`[panel] discoverSupportPaths failed: ${message}`);
+      this.post({
+        type: 'supportDiscoveryResult',
+        found: {},
+        notFound: [],
+        scanned: 0,
+        error: message,
+      });
     }
   }
 
@@ -2242,125 +2310,6 @@ export class SettingsPanel implements vscode.Disposable {
       .get<string>('linqpadInstallPrompt', '');
     await vscode.env.clipboard.writeText(promptText);
     vscode.window.showInformationMessage('LINQPad install prompt copied to clipboard');
-  }
-
-  // ─── Merkle test-connection probe ─────────────────────────────────────
-
-  /**
-   * Run a manual "Test Connection" probe against `${baseUrl}/api/health` and
-   * post the outcome back to the webview as `merkleTestConnectionResult`.
-   *
-   * Fail-closed at each stage: empty url, network error, non-200 response,
-   * unparseable body, or wrong `name` field all produce a `status: 'error'`
-   * payload. The 8s `AbortController` timeout mirrors the
-   * `bitbucket-pr-client` request envelope so a wedged Merkle server can't
-   * hang the settings panel indefinitely.
-   *
-   * No credentials touch this path — Merkle's health endpoint is
-   * unauthenticated by design.
-   */
-  private async runMerkleTestConnection(rawBaseUrl: unknown): Promise<void> {
-    if (typeof rawBaseUrl !== 'string' || rawBaseUrl.trim() === '') {
-      this.post({
-        type: 'merkleTestConnectionResult',
-        result: {
-          status: 'error',
-          message: 'serverBaseUrl is empty',
-          testedBaseUrl: '',
-        },
-      });
-      return;
-    }
-    // Trim trailing slash so both `http://host:7423` and `http://host:7423/`
-    // build the same health URL. Other path components are left intact.
-    const baseUrl = rawBaseUrl.trim().replace(/\/+$/, '');
-    const healthUrl = `${baseUrl}/api/health`;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const response = await fetch(healthUrl, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
-      });
-      if (response.status !== 200) {
-        this.post({
-          type: 'merkleTestConnectionResult',
-          result: {
-            status: 'error',
-            httpStatus: response.status,
-            message: `HTTP ${response.status}`,
-            testedBaseUrl: baseUrl,
-          },
-        });
-        return;
-      }
-      const text = await response.text();
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        this.post({
-          type: 'merkleTestConnectionResult',
-          result: {
-            status: 'error',
-            httpStatus: 200,
-            message: 'Response was not JSON',
-            testedBaseUrl: baseUrl,
-          },
-        });
-        return;
-      }
-      const body = (parsed ?? {}) as {
-        name?: unknown;
-        version?: unknown;
-        time?: unknown;
-      };
-      const name = typeof body.name === 'string' ? body.name : undefined;
-      const version = typeof body.version === 'string' ? body.version : undefined;
-      const time = typeof body.time === 'string' ? body.time : undefined;
-      if (name !== 'project-merkle') {
-        this.post({
-          type: 'merkleTestConnectionResult',
-          result: {
-            status: 'error',
-            httpStatus: 200,
-            message: `Endpoint responded but identifies as "${name ?? 'unknown'}", not project-merkle`,
-            testedBaseUrl: baseUrl,
-          },
-        });
-        return;
-      }
-      this.post({
-        type: 'merkleTestConnectionResult',
-        result: {
-          status: 'ok',
-          httpStatus: 200,
-          name,
-          serverVersion: version,
-          serverTime: time,
-          testedBaseUrl: baseUrl,
-        },
-      });
-    } catch (err) {
-      // Network-layer failure (timeout, DNS, connection refused). Use the
-      // error message verbatim — none of these paths carry credentials.
-      const message =
-        (err as Error).name === 'AbortError'
-          ? 'Request timed out after 8s'
-          : (err as Error).message || 'network error';
-      this.post({
-        type: 'merkleTestConnectionResult',
-        result: {
-          status: 'error',
-          message,
-          testedBaseUrl: baseUrl,
-        },
-      });
-    } finally {
-      clearTimeout(timer);
-    }
   }
 
   // ─── Atlassian Suite token status ─────────────────────────────────────

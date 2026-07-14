@@ -1,18 +1,21 @@
 /**
  * Loopback HTTP bridge that lets a CLI agent (running inside the Ghola session
- * terminal) invoke the host-side `BitbucketPrClient`. The Bitbucket API token
- * NEVER leaves the extension host: the agent only ever holds a per-session
- * bearer token that authenticates it to THIS server, and the server calls the
- * client on its behalf.
+ * terminal) invoke host-side Atlassian operations. It serves both Bitbucket PR
+ * ops (via `BitbucketPrClient`) and Jira ticket reads (via the injected
+ * `getTicket` fetcher). Neither product's API token ever leaves the extension
+ * host: the agent only ever holds a per-session bearer token that authenticates
+ * it to THIS server, and the server calls the host-side code on its behalf.
  *
  * TOKEN-SECRECY DISCIPLINE — read before extending:
  *   - The per-session bearer token (`token`) authenticates the agent to this
  *     bridge. It is compared with `crypto.timingSafeEqual` and is NEVER written
  *     into any HTTP response body or log line.
- *   - The Bitbucket API token is owned entirely by `BitbucketPrClient`; this
- *     file never reads, receives, or forwards it.
- *   - Raw upstream (Bitbucket) response bodies are never echoed here — only the
- *     client's own sanitized typed result shapes are serialized back.
+ *   - The Bitbucket API token is owned entirely by `BitbucketPrClient`, and the
+ *     Jira API token is owned entirely by the `getTicket` fetcher; this file
+ *     never reads, receives, or forwards either token.
+ *   - Raw upstream (Bitbucket / Jira) response bodies are never echoed here —
+ *     only the client's / fetcher's own sanitized typed result shapes are
+ *     serialized back.
  *   - The bridge binds to 127.0.0.1 only, rejects non-loopback peers with 403,
  *     and caps request bodies at 1 MB.
  *
@@ -32,6 +35,21 @@ const MAX_BODY_BYTES = 1024 * 1024;
  *  can never be driven from off-box even if the port is somehow reachable. */
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
+/** Host-side Jira ticket fetch result. Mirrors the shared bridge contract: a
+ *  client-level "ticket not found" is `{ exists: false }` (still HTTP 200), and
+ *  `description` is PLAIN TEXT (ADF is converted host-side, never raw JSON). */
+export interface GetTicketResult {
+  exists: boolean;
+  status?: string;
+  summary?: string;
+  description?: string;
+  error?: string;
+}
+
+/** Host-side Jira ticket fetcher injected by the extension. Confines the Jira
+ *  token to the extension host and returns only the sanitized shape above. */
+export type GetTicketFn = (key: string) => Promise<GetTicketResult>;
+
 /** Handle returned to the caller so it can inject the env and dispose the
  *  server on extension shutdown. */
 export interface BitbucketBridgeHandle {
@@ -48,13 +66,14 @@ export interface BitbucketBridgeHandle {
  */
 export function startBitbucketBridge(
   client: BitbucketPrClient,
+  getTicket: GetTicketFn,
   logger?: vscode.OutputChannel,
 ): BitbucketBridgeHandle | null {
   const token = crypto.randomBytes(32).toString('hex');
   const expectedAuth = Buffer.from(`Bearer ${token}`);
 
   const server = http.createServer((req, res) => {
-    handleRequest(req, res, client, expectedAuth).catch(() => {
+    handleRequest(req, res, client, getTicket, expectedAuth).catch(() => {
       // Defensive: handleRequest already wraps its own body in try/catch, but a
       // failure before/around that (or in the catch itself) must never leak.
       sendJson(res, 500, { status: 'unknown-error', message: 'bridge error' });
@@ -107,6 +126,7 @@ async function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   client: BitbucketPrClient,
+  getTicket: GetTicketFn,
   expectedAuth: Buffer,
 ): Promise<void> {
   try {
@@ -148,6 +168,24 @@ async function handleRequest(
     const args = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>;
 
     const route = (req.url ?? '').split('?')[0];
+
+    // Jira ticket read is handled here (not in `dispatch`) because it needs its
+    // own 400-on-bad-key path: a missing / non-string / empty `key` is a
+    // caller error, distinct from a valid key whose ticket simply does not
+    // exist (which the fetcher returns as a 200 `{ exists: false }`).
+    if (route === '/get-ticket') {
+      const key = typeof args.key === 'string' ? args.key.trim() : '';
+      if (!key) {
+        sendJson(res, 400, { status: 'unknown-error', message: 'key must be a non-empty string' });
+        return;
+      }
+      // The fetcher owns the Jira token and returns only a sanitized shape; we
+      // never log the key's upstream response body or any token here.
+      const ticket = await getTicket(key);
+      sendJson(res, 200, ticket);
+      return;
+    }
+
     const result = await dispatch(route, args, client);
     if (result === undefined) {
       sendJson(res, 404, { status: 'unknown-error', message: 'not found' });
