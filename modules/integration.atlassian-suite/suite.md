@@ -6,7 +6,12 @@ When this module is loaded, the session has a credential store with live API cap
 
 Each product has its own independent token slot, managed from the Modules tab detail view (labeled "Jira" and "Bitbucket"). Each slot has Set/Replace/Clear flows and an independent validation result shown in the UI.
 
-An Atlassian unified API token (generated at id.atlassian.com) works for both products — paste the same value into both slots. Or use a product-scoped token (e.g., a Bitbucket Workspace Token) in just the Bitbucket slot for blast-radius reduction.
+**Two separate credentials are required — one per product. A single token does not work for both.** Confirmed by live testing: an Atlassian API token returns 401 against Bitbucket.
+
+- **Jira** — a classic Atlassian API token (id.atlassian.com → "Create API token", no scopes). Basic auth `email:token`. Confirmed working (`GET /rest/api/3/myself` returns 200).
+- **Bitbucket** — a Bitbucket App Password (bitbucket.org → Personal settings → App passwords), not an Atlassian token. Basic auth `email:app_password` (some accounts require the Bitbucket username instead of the email).
+
+**Critical:** wherever a credential is entered (a curl prompt, the Set-Token dialog), it must be the API token / app password — never the Atlassian account login password, which always returns 401 on API Basic auth.
 
 ## Token Setup & Required Permissions
 
@@ -19,73 +24,49 @@ Ghola touches Atlassian in exactly two ways, and the required permissions follow
 
 Every distinct REST call the extension makes:
 
-| # | Method + endpoint | Purpose | R/W | Minimal scope |
-| - | ----------------- | ------- | --- | ------------- |
-| 1 | `GET {jiraBase}/rest/api/3/myself` | Jira token validation probe (also reads display name) | READ | `read:jira-user` |
-| 2 | `GET {jiraBase}/rest/api/3/issue/{key}?fields=status` | Ticket-existence check | READ | `read:jira-work` |
-| 3 | `GET {jiraBase}/rest/api/3/issue/{key}?fields=summary,status,description` | Ticket detail pull (summary/status/ADF) | READ | `read:jira-work` |
-| 4 | `GET /2.0/workspaces/{slug}` | Bitbucket token validation probe | READ | `read:workspace:bitbucket` |
-| 5 | `GET /2.0/repositories/{ws}/{repo}/pullrequests?q=source.branch.name="{branch}"&state=OPEN` | Find open PR for a branch | READ | `read:pullrequest:bitbucket` |
-| 6 | `GET /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments?pagelen=50` (+`next` pagination) | List PR comments/threads | READ | `read:pullrequest:bitbucket` |
-| 7 | `POST /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments` | Reply to a comment | WRITE | `write:pullrequest:bitbucket` |
-| 8 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments/{cid}/resolve` | Resolve a comment thread | WRITE | `write:pullrequest:bitbucket` |
-| 9 | `GET /2.0/repositories/{ws}/{repo}/pullrequests/{id}` | Read current title before the ready flip | READ | `read:pullrequest:bitbucket` |
-| 10 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}` with `{ title, draft: false }` | Mark a draft PR ready-for-review | WRITE | `write:pullrequest:bitbucket` |
+| # | Method + endpoint | Purpose | R/W | Credential / permission needed |
+| - | ----------------- | ------- | --- | ------------------------------- |
+| 1 | `GET {jiraBase}/rest/api/3/myself` | Jira token validation probe (also reads display name) | READ | Jira: classic Atlassian API token |
+| 2 | `GET {jiraBase}/rest/api/3/issue/{key}?fields=status` | Ticket-existence check | READ | Jira: classic Atlassian API token |
+| 3 | `GET {jiraBase}/rest/api/3/issue/{key}?fields=summary,status,description` | Ticket detail pull (summary/status/ADF) | READ | Jira: classic Atlassian API token |
+| 4 | `GET /2.0/workspaces/{slug}` | Bitbucket token validation probe | READ | Bitbucket: Repositories: Read |
+| 5 | `GET /2.0/repositories/{ws}/{repo}/pullrequests?q=source.branch.name="{branch}"&state=OPEN` | Find open PR for a branch | READ | Bitbucket: Pull requests: Write (also covers read) |
+| 6 | `GET /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments?pagelen=50` (+`next` pagination) | List PR comments/threads | READ | Bitbucket: Pull requests: Write |
+| 7 | `POST /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments` | Reply to a comment | WRITE | Bitbucket: Pull requests: Write |
+| 8 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments/{cid}/resolve` | Resolve a comment thread | WRITE | Bitbucket: Pull requests: Write |
+| 9 | `GET /2.0/repositories/{ws}/{repo}/pullrequests/{id}` | Read current title before the ready flip | READ | Bitbucket: Pull requests: Write |
+| 10 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}` with `{ title, draft: false }` | Mark a draft PR ready-for-review | WRITE | Bitbucket: Pull requests: Write |
 
-(All Bitbucket paths are rooted at `https://api.bitbucket.org/2.0`.) There are **no pipeline calls** anywhere in the extension today, so `read:pipeline:bitbucket` is not exercised by any current code path. Guidance: include it anyway on a scoped token (see Option B below) for forward-compatibility — a planned pipeline-status/feedback capability will need it, and adding it now avoids regenerating the token later.
+(All Bitbucket paths are rooted at `https://api.bitbucket.org/2.0`.) There are **no pipeline calls** anywhere in the extension today. `Pipelines: Read` is not required by any current code path — it is only worth granting as forward-looking prep for a planned pipeline-status/feedback capability (see below).
 
-*Planned (not yet implemented) — table notes for scopes with no current REST call:*
+### Jira: classic Atlassian API token
 
-- `read:pipeline:bitbucket` — a future `GET /2.0/repositories/{ws}/{repo}/pipelines/...` call for pipeline-status/feedback would require this scope. No such call exists in the codebase yet — this is forward-looking only, not a current REST call.
-- `write:pipeline:bitbucket` — PLANNED, not yet implemented. A future `POST /2.0/repositories/{ws}/{repo}/pipelines/...` call to trigger/re-run a Bitbucket pipeline would require this scope. No such call exists anywhere in the codebase today; this is a CI write action, not exercised by any current code path.
-- `write:jira-work` — PLANNED, not yet implemented. A future `POST {jiraBase}/rest/api/3/issue/{key}/comment` call to post a Jira comment would require this scope. No such call exists in the codebase today — Ghola's current hard rules keep Jira strictly read-only, so this scope would remain dormant until that policy changes.
+Created at id.atlassian.com → **Create API token**. This is the classic token type with no scope selection at all, and it carries **full account access**. Basic auth is `email:token`. Confirmed working: `GET /rest/api/3/myself` returns 200.
 
-None of these three scopes appears in the REST-call table above, because none of them is exercised by any call the extension makes today.
+Ghola stays read-only against Jira not because the token is limited (it isn't — a classic token could create, edit, transition, and comment on issues), but because of Ghola's own hard rule keeping Jira interactions read-only. A future Jira-commenting feature would need no new credential, just a policy change — it would already work with this token.
 
-### Consolidated minimal scope set
+### Bitbucket: App Password
 
-- **Jira:** `read:jira-work`, `read:jira-user`
-- **Bitbucket:** `read:workspace:bitbucket`, `read:repository:bitbucket`, `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`
+Created at Bitbucket → **Personal settings** → **App passwords** → **Create app password**. This is a distinct credential type from the Atlassian API token — the Atlassian token returns 401 against Bitbucket, confirmed by live testing. Basic auth is `email:app_password` (some accounts require the Bitbucket username instead of the email).
 
-`read:repository:bitbucket` is listed because `read:pullrequest:bitbucket` reads live inside a repository context; grant both. `write:pullrequest:bitbucket` is the single scope that enables all three Bitbucket writes (reply, resolve, mark-ready). No call in the codebase needs a scope outside this set.
+Permissions to grant:
 
-### Two token strategies
+- **Pull requests: Write** — required. Not limited to reply/resolve/mark-ready; it is Bitbucket's single permission for all pull-request writes, including approving, requesting changes, declining, merging, and creating PRs. Any future PR-workflow feature (auto-approve, auto-merge, PR creation) needs **no additional permission** beyond what Ghola already requests.
+- **Repositories: Read** — required for the workspace-validation probe.
+- **Pipelines: Read** — optional, forward-looking. No current code path calls it, but granting it now avoids re-issuing the app password when a planned pipeline-status/feedback capability lands.
 
-**(A) One unrestricted Atlassian API token (simplest).** At id.atlassian.com → **Create API token** (no scopes selected). Paste the same value into **both** the Jira and Bitbucket slots. This authenticates every call above with zero scope bookkeeping.
+### Deliberately excluded permissions (do not grant)
 
-**(B) A scoped Atlassian API token (least privilege).** At id.atlassian.com → **Create API token with scopes**, then grant:
+When checking boxes on the Bitbucket app-password creation screen, leave these unchecked to minimize blast radius if the credential leaks. Don't add any of them without a concrete new feature that needs it:
 
-**Required (exercised by current code paths):**
-- Jira: `read:jira-work`, `read:jira-user`
-- Bitbucket: `read:workspace:bitbucket`, `read:repository:bitbucket`, `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`
-
-**Recommended, forward-looking (not required — no current code path uses these):**
-- `read:pipeline:bitbucket` — no current code path exercises this scope, but granting it now future-proofs the token for a planned pipeline-status/feedback capability so you don't have to regenerate the token when that lands.
-- `write:pipeline:bitbucket` — enables triggering/re-running Bitbucket pipelines from a session. Not exercised by any current code path (no pipeline-write calls exist anywhere in the extension today); it is a CI write action, granted now to future-proof for a planned pipeline-trigger capability.
-- `write:jira-work` — enables the agent to POST comments on Jira tickets. Ghola's current hard rules make Jira **read-only**, so this scope is not used by any current code path and would remain dormant until that policy is changed; granting it now future-proofs the token for the planned Jira-commenting capability (matches a parked feature idea) so no token regen is needed later.
-
-Paste it into both slots (or into each slot the token is scoped for).
-
-### What the write scopes already cover
-
-- `write:pullrequest:bitbucket` is not limited to reply/resolve/mark-ready — it is Bitbucket's single scope for all pull-request writes, including approving, requesting changes, declining, merging, and creating PRs. Any future PR-workflow feature (auto-approve, auto-merge, PR creation) needs **no additional scope** beyond what Ghola already requests.
-- `write:jira-work` is not limited to posting comments — it is Jira's single scope for transitioning, creating, editing, and assigning issues, in addition to commenting. Any future Jira-write feature needs **no additional scope** beyond this one. Ghola's current hard rules keep Jira read-only, so all of this stays dormant until that policy changes.
-
-### Deliberately excluded scopes (do not grant)
-
-These are intentionally left off the token to minimize blast radius if it leaks. Don't add any of them without a concrete new feature that needs it:
-
-| Scope | Reason excluded |
-| ----- | ---------------- |
-| `write:repository:bitbucket` (repo push) | Ghola pushes code via git, not the Bitbucket API; destructive git operations are forbidden by hard rule regardless. |
-| `admin:repository:bitbucket` | High-privilege repo admin; no Ghola use case. |
-| `admin:workspace:bitbucket` | High-privilege workspace admin; no Ghola use case. |
-| `read:webhook`, `write:webhook` | Ghola has no webhook feature. |
-| `read:issue:bitbucket` | Bitbucket's own issue tracker; Ghola uses Jira for issue tracking, not Bitbucket Issues. |
-| JSM / service-desk scopes | Outside Ghola's domain — no service-desk feature. |
-| Snippets scopes | Outside Ghola's domain — no snippets feature. |
-| Runners scopes | Outside Ghola's domain — no pipeline-runner management feature. |
-| `read:account`, `read:user:bitbucket` | Marginal identity reads beyond what validation needs; not used by any code path. |
+| Permission | Reason excluded |
+| ---------- | ---------------- |
+| Repositories: Write (repo push) | Ghola pushes code via git, not the Bitbucket API; destructive git operations are forbidden by hard rule regardless. |
+| Repositories: Admin | High-privilege repo admin; no Ghola use case. |
+| Workspace membership / Account | Identity/membership management beyond what validation needs; not used by any code path. |
+| Webhooks | Ghola has no webhook feature. |
+| Issues | Bitbucket's own issue tracker; Ghola uses Jira for issue tracking, not Bitbucket Issues. |
+| Projects: Write, Snippets, Runners | Outside Ghola's domain — no corresponding feature. |
 
 ### Non-secret settings (Modules tab)
 
@@ -99,32 +80,25 @@ Configure these in the module detail view before entering tokens:
 
 Tokens are entered via the command palette, never as plain settings:
 
-- **`Atlassian Suite: Set Jira API Token`** — stores the Jira token in SecretStorage.
-- **`Atlassian Suite: Set Bitbucket API Token`** — stores the Bitbucket token in SecretStorage.
+- **`Atlassian Suite: Set Jira API Token`** — stores the Jira classic API token in SecretStorage.
+- **`Atlassian Suite: Set Bitbucket API Token`** — stores the Bitbucket App Password in SecretStorage.
+
+**Critical:** paste the token / app password into these prompts — **never the Atlassian account login password**. The account password always returns 401 on API Basic auth; this is a real gotcha that has tripped up setup before.
 
 Values are written straight to VS Code SecretStorage and persist across same-extension-id updates. (`Atlassian Suite: Clear Jira/Bitbucket API Token` remove them.)
 
 ### Validation
 
-Run **`Atlassian Suite: Validate Token`** to fire both probes: Jira `GET /rest/api/3/myself` and Bitbucket `GET /2.0/workspaces/{slug}`. A green result means the token is accepted and (for Bitbucket) can see the configured workspace. Common failure causes:
+Run **`Atlassian Suite: Validate Token`** to fire both probes: Jira `GET /rest/api/3/myself` and Bitbucket `GET /2.0/workspaces/{slug}`. A green result means the credential is accepted and (for Bitbucket) can see the configured workspace. Common failure causes:
 
 - **Wrong `bitbucketWorkspace` slug** — a 404 on the workspace probe; fix the slug in the Modules tab.
-- **Missing Bitbucket scopes** — a 401/403 on the workspace or PR calls when using a scoped token; ensure the four Bitbucket scopes above are granted.
+- **Missing Bitbucket app-password permissions** — a 401/403 on the workspace or PR calls; ensure Pull requests: Write and Repositories: Read are granted.
 - **Wrong `jiraBase` or email** — a 401 on the Jira probe.
-
-### Fallback: Bitbucket Workspace Access Token
-
-If a unified Atlassian API token will not authenticate against Bitbucket, create a **Bitbucket Workspace Access Token** (Bitbucket workspace settings → **Access tokens**) with:
-
-- **Pull requests: Write** (enables reply, resolve, mark-ready)
-- **Repositories: Read**
-- **Pipelines: Read** (recommended, forward-looking; no current code path calls it, but granting it avoids re-issuing this token when planned pipeline-status/feedback support lands)
-
-Paste it into the **Bitbucket slot only**, leaving the Jira slot on the Atlassian API token.
+- **Account password pasted instead of token/app-password** — always 401; re-issue the credential and paste that instead.
 
 ### Persistence
 
-Tokens live in SecretStorage keyed by the extension id (`local.ghola`). They survive version updates, but a future extension-id rename (publisher or name change) would orphan the stored secrets, requiring re-entry.
+Both credentials live in SecretStorage keyed by the extension id (`local.ghola`). They survive version updates, but a future extension-id rename (publisher or name change) would orphan the stored secrets, requiring re-entry.
 
 ## Current capabilities
 

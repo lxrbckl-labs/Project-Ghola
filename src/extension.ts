@@ -296,10 +296,12 @@ export function activate(context: vscode.ExtensionContext): void {
         password: true,
         ignoreFocusOut: true,
       });
-      // User cancelled: showInputBox returns undefined. Empty-string is
-      // treated as cancel too so we don't store a sentinel empty secret.
-      if (value === undefined || value === '') return;
-      await context.secrets.store(ATLASSIAN_JIRA_TOKEN_SECRET_KEY, value);
+      // User cancelled: showInputBox returns undefined. Empty-string and
+      // whitespace-only input are treated as cancel too so we don't store a
+      // sentinel empty secret or a token corrupted by stray whitespace.
+      const token = value?.trim();
+      if (!token) return;
+      await context.secrets.store(ATLASSIAN_JIRA_TOKEN_SECRET_KEY, token);
       tokenStatusEmitter.fire();
       // Fire-and-forget validation. The validation event listeners pick up
       // the result asynchronously; awaiting would block the command UI until
@@ -321,8 +323,9 @@ export function activate(context: vscode.ExtensionContext): void {
         password: true,
         ignoreFocusOut: true,
       });
-      if (value === undefined || value === '') return;
-      await context.secrets.store(ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY, value);
+      const token = value?.trim();
+      if (!token) return;
+      await context.secrets.store(ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY, token);
       tokenStatusEmitter.fire();
       void atlassianBridge.validate();
     }),

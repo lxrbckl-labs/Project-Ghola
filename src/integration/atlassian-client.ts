@@ -296,7 +296,7 @@ export class AtlassianClient {
 
     try {
       const token = product === 'jira' ? this.jiraToken : this.bitbucketToken;
-      const auth = Buffer.from(`${this.email}:${token}`).toString('base64');
+      const auth = Buffer.from(`${this.email.trim()}:${token.trim()}`).toString('base64');
       const response = await fetch(url, {
         method: 'GET',
         headers: {

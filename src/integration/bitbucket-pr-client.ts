@@ -421,7 +421,7 @@ export class BitbucketPrClient {
    * passed into `fetch`.
    */
   private buildAuthHeader(email: string, token: string): string {
-    return `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`;
+    return `Basic ${Buffer.from(`${email.trim()}:${token.trim()}`).toString('base64')}`;
   }
 
   /**

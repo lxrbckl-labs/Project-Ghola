@@ -1,6 +1,8 @@
 # Atlassian Suite Setup
 
-To enable live Jira ticket pulls and Bitbucket PR-comment operations, you need one Atlassian API token (or two product-scoped tokens) plus a few settings below.
+To enable live Jira ticket pulls and Bitbucket PR-comment operations, you need **two separate credentials** - one for Jira, one for Bitbucket - plus a few settings below. A single Atlassian token does **not** work for both products; Jira and Bitbucket authenticate differently, and this was confirmed by live testing (the Atlassian API token returns 401 against Bitbucket).
+
+> **CRITICAL:** wherever you are prompted for a credential (a curl command, the Ghola "Set Token" dialog), paste the **API token / app password** - **never your Atlassian account login password**. The account password always returns 401 on API Basic auth. This tripped us up during setup - don't repeat it.
 
 ## Step 1 - Fill the settings (above)
 
@@ -8,43 +10,32 @@ To enable live Jira ticket pulls and Bitbucket PR-comment operations, you need o
 - **Jira Base URL** - default `https://herzog.atlassian.net`; change only if your instance lives elsewhere.
 - **Bitbucket Workspace** - default `herzog-technologies`; change only if your workspace differs.
 
-## Step 2 - Create the token
+## Step 2 - Jira: create a classic Atlassian API token
 
 Go to: https://id.atlassian.com/manage-profile/security/api-tokens
 
-**Option A - Simplest (full account access)**
+- Click **Create API token** (the classic, unscoped kind - there is no scope selection). It carries full access to your Atlassian account, so treat it like a password.
+- Basic auth is `email:token`. This was confirmed working: `GET /rest/api/3/myself` returns 200.
+- Use the **Set Jira API Token** command below to paste it into the Jira slot.
 
-- Click **Create API token** (no scopes).
-- Paste the resulting value into both the Jira and Bitbucket slots below.
+## Step 3 - Bitbucket: create an App Password
 
-**Option B - Least privilege (scoped token)**
+Go to: Bitbucket -> **Personal settings** -> **App passwords** -> **Create app password**
 
-- Click **Create API token with scopes**.
-- Select:
+This is a **Bitbucket App Password**, not an Atlassian API token - the two are different credential types issued from different places, and the Atlassian token will not authenticate against Bitbucket.
 
-Required:
-- [ ] Jira: `read:jira-work`
-- [ ] Jira: `read:jira-user`
-- [ ] Bitbucket: `read:workspace:bitbucket`
-- [ ] Bitbucket: `read:repository:bitbucket`
-- [ ] Bitbucket: `read:pullrequest:bitbucket`
-- [ ] Bitbucket: `write:pullrequest:bitbucket`
+Check these permissions:
+- **Pull requests: Write** (also covers reply, resolve, mark-ready, approve, merge, decline, and create)
+- **Repositories: Read**
+- **Pipelines: Read** (optional; forward-looking for a planned pipeline-status feature - no current code path uses it)
 
-Recommended (not used by any current feature, but avoids re-issuing the token later):
-- [ ] `read:pipeline:bitbucket`
-- [ ] `write:pipeline:bitbucket`
-- [ ] `write:jira-work`
-
-- Paste the token into both slots (or into each slot the token is scoped for).
-
-## Step 3 - Set the tokens
-
-Use the **Set Token** buttons below - one for the Jira slot, one for the Bitbucket slot. Tokens are stored encrypted in VS Code SecretStorage and persist across extension updates.
+- Basic auth is `email:app_password`. If authentication fails using your email, try your Bitbucket **username** instead - some accounts require it.
+- Use the **Set Bitbucket API Token** command below to paste it into the Bitbucket slot.
 
 ## Step 4 - Validate
 
-Click **Validate** to confirm both tokens authenticate successfully.
+Click **Validate** to confirm both credentials authenticate successfully - the Jira and Bitbucket indicators should both go green.
 
-## Fallback
+## Persistence
 
-If a unified Atlassian token will not authenticate against Bitbucket, create a **Bitbucket Workspace Access Token** instead (Bitbucket workspace settings -> Access tokens) with **Pull requests: Write**, **Repositories: Read**, and **Pipelines: Read**. Paste it into the Bitbucket slot only, leaving the Jira slot on your Atlassian API token.
+Both credentials are stored encrypted in VS Code SecretStorage and persist across extension updates.
