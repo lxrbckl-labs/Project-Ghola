@@ -1,7 +1,7 @@
 {
   "id": "tool.database-access",
   "name": "Database Access",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "Read-only SQL access for SWE via an allowlisted set of connections.",
   "proactive": false,
   "category": "utility",
@@ -16,7 +16,7 @@
       "allowlist": {
         "type": "keyValue",
         "label": "Connection Allowlist",
-        "description": "Project-keyed map of database connections SWE may target. Each entry pairs a project identifier with a LINQPad-sourced connection name. Empty map means no DB access. See the table below to manage entries.",
+        "description": "Project-keyed map of database connections SWE may target. Each entry pairs a project identifier with a LINQPad-sourced connection name. Numbered clones of a repo (cmms0, cmms1, ...) normalize to one project key by stripping trailing digits, so they share a single entry. Empty map means no DB access. See the table below to manage entries.",
         "default": {},
         "valueSource": "linqpad-connections",
         "keyLabel": "Project",

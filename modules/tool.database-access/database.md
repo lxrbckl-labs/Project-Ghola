@@ -31,6 +31,19 @@ Example:
 
 In the example above, SWE may query `localhost.cmms` and `mcpdevsql.MCP_Dev`. The project keys "CMMS" and "MCP" are how TPM and SWE refer to those connections in dispatch and reporting; they are not themselves connection strings.
 
+### Repo-name normalization (routing)
+
+When determining which allowlist **project key** applies to the current work repo, match the repo's directory basename to a key using this order:
+
+1. **Exact match, case-insensitive.** If the basename matches a project key exactly (ignoring case), use that key.
+2. **Trailing-digit match, case-insensitive.** Otherwise, strip a trailing run of digits from the basename and match what remains against a project key, case-insensitively.
+
+For example, clones named `cmms0`, `cmms1`, ... `cmms6` all normalize to `cmms` and resolve to a single `CMMS` allowlist entry — and therefore a single connection. You do not need a separate allowlist entry per numbered clone.
+
+**Precedence:** an exact key always wins over a normalized match. If the allowlist also contains an entry keyed `cmms3`, a repo named `cmms3` resolves to that entry, not to the general `cmms`/`CMMS` one — so a specific clone can still be pinned to a different connection when explicitly listed.
+
+This normalization is **routing only** — it is how TPM/SWE pick which project key (and thus which connection) applies to the current repo. It does not touch the security gate above: SWE may still only query a connection whose name appears verbatim as a **value** in the allowlist map, and connection values are still matched exactly and case-sensitively, never normalized. Repo-name normalization decides which map entry is relevant; it never loosens which connection names are authorized.
+
 **Host-specific note:** Connection names are sourced from the user's LINQPad ConnectionsV2.xml on Windows/WSL hosts, surfaced as a dropdown quick-pick in the Ghola settings panel. The dropdown is the only input — free-form text entry is not available in the value cell. When the settings panel cannot supply connections, three distinct non-`ok` states apply:
 
 - **Loading** (`loading`): the webview has not yet received a probe result from the host. No banner is shown; the value cell renders a dropdown with only a placeholder option ("Loading…"). The dropdown is enabled but has no selectable connections — the change-handler guards against selecting the placeholder — so no value can actually be committed until the host responds.

@@ -2,7 +2,7 @@
   "name": "ghola",
   "displayName": "Ghola",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "icon": "resources/icon-source.png",
   "publisher": "local",
   "engines": {
