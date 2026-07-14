@@ -2,7 +2,7 @@
   "id": "tool.statusline",
   "name": "Statusline",
   "version": "0.1.1",
-  "description": "Renders a Ghola status display in the VS Code status bar showing version, cumulative tokens, context-window usage, and 5-hour rolling-window usage.",
+  "description": "Live Claude Code harness statusline for Ghola, rendered by scripts/ghola-statusline.sh: shows [Ghola vX.Y.Z] plus cumulative session tokens, context-window usage, and 5-hour rolling-window usage when the harness payload provides them (context % and 5h % turn red at >=85%). The script currently renders all-segments-always with a fixed 85% threshold and does NOT read the settings below; they are forward-looking and do not yet take effect.",
   "proactive": false,
   "category": "utility",
   "kind": "capability",

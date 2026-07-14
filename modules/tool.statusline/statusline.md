@@ -1,78 +1,61 @@
 # Statusline
 
-**Status: specification only, not yet wired.** This module captures the *intended* display preferences for a Ghola VS Code status-bar entry, but no extension code currently renders it. There is no status-bar registration in `src/extension.ts` or anywhere else in `src/` that reads these settings, and none of the `show*` settings has a runtime consumer today. This fragment is a forward design contract, not a description of a live feature. When rendering code is eventually built, it should read the settings defined here; until then, the settings record preferences that nothing acts on.
+**Status: live.** The Ghola statusline is the **Claude Code harness statusline** — the single line the harness renders at the bottom of the session, driven by the `statusLine.command` entry in `~/.claude/settings.json`. It is **not** a VS Code status-bar pill and is not produced by extension code in `src/`.
 
-**TPM must NOT tell the user a status-bar pill is live, and must NOT point at any extension code as its renderer.** That code does not exist. If the user asks whether the statusline is showing, the honest answer is that the module is a planned spec whose settings are captured but not yet rendered.
+It is rendered by `scripts/ghola-statusline.sh`. On each refresh the harness runs that script, passing its JSON payload on stdin; the script reads the Ghola `VERSION` file (resolved relative to the script's own location, so it works regardless of cwd) and prints one line to stdout.
 
-## What the statusline is intended to show
+## What the statusline shows
 
-The design target is a single bracketed pill in the right-hand status bar:
+The output is a single bracketed label:
 
 ```
 [Ghola vX.Y.Z │ 142k · 62% · 5h 41%]
 ```
 
-The pill is specified as up to four independently-gated segments. Each of the `parameters` below is a captured preference for a future renderer, not a switch that changes anything today:
+- **Version** — always present. Read from the repo's `VERSION` file, e.g. `v0.16.2`. If `VERSION` is unreadable it falls back to `vunknown`.
+- **Cumulative tokens** — a compact figure such as `142k`, the sum of `context_window.total_input_tokens` + `total_output_tokens` from the payload. Appears only when both fields are present.
+- **Context percent** — e.g. `62%`, from `context_window.used_percentage`. Appears only when that field is present. Renders red at or above 85%.
+- **Rolling window percent** — e.g. `5h 41%`, from `rate_limits.five_hour.used_percentage`. Appears only when that field is present. Renders red at or above 85%.
 
-- **Version** (per `parameters.showVersion`): intended format `vX.Y.Z` (e.g. `v0.42.1`), sourced from the extension's `package.json` at activation.
-- **Cumulative tokens** (per `parameters.showCumulativeTokens`): intended format a compact figure such as `142k`, summing input + output across every turn of the active session.
-- **Context percent** (per `parameters.showContextPercent`): intended format `62%`, comparing conversation tokens against the active model's context window. Intended to turn red at or above `parameters.redThresholdPercent`.
-- **Rolling window percent** (per `parameters.showRollingWindowPercent`): intended format `5h 41%`, reflecting the fraction of the 5-hour rolling rate-limit window consumed, when a runtime exposes that data.
+Each segment is gated independently on its own source field — any one can appear without the others. Segments are joined with ` · ` (U+00B7); the ` │ ` (U+2502) separator between the version and the metrics appears only when at least one metric segment is present.
 
-The `│` and `·` separators are a styling concern for the eventual renderer; they would appear only between segments that are actually present.
+## Failure behavior
 
-## Intended conditional rendering
+The script never fails and never prints error text. `VERSION` is read defensively, stdin is captured once, and all JSON parsing happens in a sandboxed `python3` block whose failures are swallowed. On any error the output degrades to `[Ghola vX.Y.Z]`, or `[Ghola vunknown]` if the version itself could not be read. There is no path on which the harness sees a crash or partial line.
 
-The spec calls for each segment to be gated independently; the four `show*` settings are not coupled. If a segment's setting is off, a future renderer would omit that segment from the pill entirely (no placeholder, no empty slot).
+## How it is wired
 
-If a segment's **data source** were unavailable at render time (the runtime payload missing, unparseable, or not yet populated), the intended behavior follows `parameters.fallbackToVersionOnly`:
+`~/.claude/settings.json` contains:
 
-- **When `true`** (the default): all unavailable segments collapse but the version remains, producing the short form `[Ghola vX.Y.Z]`. This would preserve a visible Ghola surface even when token/context/rolling-window data is not yet flowing.
-- **When `false`**: each unavailable segment renders empty individually. In the worst case (no runtime payload at all) the pill would be sparse, e.g. `[Ghola vX.Y.Z]` with no metrics, or `[Ghola]` if version is also unavailable.
+```json
+{ "statusLine": { "type": "command",
+                  "command": "/home/aarbuckle/projects/Project-Ghola/scripts/ghola-statusline.sh" } }
+```
 
-A segment whose `show*` toggle is off is **not** considered "unavailable"; it is intentionally suppressed, and the fallback logic would not apply to it.
+The script must be executable (`chmod +x`). Its only dependencies are `bash` and `python3` — `jq` is not assumed.
 
-## Intended red threshold semantics
+## Fixed behavior vs parameters
 
-The spec has both **Context Percent** and **Rolling Window Percent** compare their numeric value against `parameters.redThresholdPercent`. At or above the threshold, a future renderer would color the segment's number red using a VS Code status-bar warning color token (e.g. `statusBarItem.warningForeground` / `statusBarItem.warningBackground`). Below the threshold, the segment would use default status-bar foreground styling.
-
-The threshold value itself is never highlighted; only the live segment numbers that meet or exceed it. The threshold is specified to apply symmetrically to both percent segments; there is no separate per-segment threshold. A percent segment suppressed by its `show*` setting would run no threshold comparison.
-
-## Intended sources of data
-
-This module neither implements nor fetches these sources; they are listed so TPM can describe accurately what the statusline is *designed* to reflect, while being clear nothing renders them yet:
-
-- **Version**: read from the extension's `package.json` at activation. Stable for the duration of the session.
-- **Cumulative tokens**: summed from runtime turn metadata across the active session (input + output for every turn since session start).
-- **Context percent**: ratio of conversation tokens to the active model's context window, computed per turn by the runtime.
-- **Rolling window percent**: from the runtime's rate-limit-block payload, when present. May be absent early in a session, on accounts without a rolling-window quota, or when the runtime does not include the field in a given response.
-
-## Module-disabled vs feature-disabled (intended states)
-
-These are distinct states in the design and should not be conflated. All are conditional on a renderer existing; today none produces a visible pill because no renderer is wired:
-
-- **Module disabled** (no `tool.statusline` in the Session Manifest): the entire statusline is out of scope. The user sees no Ghola status-bar entry.
-- **Module enabled, all `show*` settings off**: the pill would have no segments to render. Recommended future behavior is **suppress** (do not show an empty `[Ghola]` pill) rather than render a bare label, since an empty pill conveys no information and adds visual noise. Flagged to future wiring as "suppress on no-segments-enabled."
-- **Module enabled, runtime payload empty**: would degrade per `parameters.fallbackToVersionOnly` as described above.
+The current script has **no settings-file toggles**. It always renders whatever segments the payload provides, and the red threshold is fixed at 85%. The module's `parameters` (`showVersion`, `showCumulativeTokens`, `showContextPercent`, `showRollingWindowPercent`, `redThresholdPercent`, `fallbackToVersionOnly`) are **not** read by `ghola-statusline.sh` — they are forward-looking preferences that do not currently take effect. Today's behavior is: all-segments-always (each still gated on its data being present) and red-at-85. Changing what shows, or the threshold, is a script edit, not a settings change.
 
 ## What this module does NOT do
 
-- Does **not** render anything today. No extension code reads these settings and no status-bar pill is produced. The settings are captured preferences awaiting a renderer; this module is spec, not implementation.
-- Does **not** track or report tokens itself; the design has it consume whatever a future runtime hook exposes via turn metadata and rate-limit-block payloads.
-- Does **not** communicate with any external service, telemetry endpoint, or remote logger. Any data the eventual renderer surfaces would be local to the active session.
+- Does **not** render a VS Code status-bar pill. The statusline is the harness line only.
+- Does **not** track or compute tokens itself; it formats whatever the harness supplies on stdin.
+- Does **not** talk to any external service, telemetry endpoint, or remote logger. All data is local to the active session's payload.
 
 ## Role-Specific Notes
 
-The body above applies identically to every agent. The notes below frame how each role relates to the statusline spec.
+The body above applies identically to every agent. The notes below frame how each role relates to the live statusline.
 
 ### TPM
 
-The statusline is a planned surface, not a live one. If the user asks what the statusline shows, explain that the four segments (Version, Cumulative Tokens, Context Percent, Rolling Window Percent) are the *intended* composition per the sections above, but that no extension code renders them yet, so there is no pill in the status bar today. Do NOT claim a pill is live and do NOT point the user at extension code as its renderer; none exists. If the user asks to change a segment preference, you can still point them at the Modules tab for `tool.statusline` and name the specific `show*` setting or `redThresholdPercent`, but be clear the setting records a preference a future renderer will honor, not a change they will see now.
+The statusline is live. You can tell the user it is the harness line at the bottom of the session, rendered by `scripts/ghola-statusline.sh`, and describe its segments: version (always), cumulative tokens, context %, and 5-hour rolling-window % (each appearing when the harness payload provides it), with context % and 5h % turning red at 85% or above. If the user wants to change what shows or the red threshold, be honest that this is a **script edit** — the module's `parameters` are not currently honored by the script, so toggling them in the Modules tab will not change the display today.
 
 ### SWE
 
-No interaction. There is no statusline renderer to feed or modify; the settings have no runtime consumer today. If spec-writing or wiring for this module is ever assigned, that is an explicit build task, not part of the normal workflow. No behavior change.
+The renderer is `scripts/ghola-statusline.sh` — a self-contained bash + python3 script. If the user asks to change the segments, formatting, or red threshold, that is a direct edit to this script. There is no settings-file wiring to honor; the script ignores the module `parameters`. Keep ASCII quotes in shell/JSON and preserve the never-fail contract (every error path falls back silently) when editing.
 
 ### QA
 
-No interaction. There is no rendered statusline to verify. Treat any claim that a live pill exists as inaccurate until backing code lands. No behavior change.
+There is a real rendered statusline to verify: pipe a sample harness payload into `scripts/ghola-statusline.sh` and confirm the output line. A full payload should yield `[Ghola vX.Y.Z │ <tokens> · <ctx>% · 5h <n>%]`; empty stdin should yield `[Ghola vX.Y.Z]`. Confirm the red (`\033[31m`) coloring appears only at percentages >= 85, and that the script exits 0 and prints no error text on malformed input.
