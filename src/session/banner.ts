@@ -36,7 +36,7 @@ export function formatBanner(input: BannerInput): string {
   const warMode = isWarMode(input.enabledModules);
 
   const workRepoValue = formatWorkRepo(input.cwd);
-  const branchValueRaw = input.branch !== '' ? input.branch : '(not a git repo)';
+  const branchValueRaw = input.branch !== '' ? stripBranchToTicket(input.branch) : '(not a git repo)';
   const ticketValue = formatTicket(input.branch);
   const modeValue = formatMode(input.enabledModules);
   const crewLabel = warMode ? 'Gholas' : 'Team';
@@ -79,6 +79,19 @@ export function formatBanner(input: BannerInput): string {
   lines.push(`╰${'─'.repeat(innerWidth + 2)}╯`);
 
   return lines.join('\n');
+}
+
+/**
+ * Strip a branch name down to its ticket key when one is present, e.g.
+ * `feature/CMMS-2791-automated-testing---receiving` -> `feature/CMMS-2791`.
+ * The lazy `.*?` keeps the workflow prefix (`feature/`, `bugfix/`, ...) and
+ * stops at the first `KEY-NUMBER` match. Branches with no ticket key (e.g.
+ * `main`, `release/2024-01`) are returned unchanged. Case is preserved as-is
+ * since this is display of the raw branch string, not the derived ticket id.
+ */
+function stripBranchToTicket(branch: string): string {
+  const match = branch.match(/^(.*?[A-Za-z]+-[0-9]+)/);
+  return match ? match[1] : branch;
 }
 
 /** Truncate a value to fit `maxLen`, adding a trailing "..." when it doesn't. */

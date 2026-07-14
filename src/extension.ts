@@ -8,6 +8,7 @@ import { CommitPushViewProvider } from './commit-push/provider';
 import { AtlassianClient } from './integration/atlassian-client';
 import { adfToPlainText } from './integration/adf-to-text';
 import { BitbucketPrClient } from './integration/bitbucket-pr-client';
+import { discoverObsidianVault } from './integration/vault-discovery';
 import { startBitbucketBridge } from './integration/bitbucket-bridge-server';
 import { ModuleLoader } from './modules/loader';
 import { ModuleState } from './modules/state';
@@ -497,6 +498,47 @@ export function activate(context: vscode.ExtensionContext): void {
         '[ghola] ghola-ledger backfill: mode.war is enabled but tool.ghola-ledger was disabled; auto-enabled it',
       );
     }
+
+    // One-time boot auto-detect of the Obsidian vault. When `tool.obsidian-notes`
+    // is enabled and its `vaultPath` is still empty, run discovery once and write
+    // any found vault into the flat module-settings dict — the same write the
+    // panel's "Detect Vault" button performs — so Notes goes green without a
+    // manual click. Fire-and-forget so the filesystem scan never blocks
+    // activation; the empty-only guard makes it naturally one-time (a written
+    // path is non-empty on the next boot, so this skips). Wrapped so a scan or
+    // write fault just leaves vaultPath empty, exactly as before.
+    void (async () => {
+      try {
+        const notesEnabled = loader.find('tool.obsidian-notes')?.isEnabled === true;
+        if (!notesEnabled) return;
+        const flat = context.workspaceState.get<Record<string, unknown>>(
+          WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
+          {},
+        );
+        const current = flat['tool.obsidian-notes::vaultPath'];
+        // Empty-only guard: never overwrite a user-set (non-whitespace) path.
+        if (typeof current === 'string' && current.trim() !== '') return;
+        const result = await discoverObsidianVault();
+        if (!result.vaultPath) return;
+        // Re-read immediately before writing so a concurrent panel write (e.g. a
+        // user clicking Detect Vault mid-scan) is not clobbered by a stale copy.
+        const latest = context.workspaceState.get<Record<string, unknown>>(
+          WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
+          {},
+        );
+        const latestCurrent = latest['tool.obsidian-notes::vaultPath'];
+        if (typeof latestCurrent === 'string' && latestCurrent.trim() !== '') return;
+        const next = { ...latest, ['tool.obsidian-notes::vaultPath']: result.vaultPath };
+        await context.workspaceState.update(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, next);
+        // Mirror the panel's Detect-Vault refresh side effects so the panel and
+        // composed prompts pick up the newly written path.
+        panel.broadcastComposedPrompts();
+        moduleSettingsEmitter.fire();
+        logger.appendLine(`[ghola] obsidian vault auto-detected on boot: ${result.vaultPath}`);
+      } catch (err) {
+        logger.appendLine(`[ghola] obsidian vault boot auto-detect failed (non-fatal): ${err}`);
+      }
+    })();
 
     if (context.extensionMode === vscode.ExtensionMode.Development) {
       vscode.commands.executeCommand('ghola.openSettings');

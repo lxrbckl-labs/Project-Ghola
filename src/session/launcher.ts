@@ -306,6 +306,20 @@ export class SessionLauncher {
     }
     const workspacePath = folders[0]!.uri.fsPath;
 
+    // WSL-native git-repo workspace: nothing to translate. The fast-path's only
+    // legitimate job is mapping a `/mnt/<drive>` (Windows-drive) workspace to its
+    // WSL-native clone for speed; a workspace that is ALREADY WSL-native and is a
+    // git repo is exactly where the code lives, so open the terminal in the repo
+    // ROOT itself. This short-circuits the auto-cd / `isGitRepo(target)` logic
+    // below, which could otherwise land on an in-tree subdir (a subdir passes
+    // `git rev-parse --is-inside-work-tree` too) or a non-git parent.
+    if (!workspacePath.startsWith('/mnt/') && this.isGitRepo(workspacePath)) {
+      this.logger?.appendLine(
+        `[session] fast-path: WSL-native git repo workspace ${workspacePath}; opening terminal there`,
+      );
+      return workspacePath;
+    }
+
     const target = this.resolveFastpathTarget(workspacePath);
     if (!target) {
       this.logger?.appendLine(
