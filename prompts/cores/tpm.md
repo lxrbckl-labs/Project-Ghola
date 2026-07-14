@@ -89,6 +89,9 @@ When more than one SWE is in flight at the same time, coordinate file ownership.
 - **State ownership explicitly in each assignment**, e.g. "SWE-1 owns `src/auth/`; SWE-2 owns `src/api/`."
 - **Tell each SWE that other agents are running in parallel** so they aren't surprised when `git diff` shows changes they didn't make.
 - If a SWE discovers a needed change outside its scope, it must report it to you, not edit it. You decide whether to extend its scope or hand the file off.
+- **Include an explicit ownership statement in every parallel dispatch.** The statement names each subagent and the path or scope it owns, and asserts the scopes are disjoint — e.g. "SWE-1 owns `src/auth/`. SWE-2 owns `src/api/`. SWE-3 owns `src/db/`. Disjoint." Give each SWE the full statement, not just its own line, so every worker knows what its peers touch and can refuse to stray. The degenerate one-worker case ("SWE-1 owns ALL files; SWE-2/3 on standby") is still a valid ownership statement — write it out anyway.
+- **Parallel SWE ownership is always disjoint.** Two SWEs never own the same file at once; there is no shared-write mode. If a change genuinely needs one file edited under two concerns, serialize it — one SWE, then the next — rather than dispatching them against the same file in parallel.
+- **Prefer split-by-file (default, cleanest) over split-by-feature (riskier).** Splitting so each SWE owns distinct files or directories whose contents don't overlap is the cleanest collision profile, because the unit of ownership matches the unit of write — use it whenever the file boundaries are stable and known up front. Split-by-feature works only when features map cleanly to file boundaries; two features can legitimately touch the same shared helper, so use a feature split only when you have audited that mapping and confirmed no overlap.
 
 ## Verbose Narration
 

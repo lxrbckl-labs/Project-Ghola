@@ -1,7 +1,7 @@
 {
   "id": "mode.cd",
   "name": "Directory Navigation",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Scopes the session strictly to the current working directory as a named project, resisting drift to other paths and surfacing the project's latest handoff on resume.",
   "proactive": true,
   "category": "session-mode",
@@ -29,7 +29,7 @@
       "autoCreateNotesFile": {
         "type": "boolean",
         "label": "Auto Create Notes File",
-        "description": "When on, TPM auto-creates the project notes file at the vault's projects subfolder keyed by the project's single home on first run if it does not exist. When off, TPM only reads existing files and surfaces a one-line notice when the project has no notes yet. Leave on for low-friction onboarding; turn off if you prefer to create project notes files by hand.",
+        "description": "When on, TPM auto-creates the project notes file at the vault's Projects folder keyed by the project's single home on first run if it does not exist. When off, TPM only reads existing files and surfaces a one-line notice when the project has no notes yet. Leave on for low-friction onboarding; turn off if you prefer to create project notes files by hand.",
         "default": true
       },
       "projectNameSource": {
@@ -41,13 +41,13 @@
       "projectHomeName": {
         "type": "string",
         "label": "Project Home Name",
-        "description": "Optional explicit name for this project's single home file or directory under the projects subfolder. This is the precedence-0 override: when set it wins over all automatic naming (an existing on-disk home matched by cwd, canonical, or nickname affinity; the canonical key; and the cwd basename). Use it to pin a home name in cases affinity cannot infer, for example a greenfield project you want under a specific name, or a home whose filename shares no token with the cwd or remote. It is NOT needed for the common rename case: a home whose filename already matches the cwd basename is preserved automatically by the precedence-1 affinity rule. Leave blank to let TPM resolve the home name via the 1-then-2-then-3 precedence.",
+        "description": "Optional explicit name for this project's single home file or directory under the Projects folder. This is the precedence-0 override: when set it wins over all automatic naming (an existing on-disk home matched by cwd, canonical, or nickname affinity; the canonical key; and the cwd basename). Use it to pin a home name in cases affinity cannot infer, for example a greenfield project you want under a specific name, or a home whose filename shares no token with the cwd or remote. It is NOT needed for the common rename case: a home whose filename already matches the cwd basename is preserved automatically by the precedence-1 affinity rule. Leave blank to let TPM resolve the home name via the 1-then-2-then-3 precedence.",
         "default": ""
       },
       "consolidateSiblings": {
         "type": "boolean",
         "label": "Consolidate Sibling Notes",
-        "description": "When on, at session start TPM scans the projects subfolder for sibling files that belong to this project (other clones of the same repo, and topical sidecar files about the same project) and offers, in one prompt, to fold their content into the single home; you approve first, and old files are kept with a pointer, never deleted. Cross-team comms (_AgentComms) and any underscore-prefixed vault area are never scanned. Turn off to skip sibling detection and the consolidation offer; single-home keying still applies.",
+        "description": "When on, at session start TPM scans the Projects folder for sibling files that belong to this project (other clones of the same repo, and topical sidecar files about the same project) and offers, in one prompt, to fold their content into the single home; you approve first, and old files are kept with a pointer, never deleted. Cross-team comms (_AgentComms) and any underscore-prefixed vault area are never scanned. Turn off to skip sibling detection and the consolidation offer; single-home keying still applies.",
         "default": true
       },
       "overflowThresholdLines": {

@@ -19,11 +19,9 @@ export type BuiltInConfiguration = Omit<NamedConfiguration, 'id' | 'createdAt'>;
 const BASELINE_IDS: string[] = [
   'tool.cwd-discipline',
   'tool.secrets-wrapper-pattern',
-  'tool.untrusted-jira',
   'tool.dotnet-suite',
   'tool.npm-suite',
   'tool.core-allocation',
-  'tool.subagent-coordination',
   'tool.lenses',
   'tool.session-bootstrap',
   'tool.session-handoff',
@@ -37,8 +35,7 @@ const BASELINE_IDS: string[] = [
   'tool.database-access',
   'tool.git',
   'tool.regression-scan',
-  'tool.pre-pr-checklist',
-  'tool.pr-description',
+  'tool.pr-prep',
   'tool.time',
   'tool.ghola-ledger',
 ];
@@ -66,7 +63,6 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
       'tool.ac-to-testing',
       'tool.playwright',
       'tool.cross-ticket-isolation',
-      'tool.sprint-board-queries',
     ],
     settings: {
       'tool.lenses': { autoKickReviewOnColleagueBranch: true, autoKickPlanningOnFreshBranch: true },
@@ -165,8 +161,7 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
     // Fully-loaded, MODE-BASED divide-and-conquer profile. It enables
     // `mode.sardaukar`, the general-purpose divide-and-conquer modality, atop the
     // full Project SWT toolset (Jira + Bitbucket + testing + quality + sprint/board
-    // queries), so it can flex to any task; `tool.mid-session-bootstrap` lets it
-    // pull a ticket if one comes up mid-session. `mode.sardaukar` is the only mode
+    // queries), so it can flex to any task. `mode.sardaukar` is the only mode
     // here and is mutually exclusive with cd/support/ticket-work.
     name: 'Sardaukar',
     enabledIds: [
@@ -178,8 +173,6 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
       'tool.playwright',
       'tool.qa-pr-learning',
       'tool.cross-ticket-isolation',
-      'tool.mid-session-bootstrap',
-      'tool.sprint-board-queries',
     ],
     settings: {
       'tool.lenses': { autoKickReviewOnColleagueBranch: true, autoKickPlanningOnFreshBranch: true },

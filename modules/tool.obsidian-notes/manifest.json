@@ -1,8 +1,8 @@
 {
   "id": "tool.obsidian-notes",
   "name": "Obsidian Notes",
-  "version": "0.2.0",
-  "description": "Gives the agents an Obsidian vault as their durable knowledge base and is the authoritative catalog for note structure (templates, frontmatter, wikilinks, and update discipline), with TPM-only writes and optional auto-discovery of the vault location at session start.",
+  "version": "0.3.0",
+  "description": "Gives the agents an Obsidian vault as their durable knowledge base and is the authoritative catalog for note structure (templates, frontmatter, wikilinks, and update discipline), with TPM-only writes and a host-side Detect Vault button for setting the vault location.",
   "proactive": true,
   "category": "knowledge",
   "kind": "capability",
@@ -16,25 +16,7 @@
       "vaultPath": {
         "type": "string",
         "label": "Vault Path",
-        "description": "Absolute path to the Obsidian vault root. When set, this takes precedence over auto-discovery and is used verbatim for the session. Leave blank to let TPM discover the vault on first run (when Auto-Discover Vault is on) or to disable Obsidian writes entirely (when it is off).",
-        "default": ""
-      },
-      "autoDiscoverVault": {
-        "type": "boolean",
-        "label": "Auto-Discover Vault",
-        "description": "When on, TPM searches common WSL and Windows locations at session start for a directory containing a .obsidian marker and uses the first match (or asks the user to pick when multiple are found). On a successful discovery, the path is written back to Vault Path's default so it appears here on next launch — note that an explicit value you save in this panel always wins over that default.",
-        "default": true
-      },
-      "projectsSubfolder": {
-        "type": "string",
-        "label": "Projects Subfolder",
-        "description": "Name of the subfolder under the vault where Directory Navigation mode project notes are stored, keyed by the basename of the current working directory. Changing this value moves where new Directory Navigation notes are written but does not relocate existing files. Leave as Projects to match the SWT convention.",
-        "default": "Projects"
-      },
-      "searchRoots": {
-        "type": "string",
-        "label": "Additional Search Roots",
-        "description": "Comma-separated list of extra absolute paths to include when auto-discovering the vault, on top of the built-in WSL and Windows defaults. Useful when your vault lives outside the standard Documents or home-directory locations. Has no effect when Auto-Discover Vault is off or when Vault Path is set explicitly.",
+        "description": "Absolute path to the Obsidian vault root. Set it explicitly, OR use the Detect Vault button in this panel to auto-fill it by scanning for a directory containing a .obsidian marker. When set, it is used verbatim for the session. Leave blank to disable Obsidian notes.",
         "default": ""
       },
       "writeFrontmatter": {

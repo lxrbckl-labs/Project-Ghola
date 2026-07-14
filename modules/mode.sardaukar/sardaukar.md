@@ -30,7 +30,6 @@ When `parameters.commitPushToCurrentBranch` is on, Sardaukar mode AUTHORIZES the
 
 Sardaukar absorbs the other modes' triggers in-session without leaving the modality:
 
-- If a ticket comes up, use `tool.mid-session-bootstrap` to pull its context (notes, lookup) without switching to ticket-work mode.
 - If the active branch is a colleague's, kick the review lenses via `tool.lenses`.
 - If it is a fresh branch, kick the planning lenses via `tool.lenses`.
 

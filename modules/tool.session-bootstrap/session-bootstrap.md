@@ -161,7 +161,6 @@ Do not merge these cases.
 
 - **`mode.ticket-work`, `tool.obsidian-notes`, `tool.session-handoff`, `tool.lenses`, `tool.core-allocation`** — the domain owners this module delegates to (steps 3, 6, 7, 8, 9). Their content remains authoritative for WHAT each does; this module decides WHEN (in which step) and HOW it is reported in the boot diagnostics. If a delegated module changes its internal behavior, no change here is needed — the step calls into it and reports whatever it produced. If a delegated module is absent, the step degrades per its per-step section.
 - **`tool.statusline`** — independent. The statusline is a continuous display; the bootstrap is a one-time boot phase. No interaction.
-- **`tool.mid-session-bootstrap`** — distinct from this module. Mid-session bootstrap fires when a ticket id is mentioned mid-session, not at session start; the two do not overlap.
 
 ## Role-Specific Notes
 

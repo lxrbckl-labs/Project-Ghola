@@ -1,7 +1,7 @@
 {
   "id": "tool.setup-walkthrough",
   "name": "Setup Walkthrough",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Agent-driven first-time setup playbook that walks new Ghola users through Obsidian, Atlassian credentials, default module selection, and the SCM-sidebar Ticket Widget.",
   "proactive": true,
   "category": "workflow",
@@ -24,7 +24,7 @@
         "label": "Stages",
         "description": "User-managed list of walkthrough stages. Each entry is a stage name plus what TPM covers in that stage. Default seeds match the core Ghola setup; reorder, add, disable individual stages without removing them.",
         "default": {
-          "obsidian": { "value": "Confirm or set the Obsidian vault path. Walk through tool.obsidian-notes' auto-discovery toggle and the projectsSubfolder convention.", "enabled": true },
+          "obsidian": { "value": "Confirm or set the Obsidian vault path — use the Detect Vault button in the Obsidian Notes panel to auto-fill it, or enter the Vault Path manually. Project notes live under Projects/.", "enabled": true },
           "atlassian": { "value": "Walk through integration.atlassian-suite credential setup — Jira email, API token in SecretStorage, Jira base URL, Bitbucket workspace.", "enabled": true },
           "modules-default-set": { "value": "Tour the Modules tab. Highlight which modules are default-enabled and which are opt-in. Suggest the typical-workflow toggles based on whether the user does ticket work, PR review, or both.", "enabled": true },
           "scm-widgets": { "value": "Point out the Ticket Widget in the Source Control sidebar. Explain when it appears (Ticket Work mode active with a ticket id set and the widget toggle on).", "enabled": true },

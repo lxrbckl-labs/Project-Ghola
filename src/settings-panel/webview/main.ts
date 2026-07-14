@@ -254,6 +254,22 @@ interface UIState {
     scanned: number;
     error?: string;
   } | null;
+  /**
+   * True while an `obsidianDetectVault` scan is in flight (user clicked
+   * Detect vault in the `tool.obsidian-notes` module detail view). Set to
+   * true on click; cleared when an `obsidianVaultResult` message arrives.
+   */
+  obsidianDetecting: boolean;
+  /**
+   * Last Obsidian vault-detection result received from the host via
+   * 'obsidianVaultResult'. Null means no scan has been run yet this session.
+   */
+  obsidianVaultResult: {
+    vaultPath: string | null;
+    candidates?: string[];
+    scanned: number;
+    error?: string;
+  } | null;
   /** Feedback entries last received from the host via 'feedbackLoaded'. */
   feedbackEntries: FeedbackEntry[];
   /**
@@ -340,6 +356,8 @@ const state: UIState = {
   atlassianValidating: false,
   supportDiscovering: false,
   supportDiscoveryResult: null,
+  obsidianDetecting: false,
+  obsidianVaultResult: null,
   feedbackEntries: [],
   feedbackPendingNoConfirm: new Set(),
   warRoomData: undefined,
@@ -560,6 +578,9 @@ function handleMessage(msg: HostToWebviewMessage): void {
     case 'supportDiscoveryResult':
       handleSupportDiscoveryResult(msg);
       break;
+    case 'obsidianVaultResult':
+      handleObsidianVaultResult(msg);
+      break;
     case 'linqpadConnections':
       state.linqpadConnections = {
         status: msg.status === 'ok' ? 'ok' : msg.status,
@@ -745,6 +766,39 @@ function handleSupportDiscoveryResult(msg: {
     // validation handler does) is required here: the appMap keyValue table is
     // a sibling element on the same detail page and also needs to pick up
     // the re-seeded draft, so there is no single element to target-replace.
+    render();
+  }
+}
+
+/**
+ * Handle the obsidianVaultResult message. Updates detection state and, if the
+ * `tool.obsidian-notes` module detail view is open, does a full re-render so
+ * the `vaultPath` string input picks up the newly-written setting. Unlike
+ * the support-mode appMap keyValue field, plain string fields (see
+ * `renderModuleSettingField`) read straight from `state.settingsValues` on
+ * every render with no separate draft cache, so there is nothing to clear
+ * here — the host's `settingsLoaded` reply (sent before this message, per
+ * `detectObsidianVault` in host.ts) already refreshed `state.settingsValues`.
+ */
+function handleObsidianVaultResult(msg: {
+  type: 'obsidianVaultResult';
+  vaultPath: string | null;
+  candidates?: string[];
+  scanned: number;
+  error?: string;
+}): void {
+  state.obsidianDetecting = false;
+  state.obsidianVaultResult = {
+    vaultPath: msg.vaultPath,
+    candidates: msg.candidates,
+    scanned: msg.scanned,
+    error: msg.error,
+  };
+  const isObsidianDetailOpen =
+    state.activeSection === 'modules' &&
+    state.moduleView.mode === 'detail' &&
+    state.moduleView.moduleId === 'tool.obsidian-notes';
+  if (isObsidianDetailOpen) {
     render();
   }
 }
@@ -2075,6 +2129,15 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
     const discoveryBlock = renderSupportDiscoveryBlock();
     discoveryBlock.id = 'support-discovery-block';
     container.appendChild(discoveryBlock);
+  }
+
+  // Obsidian Notes module: render the vault-detection block below the
+  // instructions, so operators can auto-fill the vaultPath setting without
+  // hand-typing it.
+  if (m.id === 'tool.obsidian-notes') {
+    const detectBlock = renderObsidianDetectBlock();
+    detectBlock.id = 'obsidian-detect-block';
+    container.appendChild(detectBlock);
   }
 
   // Feedback Logging module: render the feedback entry card UI below the
@@ -4016,6 +4079,65 @@ function renderSupportDiscoveryBlock(): HTMLElement {
     'support-discovery-note',
   );
   block.appendChild(note);
+
+  return block;
+}
+
+/**
+ * Obsidian Notes "Detect Vault" block, shown in the `tool.obsidian-notes`
+ * module detail view below the instructions. Lets the operator trigger a
+ * host-side filesystem scan that WRITES the located vault path into the
+ * `vaultPath` setting (overwriting any existing value, unlike the support-mode
+ * discovery block's append-only appMap fill — this is an explicit one-field
+ * user action). Mirrors `renderSupportDiscoveryBlock`'s persistent-button shape.
+ */
+function renderObsidianDetectBlock(): HTMLElement {
+  const block = el('div', { class: 'support-discovery-block' });
+
+  const header = textEl('div', 'Detect Vault', 'details-header');
+  block.appendChild(header);
+
+  const detectBtn = el('button', {
+    class: 'primary',
+    type: 'button',
+  }) as HTMLButtonElement;
+  detectBtn.textContent = state.obsidianDetecting ? 'Scanning…' : 'Detect vault';
+  detectBtn.disabled = state.obsidianDetecting;
+  detectBtn.addEventListener('click', () => {
+    state.obsidianDetecting = true;
+    // Re-render only this block in place.
+    const self = document.getElementById('obsidian-detect-block');
+    if (self) {
+      const fresh = renderObsidianDetectBlock();
+      fresh.id = 'obsidian-detect-block';
+      self.replaceWith(fresh);
+    }
+    vscode.postMessage({ type: 'obsidianDetectVault' });
+  });
+  block.appendChild(detectBtn);
+
+  const status = el('div', { class: 'support-discovery-status' });
+  const result = state.obsidianVaultResult;
+  if (state.obsidianDetecting) {
+    status.textContent = 'Scanning common locations…';
+    status.classList.add('support-discovery-status--pending');
+  } else if (result === null) {
+    status.textContent =
+      'Scan common locations for a .obsidian vault and fill Vault Path.';
+    status.classList.add('support-discovery-status--hint');
+  } else if (result.error) {
+    status.textContent = `Detection failed — ${result.error}`;
+    status.classList.add('support-discovery-status--error');
+  } else if (result.vaultPath) {
+    let text = `Found vault: ${result.vaultPath}`;
+    if (result.candidates && result.candidates.length > 1) {
+      text += ` (${result.candidates.length} candidates; picked the most recent — edit Vault Path to change)`;
+    }
+    status.textContent = text;
+  } else {
+    status.textContent = 'No Obsidian vault found. Set Vault Path manually.';
+  }
+  block.appendChild(status);
 
   return block;
 }

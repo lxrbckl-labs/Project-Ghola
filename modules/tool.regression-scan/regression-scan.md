@@ -2,7 +2,7 @@
 
 When this module is loaded, the session has a structured regression-scan gate. The scan greps the test directories in `parameters.testRoots` for references to the classes, methods, exported functions, and public types changed during the session, then reports which tests are most likely to be affected by the work. Every agent reads this same fragment; TPM owns the scan, SWE and QA findings feed it, and role-specific framing is collected at the end.
 
-This module is **not proactive**. It does not fire at session start. It is the middle gate in the PR-handoff trio: `tool.pre-pr-checklist` first (the quality gate), regression scan second (the test-impact survey), `tool.pr-description` third (the artifact). Running the scan before the description means the description reflects a clean scan. It fires when the user signals PR readiness (per `parameters.autoOfferOnSignal`) or when the user explicitly asks. Treat it as a handoff gesture, not a continuous check.
+This module is **not proactive**. It does not fire at session start. It is the middle gate in the PR-handoff sequence: `tool.pr-prep`'s pre-PR checklist first (the quality gate), regression scan second (the test-impact survey), `tool.pr-prep`'s PR description third (the artifact). Running the scan before the description means the description reflects a clean scan. It fires when the user signals PR readiness (per `parameters.autoOfferOnSignal`) or when the user explicitly asks. Treat it as a handoff gesture, not a continuous check.
 
 ## What the scan does
 
@@ -16,14 +16,14 @@ The scan runs in three steps, all read-only:
 
 Run the scan when:
 
-- `tool.pre-pr-checklist` has just completed with no `✗` flags AND both modules are enabled AND `parameters.autoOfferOnSignal` is true. In that case TPM chains directly into the offer: "Want me to run the regression scan?" Wait for the user's go-ahead; the offer is the gate.
-- The user signals PR readiness ("ready for PR", "create a PR", "ship this") AND `tool.pre-pr-checklist` is NOT enabled AND `parameters.autoOfferOnSignal` is true. The scan still stands on its own as a PR-handoff gate; offer the same way.
+- `tool.pr-prep`'s checklist half has just completed with no `✗` flags AND both modules are enabled AND `parameters.autoOfferOnSignal` is true. In that case TPM chains directly into the offer: "Want me to run the regression scan?" Wait for the user's go-ahead; the offer is the gate.
+- The user signals PR readiness ("ready for PR", "create a PR", "ship this") AND `tool.pr-prep` is NOT enabled AND `parameters.autoOfferOnSignal` is true. The scan still stands on its own as a PR-handoff gate; offer the same way.
 - The user explicitly asks ("run a regression scan", "check tests for breakage", "what tests touch this work"). Run without preamble.
 
 Do **not** run the scan:
 
 - After every code change or every session end. The scan is specifically the PR-handoff gate, not a continuous check.
-- Immediately after the checklist when the checklist returned `✗` flags. The user should address the flags first. They can still ask explicitly if they want the scan before addressing them.
+- Immediately after `tool.pr-prep`'s checklist half when it returned `✗` flags. The user should address the flags first. They can still ask explicitly if they want the scan before addressing them.
 - When the module is not loaded. Without this module, TPM does not offer a structured scan — the user runs `grep` or `rg` themselves if they want to check.
 
 ## Symbol extraction patterns
@@ -132,15 +132,15 @@ Do not merge these cases.
 
 ## Sibling-module interaction
 
-This module composes cleanly with two siblings — the rest of the PR-handoff trio.
+This module composes cleanly with `tool.pr-prep`, whose two halves are the rest of the PR-handoff sequence.
 
-### `tool.pre-pr-checklist`
+### `tool.pr-prep`'s checklist half
 
-When both modules are enabled and the checklist completes with no `✗` flags, TPM chains into the regression-scan offer per `parameters.autoOfferOnSignal`. When the checklist surfaced `✗` flags, TPM does NOT auto-offer the scan — the user should address the flags first. The user can still ask explicitly ("run the scan anyway") and TPM runs it, noting once: "The checklist still has open flags — confirm you want the scan results before addressing them?"
+When both modules are enabled and the checklist half completes with no `✗` flags, TPM chains into the regression-scan offer per `parameters.autoOfferOnSignal`. When the checklist half surfaced `✗` flags, TPM does NOT auto-offer the scan — the user should address the flags first. The user can still ask explicitly ("run the scan anyway") and TPM runs it, noting once: "The checklist still has open flags — confirm you want the scan results before addressing them?"
 
-### `tool.pr-description`
+### `tool.pr-prep`'s description half
 
-The ideal sequence is checklist → scan → description, because the scan can surface tests that need updating, which the description should mention. When all three modules are enabled and configured to auto-offer, TPM chains them in that order. If the scan flags a test the user needs to update, the description draft should reflect that ("…and updates `tests/foo.test.ts` to cover the new null check"). The user always has the final say on the description; the scan output is one more input, not a directive.
+The ideal sequence is checklist → scan → description, because the scan can surface tests that need updating, which the description should mention. When `tool.pr-prep` and the regression scan are enabled and configured to auto-offer, TPM chains them in that order. If the scan flags a test the user needs to update, the description draft should reflect that ("…and updates `tests/foo.test.ts` to cover the new null check"). The user always has the final say on the description; the scan output is one more input, not a directive.
 
 ### SWE return messages
 

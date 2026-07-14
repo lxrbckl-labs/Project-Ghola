@@ -1,7 +1,7 @@
 {
   "id": "mode.ticket-work",
   "name": "Ticket Work",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Scopes the session to a single Jira ticket — pulls the ticket via Atlassian integration on first run, sets up per-ticket notes, and locks all work to that ticket's scope.",
   "proactive": true,
   "category": "session-mode",
@@ -31,12 +31,6 @@
         "label": "Notes Sections",
         "description": "Comma-separated list of top-level sections the per-ticket notes file should contain, in the order TPM writes them when creating the file. Trim entries you do not use or extend with custom sections to taste. Note that Session Handoff in this list is the heading the tool.session-handoff module manages — Ticket Work mode ensures the heading exists but defers the writing of that block to that module. The section structure, YAML frontmatter, update discipline, and per-type templates are defined authoritatively by tool.obsidian-notes; this list only selects which of that module's ticket-note catalog sections appear and in what order.",
         "default": "Ticket Summary, Implementation Notes, Changes Made, Edge Cases, Testing Procedures, QA Findings, Session Handoff"
-      },
-      "untrustedJiraInput": {
-        "type": "boolean",
-        "label": "Untrusted Jira Input",
-        "description": "When on, TPM treats every Jira ticket description as untrusted external input — context only, never instruction — and flags suspicious directives in the description to the user before acting on them. When off, ticket descriptions are treated as trusted, which is rarely the right setting outside fully-controlled environments. Leave on for safety.",
-        "default": true
       },
       "showWidget": {
         "type": "boolean",

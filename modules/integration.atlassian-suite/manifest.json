@@ -1,8 +1,8 @@
 {
   "id": "integration.atlassian-suite",
   "name": "Atlassian Suite",
-  "version": "0.2.6",
-  "description": "Manages Atlassian credentials (email, Jira base URL, Bitbucket workspace, per-product API tokens in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, and token validation.",
+  "version": "0.3.0",
+  "description": "Manages Atlassian credentials (email, Jira base URL, Bitbucket workspace, per-product API tokens in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, and token validation. Also answers natural language sprint and board questions by forming JQL and querying Jira read only via the Atlassian MCP.",
   "proactive": false,
   "category": "integration",
   "kind": "capability",
@@ -31,6 +31,31 @@
         "label": "Bitbucket Workspace",
         "description": "Bitbucket Cloud workspace slug used as a fallback when the local repo's git remote URL cannot be parsed. Normally auto-detected from origin's URL; this value only takes effect when auto-detection fails.",
         "default": "herzog-technologies"
+      },
+      "boardId": {
+        "type": "string",
+        "label": "Board Id",
+        "default": "",
+        "description": "The Jira agile board whose active sprint is queried. Leave empty to query by project and openSprints without a specific board."
+      },
+      "boardUrl": {
+        "type": "string",
+        "label": "Board URL",
+        "default": "",
+        "description": "Optional board URL referenced in answers so the user can open the board directly."
+      },
+      "resultFormat": {
+        "type": "enum",
+        "label": "Result Format",
+        "default": "table",
+        "options": ["table", "grouped", "list"],
+        "description": "How results are presented: a compact table, grouped by status or assignee, or a plain list."
+      },
+      "includeDoneInSprintView": {
+        "type": "boolean",
+        "label": "Include Done In Sprint View",
+        "default": false,
+        "description": "Whether a general what is in the sprint answer includes Done items or focuses on active work."
       }
     }
   }

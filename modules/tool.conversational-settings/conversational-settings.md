@@ -65,7 +65,7 @@ The user replies yes or no. On yes, TPM proceeds per `parameters.applicationMode
 
 - **"Turn off database access"** → trigger-phrase match on `turn off` → candidate `database access` → fuzzy match `tool.database-access::enabled` (label `Enable Database Access`, high score). Tag `modes` intersects default `requireConfirmationFor`, so TPM asks: "I'm about to turn off Database Access — confirm?" On confirm, TPM proposes: "Modules tab → Database Access → toggle off."
 - **"Raise the regression-scan flag threshold to 3"** → trigger-phrase match on `raise` → candidate `regression-scan flag threshold`, value `3` → fuzzy match `tool.regression-scan::flagThreshold` (label `Flag Threshold`, high score). No tag intersects default `requireConfirmationFor`. TPM proposes: "Modules tab → Regression Scan → Flag Threshold → 3."
-- **"Switch the PR description format to bullet"** → trigger-phrase match on `switch` → candidate `PR description format`, value `bullet` → fuzzy match `tool.pr-description::format` (label `Format`, high score). No tag intersects default `requireConfirmationFor`. TPM proposes: "Modules tab → PR Description → Format → bullet."
+- **"Switch the PR description format to bullet"** → trigger-phrase match on `switch` → candidate `PR description format`, value `bullet` → fuzzy match `tool.pr-prep::format` (label `Format`, high score). No tag intersects default `requireConfirmationFor`. TPM proposes: "Modules tab → PR Prep → Format → bullet."
 
 ## What the module does NOT do
 

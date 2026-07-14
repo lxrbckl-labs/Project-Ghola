@@ -408,6 +408,14 @@ export type WebviewToHostMessage =
    * `supportDiscoveryResult` message.
    */
   | { type: 'supportDiscoverPaths' }
+  /**
+   * Trigger host-side auto-discovery of an Obsidian vault. The host scans the
+   * filesystem for a directory containing a `.obsidian/` marker, WRITES the
+   * chosen vault path into the `tool.obsidian-notes` `vaultPath` setting
+   * (overwriting on this explicit user action), and replies with an
+   * `obsidianVaultResult` message.
+   */
+  | { type: 'obsidianDetectVault' }
   /** Open an external https: URL via vscode.env.openExternal. Only https: scheme is accepted. */
   | { type: 'openExternal'; url: string }
   /**
@@ -547,6 +555,20 @@ export type HostToWebviewMessage =
       type: 'supportDiscoveryResult';
       found: Record<string, string>;
       notFound: string[];
+      scanned: number;
+      error?: string;
+    }
+  /**
+   * Reply to `obsidianDetectVault`. `vaultPath` is the chosen vault path
+   * (already written into the `tool.obsidian-notes` `vaultPath` setting) or
+   * null when none was found, `candidates` lists every located vault, `scanned`
+   * is the number of directories the walk visited, and `error` is a short
+   * message set only when discovery hit an unexpected fault.
+   */
+  | {
+      type: 'obsidianVaultResult';
+      vaultPath: string | null;
+      candidates?: string[];
       scanned: number;
       error?: string;
     }

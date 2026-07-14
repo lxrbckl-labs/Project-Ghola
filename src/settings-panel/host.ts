@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { discoverAppPaths } from '../integration/support-discovery';
+import { discoverObsidianVault } from '../integration/vault-discovery';
 import { validateManifest } from '../manifest/validator';
 import type { AtlassianBridge } from '../extension';
 import type { ModuleLoader } from '../modules/loader';
@@ -461,6 +462,9 @@ export class SettingsPanel implements vscode.Disposable {
       case 'supportDiscoverPaths':
         await this.discoverSupportPaths();
         break;
+      case 'obsidianDetectVault':
+        await this.detectObsidianVault();
+        break;
       case 'atlassianValidate':
         // Execute the command registered by SWE-1. The bridge fires onDidChangeValidation
         // when done, which the constructor subscription above will broadcast.
@@ -893,6 +897,62 @@ export class SettingsPanel implements vscode.Disposable {
         type: 'supportDiscoveryResult',
         found: {},
         notFound: [],
+        scanned: 0,
+        error: message,
+      });
+    }
+  }
+
+  /**
+   * Host-side auto-discovery of an Obsidian vault. Scans the filesystem (see
+   * `discoverObsidianVault`) for a directory containing a `.obsidian/` marker
+   * and, when one is chosen, WRITES it into the `tool.obsidian-notes`
+   * `vaultPath` setting. Unlike Support's empty-only guard, this is an explicit
+   * user action (the "Detect Vault" button), so it overwrites any existing
+   * value. On a found vault it mirrors the `saveSettings` refresh side effects
+   * (fresh settings + configurations + composed prompts + module-settings
+   * event) and replies with an `obsidianVaultResult`. Discovery itself never
+   * throws; this wrapper also guards the write path and still posts a result
+   * (with an `error`) on any fault.
+   */
+  private async detectObsidianVault(): Promise<void> {
+    try {
+      const flat = this.context.workspaceState.get<Record<string, unknown>>(
+        WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
+        {},
+      );
+
+      const result = await discoverObsidianVault();
+
+      // Only write when a vault was actually found; leave the setting as-is
+      // otherwise (do not clobber a user value with an empty result).
+      if (result.vaultPath) {
+        const next = { ...flat, ['tool.obsidian-notes::vaultPath']: result.vaultPath };
+        await this.context.workspaceState.update(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, next);
+
+        // Mirror the saveSettings refresh side effects so the panel + prompts
+        // reflect the newly written path.
+        this.postSettings();
+        this.recomputeModified();
+        this.postConfigurations();
+        this.broadcastComposedPrompts();
+        this.moduleSettingsEmitter.fire();
+      }
+
+      this.post({
+        type: 'obsidianVaultResult',
+        vaultPath: result.vaultPath,
+        candidates: result.candidates,
+        scanned: result.scanned,
+        error: result.error,
+      });
+    } catch (err) {
+      const message = (err as Error)?.message ?? 'vault discovery failed';
+      this.logger?.appendLine(`[panel] detectObsidianVault failed: ${message}`);
+      this.post({
+        type: 'obsidianVaultResult',
+        vaultPath: null,
+        candidates: [],
         scanned: 0,
         error: message,
       });

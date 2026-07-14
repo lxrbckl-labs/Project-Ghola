@@ -1,13 +1,14 @@
 {
   "id": "tool.ssh-access",
   "name": "SSH Access",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Grants agents SSH capability through a per-host allowlist with command-pattern guardrails for remote execution.",
   "proactive": false,
   "category": "safety",
   "kind": "capability",
   "trigger": "always-applied",
   "tier": "optional",
+  "setupGuidePath": "setup.md",
   "contributes": {
     "promptFragments": [
       { "target": "all", "contentPath": "ssh-access.md" }

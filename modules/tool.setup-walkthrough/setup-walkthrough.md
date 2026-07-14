@@ -45,7 +45,7 @@ What each `parameters.paceMode` value does once the user accepts the offer:
 TPM presents one stage at a time. For each stage:
 
 1. State the stage name and what it covers (one or two sentences derived from the stage's `value`).
-2. Walk the user through the specific actions (e.g. for `obsidian`: "Open the Modules tab, find Obsidian Notes, set the vault path or toggle auto-discovery on").
+2. Walk the user through the specific actions (e.g. for `obsidian`: "Open the Modules tab, find Obsidian Notes, click Detect Vault or enter the Vault Path manually").
 3. Wait for the user to confirm — "done", "skip", "explain more", or a natural-language equivalent.
 4. On "done", move to the next enabled stage. On "skip", record the stage as skipped and move on. On "explain more", elaborate before re-asking.
 
@@ -65,7 +65,7 @@ The `parameters.stages` kv-table seeds with the five core Ghola setup stages. Th
 
 ### `obsidian`
 
-Walks the user through `tool.obsidian-notes` configuration — vault path discovery (auto-discover toggle or manual path entry), the `projectsSubfolder` convention, and what the per-mode notes files look like. The stage ends when the user has a resolved vault path and TPM has confirmed it by reading the vault root.
+Walks the user through `tool.obsidian-notes` configuration — setting the vault path via the Detect Vault button (host-side scan for a `.obsidian` marker) or by entering the Vault Path manually, and what the per-mode notes files look like (project notes live under `Projects/`). The stage ends when the user has a resolved vault path and TPM has confirmed it by reading the vault root.
 
 ### `atlassian`
 
@@ -73,7 +73,7 @@ Walks the user through `integration.atlassian-suite` credential setup — the Ji
 
 ### `modules-default-set`
 
-Tours the Modules tab. Highlights which modules are default-enabled (the cores plus a few standard tools) and which are opt-in. Suggests typical-workflow toggles based on what the user says they do — ticket work suggests `mode.ticket-work`, PR review suggests `tool.pr-description` and `tool.pre-pr-checklist`, both suggests the full ticket-mode set. The stage ends when the user has reviewed and confirmed (or adjusted) the enabled set.
+Tours the Modules tab. Highlights which modules are default-enabled (the cores plus a few standard tools) and which are opt-in. Suggests typical-workflow toggles based on what the user says they do — ticket work suggests `mode.ticket-work`, PR review suggests `tool.pr-prep`, both suggests the full ticket-mode set. The stage ends when the user has reviewed and confirmed (or adjusted) the enabled set.
 
 ### `scm-widgets`
 
@@ -105,7 +105,7 @@ When `parameters.completionTracking` is false, the walkthrough re-offers based p
 The walkthrough is a guide, not an autopilot. It does NOT:
 
 - Write to any other module's settings directly. When a stage calls for a settings edit (e.g. setting the Obsidian vault path), TPM either walks the user through doing it themselves in the Modules tab, or — if `tool.conversational-settings` is loaded — proposes the edit through that module's normal propose-and-confirm flow. This module never reaches into another module's parameters on its own.
-- Bypass another module's first-run behavior. `tool.obsidian-notes` still does its own vault discovery, `integration.atlassian-suite` still does its own credential prompts, and so on. This module guides the user through reading and acting on those modules' outputs; it does not replace them.
+- Bypass another module's first-run behavior. `tool.obsidian-notes` still resolves the vault from its own Vault Path setting (populated via the Detect Vault button or manual entry), `integration.atlassian-suite` still does its own credential prompts, and so on. This module guides the user through reading and acting on those modules' outputs; it does not replace them.
 - Replace SETUP.md. The repo-side SETUP.md still exists as offline reference and as the canonical written documentation. This module is the conversation-shaped companion to it — a user who prefers reading can still open SETUP.md and ignore the walkthrough.
 
 ## Module-disabled vs feature-disabled

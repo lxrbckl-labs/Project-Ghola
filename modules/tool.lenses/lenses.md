@@ -82,6 +82,14 @@ Both triggers default OFF so fresh installs do not auto-kick lens dispatches wit
 - When `tool.lenses` is enabled but both `autoKickReviewOnColleagueBranch` and `autoKickPlanningOnFreshBranch` are false, the triggers are silent — manual Review/Planning mode requests still work exactly as before.
 - When a trigger is enabled but the git state does not match its condition, the trigger silently does not fire — no announcement, no dispatch.
 
+## Merging lenses when cores are short
+
+Both modes want one SWE per lens, running in parallel. When the concurrent-core capacity available for the dispatch — read from `SWE_AGENT_COUNT` and your performance + efficiency core split — is FEWER than the number of lenses, do not refuse the workflow and do not exceed the core cap. **Merge lenses into fewer SWEs instead.**
+
+- Combine lens content so each SWE runs more than one lens. For example, with three review lenses (security / logic / quality) but only 2 cores available, fold security + logic into a single SWE running both lenses and give quality its own.
+- Tell the merged SWE it is running a **combined lens** and must report findings across every lens it carries — one SWE, multiple lenses, all findings returned. It follows the same per-lens output shape for each lens it holds (findings with `Rating: N/5` for Review, one Plan Fragment per lens for Planning).
+- Merging is always preferable to refusing. A merged-lens Review or Planning pass is still more rigorous than a single-SWE pass, so fold lenses down to fit the cores rather than declining the mode.
+
 ## Review Mode
 
 A read-only analysis of a colleague's branch. SWE does not edit any files.

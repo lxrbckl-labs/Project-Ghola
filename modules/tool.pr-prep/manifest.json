@@ -1,0 +1,82 @@
+{
+  "id": "tool.pr-prep",
+  "name": "PR Prep",
+  "version": "0.1.0",
+  "description": "Bundles the PR-handoff pair into one module: a configurable pre-PR quality-gate checklist that sweeps for unintended changes, secrets, dead code, and reviewer-flagged patterns, followed by a strictly-capped two-sentence PR description generator that is plain-language, double-dash-free, and ticket-aware when ticket-work mode is active.",
+  "proactive": false,
+  "category": "workflow",
+  "kind": "capability",
+  "trigger": "user-request",
+  "tier": "recommended",
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "pr-prep.md" }
+    ],
+    "settings": {
+      "checks": {
+        "type": "keyValue",
+        "label": "Checks",
+        "description": "User-managed list of pre-PR checks. Each entry is a check name plus a one-line description of what TPM should look for. Add or remove checks per project to match what your team's automated reviewer flags. The agent runs every enabled check in order and reports findings to the user before the PR is created.",
+        "default": {
+          "Tests pass locally": { "value": "Confirm with the user that they have run the project test suite and it passed. Do not assume; ask if uncertain.", "enabled": true },
+          "No unintended file changes": { "value": "Inspect git diff --name-only and confirm every modified file is genuinely part of the work. Flag anything that looks like it leaked from a prior task or local-only configuration.", "enabled": true },
+          "No secrets or connection strings modified": { "value": "Scan diffs of appsettings.json, .env files, and config files for credential changes. Flag any token, key, password, or connection string edit.", "enabled": true },
+          "No commented-out code left behind": { "value": "Search the diff for blocks of commented-out code introduced this session. Old code should be deleted, not commented out.", "enabled": true },
+          "No TODO or FIXME without a follow-up ticket": { "value": "Find new TODO or FIXME markers in the diff. Each one needs a linked ticket id or rationale, otherwise it's tech debt with no owner.", "enabled": true },
+          "Error handling covers new code paths": { "value": "Walk the new code paths and identify thrown errors, network calls, file I/O, and async boundaries. Confirm each has appropriate handling.", "enabled": true },
+          "Null checks in place where needed": { "value": "Identify nullable inputs to new code (function params, API responses, optional fields) and confirm they are checked before access.", "enabled": true },
+          "No unused imports or dead code introduced": { "value": "Scan for imports that aren't referenced and functions or variables that aren't used. Build warnings are usually a hint; do not rely on them alone.", "enabled": true },
+          "Code follows existing naming conventions": { "value": "Compare new identifiers (variables, functions, classes) against the project's existing naming patterns. Flag inconsistencies.", "enabled": true },
+          "Edge cases addressed or documented": { "value": "Recall the edge cases discussed during the session (or surfaced in QA findings). Each one should be either fixed in the diff or explicitly documented as out-of-scope.", "enabled": true }
+        },
+        "keyLabel": "Check",
+        "valueLabel": "Description",
+        "optionalValue": false,
+        "optionalEnabled": true,
+        "fullWidth": true
+      },
+      "runMode": {
+        "type": "string",
+        "label": "Run Mode",
+        "description": "Controls how TPM presents the checklist. Interactive walks through each check one at a time and asks for user confirmation before moving on, useful for cases where the user wants to review each finding. Batched runs all checks at once and presents a single summary with all findings grouped together, faster but requires more context-switching to address issues. Allowed values: interactive or batched.",
+        "default": "interactive"
+      },
+      "checklistAutoOffer": {
+        "type": "boolean",
+        "label": "Checklist Auto-Offer",
+        "description": "When on, TPM proactively offers to run the pre-PR checklist when the user signals they're done or ready to PR (ready for PR, let's wrap up, create a PR). When off, TPM only runs the checklist when the user explicitly asks for it. On is the typical flow for ticket-work sessions where the checklist is the first step of the PR-handoff ritual.",
+        "default": true
+      },
+      "maxSentences": {
+        "type": "number",
+        "label": "Max Sentences",
+        "description": "Hard cap on the length of the generated PR description. Two sentences is the team default that keeps descriptions scannable and forces TPM to compress instead of ramble. Raise it for projects where richer context is expected; lower it (to 1) for terse-style teams.",
+        "default": 2
+      },
+      "format": {
+        "type": "string",
+        "label": "Format",
+        "description": "Template shape for the generated description. ticket-then-what-then-why prepends the ticket id when ticket-work mode is active and writes one sentence describing what changed followed by one sentence on impact. what-then-why omits the ticket prefix entirely (useful for unscoped or CD-mode work). bullet uses one short paragraph plus a 2-3 bullet change summary, more verbose but easier for reviewers to skim. The agent always respects the Max Sentences cap regardless of format.",
+        "default": "ticket-then-what-then-why"
+      },
+      "bannedTokens": {
+        "type": "string",
+        "label": "Banned Tokens",
+        "description": "Comma-separated list of token sequences that must NEVER appear in the generated description. The default forbids ASCII double-dashes (which CodeRabbit flags), em-dash-with-hyphen-prefix, and the common '-- ' misuse. The agent scans every draft for these tokens and rewrites them before presenting the result to the user.",
+        "default": "--, -—, -- "
+      },
+      "includeChangeSummary": {
+        "type": "boolean",
+        "label": "Include Change Summary",
+        "description": "When on, the generated description appends a short bullet-list of the most significant files changed. Useful for reviewers who want at-a-glance file context before diving into the diff. Off keeps the description strictly to the configured Max Sentences. Has no effect when Format is bullet (which already includes the summary by construction).",
+        "default": false
+      },
+      "descriptionAutoOffer": {
+        "type": "boolean",
+        "label": "Description Auto-Offer",
+        "description": "When on, TPM proactively offers to generate a PR description after the pre-PR checklist (and the regression scan, when tool.regression-scan is enabled) completes, or when the user signals PR readiness without running the checklist. When off, TPM only generates the description when the user explicitly asks. On is the typical flow where the description is the last gesture in the PR-handoff sequence.",
+        "default": true
+      }
+    }
+  }
+}

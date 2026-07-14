@@ -1868,6 +1868,14 @@ button.module-row-chevron:focus-visible {
   color: var(--vscode-descriptionForeground);
 }
 
+/* ─── Obsidian Notes — vault detection block (module detail view) ────── */
+
+/* #obsidian-detect-block (rendered by renderObsidianDetectBlock) reuses the
+   .support-discovery-* classes above verbatim — the container/status/hint/
+   pending/error rules are generic (header + primary button + status line)
+   and apply unchanged via those shared class names, so no parallel ruleset
+   is needed here. */
+
 /* ─── CLI alias table (Sessions tab) ────────────────────────────────── */
 
 /* Per-row action button group (Register / Probe / Delete). Flex row keeps

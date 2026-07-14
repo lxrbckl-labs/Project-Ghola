@@ -1,6 +1,6 @@
 # Cross-Ticket Isolation
 
-When this module is loaded, the session has a single project-wide convention for handling content whose scope does not match the active ticket. The rule was previously inlined in `mode.ticket-work` (the Cross-ticket discipline section), in `tool.obsidian-notes` (the cross-ticket discussion mention), and in `tool.session-handoff` (the same). This module promotes that convention to a standalone, project-wide policy following the precedent set by `tool.untrusted-jira`. Every agent reads this same fragment; TPM owns enforcement, and SWE and QA inherit the same posture when they surface findings that cross ticket boundaries.
+When this module is loaded, the session has a single project-wide convention for handling content whose scope does not match the active ticket. The rule was previously inlined in `mode.ticket-work` (the Cross-ticket discipline section), in `tool.obsidian-notes` (the cross-ticket discussion mention), and in `tool.session-handoff` (the same). This module promotes that convention to a standalone, project-wide policy. Every agent reads this same fragment; TPM owns enforcement, and SWE and QA inherit the same posture when they surface findings that cross ticket boundaries.
 
 This module is **not proactive**. It does not fire at session start. The rule applies on-demand, exactly when TPM is about to write to a per-ticket notes file — at that moment, the scope of the content is checked against the active ticket and the policy below decides what happens. Without an imminent notes write, this module sits quietly.
 
