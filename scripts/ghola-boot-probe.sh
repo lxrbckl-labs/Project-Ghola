@@ -29,6 +29,9 @@ if [ -z "$version" ] && [ -n "$GHOLA_ROOT" ]; then
 fi
 [ -z "$version" ] && version="unknown"
 
+# 1b. current time (guarded; empty is fine if date is unavailable)
+now="$(date +'%Y-%m-%d %H:%M %Z (%A)' 2>/dev/null)"
+
 # 2. environment
 env_state="ok"; missing=""
 [ -z "$GHOLA_ROOT" ] && env_state="fail" && missing="GHOLA_ROOT"
@@ -120,6 +123,7 @@ fi
 
 # digest
 emit version "$version"
+emit now "$now"
 emit env_state "$env_state"; [ -n "$missing" ] && emit env_missing "$missing"
 emit team "${perf}p/${eff}e/${qa}qa"
 emit team_models "perf=${pm},eff=${em},qa=${qm}"
