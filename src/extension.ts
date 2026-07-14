@@ -420,21 +420,23 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider('gholaTicketWidget', ticketWidgetProvider),
   );
 
-  // Context-key sync — show widget only when module enabled AND ticketId set
+  // Context-key sync — show the widget whenever the module is enabled and the
+  // showWidget setting is on. The active ticket is derived from the git branch
+  // inside the widget itself, so we no longer gate on a ticketId setting; the
+  // widget renders its own "no ticket on this branch" empty state when the
+  // branch yields no ticket key.
   const syncTicketWorkWidgetContextKey = (): void => {
     const moduleEnabled = loader.find('mode.ticket-work')?.isEnabled === true;
-    const ticketIdRaw = readTicketWorkSetting('ticketId');
-    const ticketId = typeof ticketIdRaw === 'string' && ticketIdRaw.trim() ? ticketIdRaw.trim() : '';
     const showWidgetRaw = readTicketWorkSetting('showWidget');
     const showWidget = typeof showWidgetRaw === 'boolean' ? showWidgetRaw : true;
-    const enabled = moduleEnabled && ticketId !== '' && showWidget;
+    const enabled = moduleEnabled && showWidget;
     void vscode.commands.executeCommand('setContext', SET_CONTEXT_KEYS.TICKET_WORK_WIDGET_ENABLED, enabled);
   };
 
   // Initial sync
   syncTicketWorkWidgetContextKey();
 
-  // Re-sync on settings save (covers ticketId / showWidget changes)
+  // Re-sync on settings save (covers showWidget changes)
   context.subscriptions.push(moduleSettingsEmitter.event(syncTicketWorkWidgetContextKey));
 
   // Re-sync on module enable/disable toggle

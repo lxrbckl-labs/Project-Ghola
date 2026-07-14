@@ -48,7 +48,7 @@ interface GitExtension {
 
 /**
  * Status of the live Jira ticket-details probe.
- *   - `idle`     : no ticket id configured — nothing to probe.
+ *   - `idle`     : no ticket key on the current branch — nothing to probe.
  *   - `loading`  : ticket id present, API call in flight.
  *   - `ok`       : details loaded; `summary` / `status` populated on the state.
  *   - `missing`  : Jira returned 404 — the configured ticket id does not exist.
@@ -81,7 +81,7 @@ type PrProbe = 'idle' | 'loading' | 'found' | 'none' | 'fallback';
 interface StateMessage {
   type: 'state';
   generation: number;
-  /** When true, render the "set a ticket id" empty state. */
+  /** When true, render the "no ticket on this branch" empty state. */
   empty: boolean;
   /** When true, render the "widget disabled" minimal placeholder. */
   disabled: boolean;
@@ -115,8 +115,8 @@ type WebviewMessage =
  * PR, and a TODO list seeded from the ticket's acceptance-criteria section
  * (when `parseAcAsTodo` is on) and editable with user-added manual items.
  *
- * State resolution is **streaming**: the synchronous read of the configured
- * ticket id + stored todos is posted immediately so the webview renders
+ * State resolution is **streaming**: the synchronous derivation of the
+ * branch-bound ticket id + stored todos is posted immediately so the webview renders
  * without waiting for network I/O, and live API probes (ticket details, PR
  * lookup) are spawned in parallel and pushed as follow-up state messages.
  *
@@ -155,9 +155,10 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
    *   and a change event so the widget refreshes after the user sets / clears
    *   a token or re-validates.
    * @param readModeSetting Setting reader closure threaded in by the host.
-   *   The closure receives a bare key (e.g. `'ticketId'`) and is expected to
+   *   The closure receives a bare key (e.g. `'showWidget'`) and is expected to
    *   read the value from `mode.ticket-work::<key>` in the flat settings dict
-   *   (or fall back to the manifest default).
+   *   (or fall back to the manifest default). The active ticket key is NOT a
+   *   setting — it is derived from the current git branch.
    * @param todosStore Workspace-state-backed TODO storage manager.
    */
   constructor(
@@ -186,7 +187,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
     });
     this.viewDisposables.push(messageSub);
 
-    // React to module-settings changes (e.g. user edits the ticketId field).
+    // React to module-settings changes (e.g. user toggles the PR button).
     const settingsSub = this.moduleSettingsEvent(() => this.pushState());
     this.viewDisposables.push(settingsSub);
 
@@ -201,7 +202,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
     // React to todo-store mutations. Filter to changes for the *current* ticket
     // so a write to an unrelated ticket id does not trigger a refresh storm.
     const todosSub = this.todosStore.onDidChange((evt) => {
-      const currentId = this.readTicketIdSetting();
+      const currentId = this.currentTicketId();
       if (evt.ticketId === currentId) this.pushState();
     });
     this.viewDisposables.push(todosSub);
@@ -285,7 +286,10 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
     const parseAcAsTodo = this.readBooleanSetting('parseAcAsTodo', true);
     const widgetShowsPrButton = this.readBooleanSetting('widgetShowsPrButton', true);
     const acSectionMarker = this.readStringSetting('acSectionMarker', 'Acceptance Criteria');
-    const ticketId = this.readTicketIdSetting();
+    // The active ticket is derived from the current git branch — read the git
+    // state once here and reuse it for both the ticket key and the PR probe.
+    const { branch, remoteUrl } = this.readGitState();
+    const ticketId = this.deriveTicketFromBranch(branch);
 
     // Defence in depth — the visibility context key normally hides us when
     // showWidget is off, but if we get resolved anyway render a minimal
@@ -310,8 +314,8 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    // No ticket id configured — render the empty state and stop. Async probes
-    // are pointless without a ticket key.
+    // No ticket key on the current branch — render the empty state and stop.
+    // Async probes are pointless without a ticket key.
     if (!ticketId) {
       this.post({
         type: 'state',
@@ -338,7 +342,6 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
     const email = this.readAtlassianStringSetting('email', '');
 
     const ticketUrl = buildTicketUrl(ticketId, jiraBase);
-    const { branch, remoteUrl } = this.readGitState();
     const repoSlug = extractBitbucketRepoSlug(remoteUrl);
     const workspaceFromRemote = extractBitbucketWorkspace(remoteUrl);
     const workspace = workspaceFromRemote || fallbackWorkspace;
@@ -603,13 +606,32 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Read the configured ticket id. Returns the trimmed value or an empty
-   * string. Whitespace-only values count as empty.
+   * Derive the active Jira ticket key from a git branch name. Mirrors the
+   * agent's branch-detection regex: strip a leading workflow prefix
+   * (`feature/`, `bugfix/`, `hotfix/`, `release/`), take the last `/` path
+   * segment, and match `^([A-Za-z]+)-([0-9]+)`. On a match compose
+   * `UPPERCASEKEY-NUMBER` (e.g. `feature/cmms-2791-x` -> `CMMS-2791`). Returns
+   * an empty string when there is no match (on `main`, a detached HEAD, or a
+   * branch with no `PROJ-1234` segment).
    */
-  private readTicketIdSetting(): string {
-    const v = this.readModeRaw('ticketId');
-    if (typeof v !== 'string') return '';
-    return v.trim();
+  private deriveTicketFromBranch(branch: string | null): string {
+    if (!branch) return '';
+    const stripped = branch.replace(/^(feature|bugfix|hotfix|release)\//i, '');
+    const segments = stripped.split('/');
+    const last = segments[segments.length - 1] ?? stripped;
+    const match = last.match(/^([A-Za-z]+)-([0-9]+)/);
+    if (!match) return '';
+    return `${match[1].toUpperCase()}-${match[2]}`;
+  }
+
+  /**
+   * The active ticket key for the widget, derived from the current git branch.
+   * Returns an empty string when the branch yields no ticket key. This is the
+   * single source of truth for "which ticket is bound" — the ticket id is no
+   * longer a configurable setting.
+   */
+  private currentTicketId(): string {
+    return this.deriveTicketFromBranch(this.readGitState().branch);
   }
 
   /**
@@ -651,7 +673,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
   private async handle(msg: WebviewMessage): Promise<void> {
     switch (msg.type) {
       case 'toggle-todo': {
-        const ticketId = this.readTicketIdSetting();
+        const ticketId = this.currentTicketId();
         if (!ticketId) break;
         // The store fires onDidChange which triggers our own listener and a
         // refresh push, so we do not call pushState() here.
@@ -659,7 +681,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
         break;
       }
       case 'add-manual-todo': {
-        const ticketId = this.readTicketIdSetting();
+        const ticketId = this.currentTicketId();
         if (!ticketId) break;
         const trimmed = typeof msg.text === 'string' ? msg.text.trim() : '';
         if (!trimmed) break;
@@ -667,7 +689,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
         break;
       }
       case 'remove-todo': {
-        const ticketId = this.readTicketIdSetting();
+        const ticketId = this.currentTicketId();
         if (!ticketId) break;
         await this.todosStore.removeTodo(ticketId, msg.todoId);
         break;
@@ -676,7 +698,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
         this.pushState();
         break;
       case 'open-ticket': {
-        const ticketId = this.readTicketIdSetting();
+        const ticketId = this.currentTicketId();
         if (!ticketId) break;
         const jiraBase = this.readAtlassianStringSetting(
           'jiraBase',
@@ -879,7 +901,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
     <div class="ticket-widget">
       <div id="disabledMessage" class="empty-message" hidden>Widget disabled.</div>
       <div id="emptyMessage" class="empty-message" hidden>
-        Set a ticket id in the Modules tab to begin.
+        No ticket on this branch. Checkout a branch like feature/CMMS-1234-… to bind a ticket.
       </div>
       <div id="mainContent" hidden>
         <div class="row">
