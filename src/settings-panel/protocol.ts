@@ -515,7 +515,19 @@ export type HostToWebviewMessage =
     }
   | { type: 'settingsSaved'; ok: boolean; error?: string }
   | { type: 'composedPromptUpdated'; agent: string; prompt: string }
-  | { type: 'moduleDetail'; moduleId: string; fragments: PromptFragmentDetail[] }
+  | {
+      type: 'moduleDetail';
+      moduleId: string;
+      fragments: PromptFragmentDetail[];
+      /**
+       * Human/operator-facing setup guide for the module, loaded by the host
+       * from `ModuleManifest.setupGuidePath`. Present only when the module
+       * declares that field; `error` is set (with empty `content`) on read
+       * failure. Rendered in the detail panel's Setup Guide section only —
+       * never composed into agent prompts.
+       */
+      setupGuide?: { content: string; error?: string };
+    }
   | {
       type: 'settingKeywords';
       moduleId: string;

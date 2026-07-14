@@ -631,7 +631,26 @@ export class SettingsPanel implements vscode.Disposable {
       }
     }
 
-    this.post({ type: 'moduleDetail', moduleId, fragments });
+    // Human/operator-facing setup guide — a top-level manifest field, loaded
+    // here for the detail panel only and NEVER composed into agent prompts.
+    // Resolved against the module root and gated by the SAME root-escape guard
+    // the fragment loop uses so a malicious `../../` path is rejected.
+    let setupGuide: { content: string; error?: string } | undefined;
+    const setupGuidePath = handle.manifest.setupGuidePath;
+    if (setupGuidePath) {
+      const abs = path.join(handle.rootPath, setupGuidePath);
+      if (!abs.startsWith(rootWithSep) && abs !== handle.rootPath) {
+        setupGuide = { content: '', error: 'setupGuidePath escapes module root' };
+      } else {
+        try {
+          setupGuide = { content: await fs.readFile(abs, 'utf-8') };
+        } catch (e) {
+          setupGuide = { content: '', error: (e as Error).message };
+        }
+      }
+    }
+
+    this.post({ type: 'moduleDetail', moduleId, fragments, setupGuide });
   }
 
   /**

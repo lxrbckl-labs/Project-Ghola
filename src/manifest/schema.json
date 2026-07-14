@@ -50,6 +50,11 @@
       "enum": ["essential", "recommended", "optional"],
       "description": "Onboarding priority — drives the setup walkthrough's recommendation order."
     },
+    "setupGuidePath": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path (relative to module root) to a markdown file of human/operator-facing setup instructions. Rendered in the module detail panel only; NEVER composed into agent prompts."
+    },
     "contributes": {
       "type": "object",
       "additionalProperties": false,

@@ -247,6 +247,13 @@ export interface ModuleManifest {
   trigger?: ModuleTrigger;
   /** Onboarding priority — drives the setup walkthrough's recommendation order. */
   tier?: ModuleTier;
+  /**
+   * Path (relative to the module root) to a markdown file of human/operator-facing
+   * setup instructions. Panel-only: the module detail view renders this in a
+   * dedicated Setup Guide section. It is NEVER read by the composer and never
+   * reaches an agent prompt — keep it top-level, not under `contributes`.
+   */
+  setupGuidePath?: string;
   contributes?: ContributionPoints;
 }
 

@@ -1,13 +1,14 @@
 {
   "id": "integration.atlassian-suite",
   "name": "Atlassian Suite",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Manages Atlassian credentials (email, Jira base URL, Bitbucket workspace, per-product API tokens in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, and token validation.",
   "proactive": false,
   "category": "integration",
   "kind": "capability",
   "trigger": "event",
   "tier": "essential",
+  "setupGuidePath": "setup.md",
   "contributes": {
     "promptFragments": [
       { "target": "tpm", "contentPath": "suite.md" }

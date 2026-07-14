@@ -149,6 +149,13 @@ interface UIState {
   /** Per-module detail payloads keyed by moduleId. Populated by 'moduleDetail' messages. */
   moduleDetails: Record<string, PromptFragmentDetail[]>;
   /**
+   * Per-module human/operator-facing setup guides keyed by moduleId. Populated
+   * from the 'moduleDetail' message's `setupGuide` field (only for modules that
+   * declare `setupGuidePath`). Rendered in the detail panel's Setup Guide
+   * section only — never part of any agent prompt.
+   */
+  moduleSetupGuides: Record<string, { content: string; error?: string }>;
+  /**
    * Per-setting keywords payloads keyed by `moduleId::settingKey`. Populated
    * by 'settingKeywords' messages. `error` strings live in `settingKeywordErrors`
    * under the same key so a successful payload (possibly empty) is unambiguous.
@@ -323,6 +330,7 @@ const state: UIState = {
   moduleView: { mode: 'list' },
   agentView: { mode: 'list' },
   moduleDetails: {},
+  moduleSetupGuides: {},
   settingKeywords: {},
   settingKeywordErrors: {},
   moduleSearch: '',
@@ -539,6 +547,9 @@ function handleMessage(msg: HostToWebviewMessage): void {
     case 'moduleDetail':
       // Cache the payload regardless. Only re-render if it's still the viewed module.
       state.moduleDetails[msg.moduleId] = msg.fragments;
+      if (msg.setupGuide) {
+        state.moduleSetupGuides[msg.moduleId] = msg.setupGuide;
+      }
       if (
         state.moduleView.mode === 'detail' &&
         state.moduleView.moduleId === msg.moduleId
@@ -745,6 +756,7 @@ function setSection(id: SectionId): void {
     state.moduleSearch = '';
     state.moduleView = { mode: 'list' };
     state.moduleDetails = {};
+    state.moduleSetupGuides = {};
     state.settingKeywords = {};
     state.settingKeywordErrors = {};
     // Discard any in-flight keyValue drafts — they only make sense while the
@@ -1928,6 +1940,23 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
   // Description block.
   if (m.description) {
     container.appendChild(textEl('div', m.description, 'desc'));
+  }
+
+  // Setup Guide — human/operator-facing instructions loaded by the host from
+  // the module's `setupGuidePath`. Rendered near the top (above Settings and
+  // the agent Instructions box) and styled distinctly so it never reads as
+  // agent prompt text. Only shown when the module declares a setup guide (i.e.
+  // the moduleDetail payload carried a `setupGuide` with content or an error).
+  const setupGuide = state.moduleSetupGuides[m.id];
+  if (setupGuide && (setupGuide.content || setupGuide.error)) {
+    container.appendChild(textEl('div', 'Setup Guide', 'details-header'));
+    const guidePre = el('pre', { class: 'prompt setup-guide' });
+    if (setupGuide.error) {
+      guidePre.textContent = `(read error: ${setupGuide.error})`;
+    } else {
+      guidePre.textContent = setupGuide.content;
+    }
+    container.appendChild(guidePre);
   }
 
   // Agent-target badge row + descriptor metadata pills — all in one wrapping

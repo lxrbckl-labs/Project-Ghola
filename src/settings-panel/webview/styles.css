@@ -253,6 +253,16 @@ pre.prompt {
   overflow: auto;
 }
 
+/* Human/operator-facing Setup Guide box. Deliberately DISTINCT from the agent
+   `.prompt.fragment` box: a left accent border plus an info tint so it reads as
+   operator instructions, not agent prompt text. Theme-safe via --vscode-* vars
+   with literal fallbacks. */
+pre.prompt.setup-guide {
+  background: var(--vscode-textBlockQuote-background, var(--vscode-textCodeBlock-background));
+  border: 1px solid var(--vscode-panel-border);
+  border-left: 3px solid var(--vscode-textLink-foreground, #3794ff);
+}
+
 /* Read-only prompt box with a hover-revealed copy button. The button is
    absolutely positioned in the top-right corner inside the scroll frame and
    stays hidden until the wrapper is hovered or the button itself is focused. */
