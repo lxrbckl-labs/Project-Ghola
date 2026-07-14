@@ -7,6 +7,7 @@ import { registerCommands } from './commands';
 import { CommitPushViewProvider } from './commit-push/provider';
 import { AtlassianClient } from './integration/atlassian-client';
 import { BitbucketPrClient } from './integration/bitbucket-pr-client';
+import { startBitbucketBridge } from './integration/bitbucket-bridge-server';
 import { ModuleLoader } from './modules/loader';
 import { ModuleState } from './modules/state';
 import { PromptComposer } from './prompts/composer';
@@ -232,7 +233,19 @@ export function activate(context: vscode.ExtensionContext): void {
   // instance lives for the extension's lifetime and naturally honors
   // token / workspace changes without rebuilding.
   const bitbucketPrClient = new BitbucketPrClient(atlassianBridge, readAtlassianSetting);
-  void bitbucketPrClient;
+
+  // Loopback bridge: exposes `bitbucketPrClient` to the CLI agent over a
+  // per-session bearer-authenticated HTTP server bound to 127.0.0.1. The
+  // Bitbucket API token stays host-side; the agent only receives the loopback
+  // URL + bearer token via the session env (wired into the launcher below).
+  // When the bridge fails to bind, `startBitbucketBridge` returns null and we
+  // inject no env — the CLI-side module then fails loud instead of silently
+  // targeting a phantom bridge.
+  const bbBridge = startBitbucketBridge(bitbucketPrClient, logger);
+  if (bbBridge) {
+    context.subscriptions.push({ dispose: () => bbBridge.dispose() });
+    session.setBridge(bbBridge.url, bbBridge.token);
+  }
 
   const panel = new SettingsPanel(
     context,

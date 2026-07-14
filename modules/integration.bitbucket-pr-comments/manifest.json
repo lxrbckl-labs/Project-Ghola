@@ -1,7 +1,7 @@
 {
   "id": "integration.bitbucket-pr-comments",
   "name": "PR Monitor",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Owns the Bitbucket PR review-comment workflow — addressing inbound comments via the address ordinal grammar, posting Review Mode findings outbound via the post ordinal grammar, optionally logging every comment to a persistent JSON file for downstream learning, and reusing Atlassian Suite credentials.",
   "proactive": false,
   "author": "aarbuckle",
@@ -94,6 +94,12 @@
         "label": "Log Include Replies",
         "default": true,
         "description": "When on, the log captures replies the agent POSTS in addition to the source comments it READS. When off, only inbound comments are logged. On gives the fullest training signal; off is preferred if you want the log to be a pure record of WHAT colleagues said."
+      },
+      "markReadyEnabled": {
+        "type": "boolean",
+        "label": "Mark Ready Enabled",
+        "default": false,
+        "description": "Enables the mark ready / ready for review verb, which marks the current branch's draft Bitbucket PR ready for review via the bb-bridge.mjs wrapper's mark-ready subcommand. This is a Bitbucket draft-to-ready write, always behind an explicit user confirmation gate before it runs. Off by default so first-run installs cannot flip a PR's state without opting in."
       }
     }
   }

@@ -14,14 +14,48 @@ The `bitbucketWorkspace` setting on the suite is also consulted by the client wh
 
 ## Capabilities
 
-The host-side client at `src/integration/bitbucket-pr-client.ts` exposes the following TypeScript methods, callable from the extension host process. These are NOT shell commands — TPM invokes them by asking the host to run the client, not by shelling out. The client wraps Bitbucket Cloud's REST API and threads every call through the AtlassianBridge so the Bitbucket token never crosses the agent boundary.
+TPM invokes every Bitbucket PR-comment operation by shelling out to a wrapper script that talks to a loopback HTTP bridge server the extension host runs:
 
-- `listPullRequestComments(repoSlug, prId)` — returns `{ status, comments, message? }`. On `status: 'ok'`, `comments` is a flat array of every comment on the PR (resolved + unresolved, inline + general). Each comment carries: `id` (its own Bitbucket comment id), `parentId` (`null` for top-level thread starters, a comment id for replies), `kind` (`'inline'` or `'general'`), `author` (`{ displayName: string, accountId: string }`), `body` (markdown source), `inline?` (`{ path, to, from? }` — present only when `kind === 'inline'`), `resolved` (boolean), `createdAt`, and `updatedAt`. On any non-`'ok'` status, `comments` is empty and `message` names the error. `message` may also be set on `status: 'ok'` when the 200-comment pagination cap is hit (truncation notice).
-- `replyToComment({ repoSlug, prId, parentId, body, inline? })` — posts a reply threaded under an existing comment. Returns `{ status, commentId?, message? }`: on `'ok'`, `commentId` is the new Bitbucket comment id. For inline comments, supply the parent's `inline` block (`{ path, to, from? }`) so the reply lands on the same file/line thread; without it the reply lands as a general comment.
-- `resolveComment({ repoSlug, prId, commentId })` — marks a comment thread resolved. Returns `{ status, message? }`.
-- `findOpenPrForBranch(repoSlug, branch)` — looks up the open PR (if any) for a given source branch on a given repo slug. Returns `{ prUrl: string | null, prTitle?: string, prId?: number }`: `prUrl` is `null` when no open PR exists.
+```
+node "$GHOLA_ROOT/scripts/bb-bridge.mjs" <subcommand> [flags]
+```
 
-If any of these calls is unavailable at runtime (host not initialized, module entry not loaded), refuse the trigger in one sentence and surface the failure to the user rather than improvising a workaround.
+The wrapper prints the operation's JSON result to stdout and exits non-zero on failure — loud, never silent. Internally the bridge server authenticates through the AtlassianBridge / `integration.atlassian-suite` credentials exactly as before, so the Bitbucket token still never crosses the agent boundary. The agent also never sees the bridge server's own bearer token: the wrapper reads `GHOLA_BRIDGE_TOKEN` from its environment. Never echo it in chat or logs, and never pass it as a flag — this is the same secrets discipline the module already applies to the Bitbucket token itself.
+
+Five subcommands are available:
+
+- `find-pr --repo <slug> --branch <name>` — resolves the open PR id for the current branch.
+- `list-comments --repo <slug> --pr <id>` — fetches all PR comments (resolved + unresolved, inline + general); this is the `address comments` snapshot source. Each comment carries: `id`, `parentId` (`null` for top-level thread starters), `kind` (`'inline'`/`'general'`), `author` (`{ displayName, accountId }`), `body`, `inline?` (`{ path, to, from? }`), `resolved`, `createdAt`, `updatedAt`.
+- `reply --repo <slug> --pr <id> --parent <commentId> [--inline-path <p> --inline-to <n> --inline-from <n>]` — posts a reply threaded under an existing comment. The reply body is NOT a flag — it is piped via STDIN (see the heredoc pattern below). Supply the `--inline-*` flags when replying to an inline comment so the reply lands on the same file/line thread; omit them for general comments.
+- `resolve --repo <slug> --pr <id> --comment <id>` — marks a comment thread resolved.
+- `mark-ready --repo <slug> --pr <id>` — marks a DRAFT PR ready for review. This is a Bitbucket write; see "Mark Ready Verb" below for the confirmation gate that guards it.
+
+Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). PR id comes from `find-pr`.
+
+### Posting a reply (stdin body)
+
+Reply bodies are multi-line, so they are piped into the wrapper via a heredoc rather than passed as a flag:
+
+```bash
+node "$GHOLA_ROOT/scripts/bb-bridge.mjs" reply --repo my-repo --pr 42 --parent 9876 <<'EOF'
+Fixed by extracting the validation into validateInput() -- see src/Foo.ts:88.
+EOF
+```
+
+For an inline reply, add the `--inline-*` flags before the heredoc:
+
+```bash
+node "$GHOLA_ROOT/scripts/bb-bridge.mjs" reply --repo my-repo --pr 42 --parent 9876 \
+  --inline-path src/Foo.ts --inline-to 88 <<'EOF'
+Fixed by extracting the validation into validateInput() -- see src/Foo.ts:88.
+EOF
+```
+
+### Missing bridge
+
+Exit code 2 from the wrapper means the bridge server is unavailable — this is not a Ghola session, or the extension host is not running the loopback server. Surface this to the user in one sentence and stop. Do not retry and do not fall back to any other auth path.
+
+If the wrapper script itself is missing or `node` fails to launch it, refuse the trigger in one sentence and surface the failure to the user rather than improvising a workaround.
 
 ## Trigger Grammar
 
@@ -31,6 +65,7 @@ The user invokes this flow by typing one of:
 - `address <ordinals>` — `address 1`, `address 1, 3-5`, etc. Picks individual ordinals from the current snapshot.
 - `address all` — every comment in the snapshot (TPM still asks per-action what to do).
 - `address all <author-substring>` — filter by comment author display name (case-insensitive substring match; e.g., `address all coderabbit`).
+- `mark ready` / `ready for review` — marks the current branch's draft PR ready for review via the `mark-ready` bridge subcommand. This is a Bitbucket write; see "Mark Ready Verb" below for the confirmation gate and the `markReadyEnabled` setting that gate it.
 
 Ambiguous gestures (`address that one`, `address the rest`) should be confirmed with the user, not guessed. When the user references an ordinal that isn't in the current snapshot, ask whether they meant to refresh the snapshot first.
 
@@ -46,7 +81,7 @@ The workspace is not part of the slug — it lives on the Atlassian Suite as `bi
 
 ## Snapshot Lifecycle
 
-A snapshot is the list of comments returned by the most recent `listPullRequestComments` call, with its ordinals assigned. The snapshot persists for the rest of the session unless:
+A snapshot is the list of comments returned by the most recent `list-comments` bridge call, with its ordinals assigned. The snapshot persists for the rest of the session unless:
 
 - The user types `address comments` again — refreshes the snapshot, reassigns ordinals from 1.
 - The user types `address comments refresh` — explicit refresh without auto-running triage.
@@ -56,8 +91,8 @@ Within a snapshot, ordinals are stable. If the user resolves comments 1, 2, and 
 
 ## Round-Trip Flow
 
-1. **PR resolution.** Resolve the open PR for the current branch via `findOpenPrForBranch(repoSlug, branch)`. Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). The client returns `values[0]` from Bitbucket's response — the first PR in whatever order Bitbucket returns (no explicit sort is requested). In practice this is the most recently created open PR for the branch, but the client does not enforce a sort order. No matches -> ask the user.
-2. **Fetch.** Call `listPullRequestComments(repoSlug, prId)`. The client filters out deleted comments, any comment missing a numeric `id`, and any comment with an empty body before returning. Include resolved + unresolved in the snapshot (mark them visually).
+1. **PR resolution.** Resolve the open PR for the current branch via `find-pr --repo <slug> --branch <name>`. Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). The bridge returns `values[0]` from Bitbucket's response — the first PR in whatever order Bitbucket returns (no explicit sort is requested). In practice this is the most recently created open PR for the branch, but no sort order is enforced. No matches -> ask the user.
+2. **Fetch.** Call `list-comments --repo <slug> --pr <id>`. The bridge filters out deleted comments, any comment missing a numeric `id`, and any comment with an empty body before returning. Include resolved + unresolved in the snapshot (mark them visually).
 3. **Number + present.** Assign globally stable ordinals across the session. Group by file/thread. Print in chat:
    ```
    [1] inline - src/Foo.cs:42 - @coderabbit - unresolved
@@ -73,27 +108,31 @@ Within a snapshot, ordinals are stable. If the user resolves comments 1, 2, and 
 6. **Generate replies.** After SWEs return, write each reply using `parameters.replyInstruction`. 1-2 sentences. Never include severity/rating/SWE attribution.
 
    **CodeRabbit persona overlay.** If the parent comment's author display name contains "coderabbit" (case-insensitive), prepend the `parameters.coderabbitReplyPersona` instruction onto the `parameters.replyInstruction` before generating the reply. The persona shapes voice/tone; the instruction shapes content. If `parameters.coderabbitReplyPersona` is empty, treat CodeRabbit replies the same as any other (no overlay).
-7. **Approve + post.** Show all generated replies in one block. User confirms with `ok / revise N: <change> / cancel`. On `ok`, post each via `replyToComment`, passing the comment's own `.id` as `parentId` (not its `.parentId` field — that is the comment's parent, which is `null` for top-level threads) and the parent comment's `inline` block (if any) so the reply lands on the correct thread.
-8. **Flag falsely-resolved comments.** If `parameters.flagFalselyResolved` is enabled, scan each unresolved comment (and the text of its latest reply, if any) for phrases that claim resolution — e.g., "resolved", "fixed", "done", "addressed", "handled", "taken care of". For each match, list the comment with its `file:line` location and a short excerpt of the claim phrase. Do not call `resolveComment` automatically; the user reviews the list and resolves manually. If `parameters.flagFalselyResolved` is disabled, skip this scan entirely.
+7. **Approve + post.** Show all generated replies in one block. User confirms with `ok / revise N: <change> / cancel`. On `ok`, post each via the `reply` subcommand, piping the reply body via stdin (per the heredoc pattern in Capabilities), passing the comment's own `.id` as `--parent` (not its `.parentId` field — that is the comment's parent, which is `null` for top-level threads) and the parent comment's `inline` block (if any) as `--inline-path`/`--inline-to`/`--inline-from` so the reply lands on the correct thread.
+8. **Flag falsely-resolved comments.** If `parameters.flagFalselyResolved` is enabled, scan each unresolved comment (and the text of its latest reply, if any) for phrases that claim resolution — e.g., "resolved", "fixed", "done", "addressed", "handled", "taken care of". For each match, list the comment with its `file:line` location and a short excerpt of the claim phrase. Do not call `resolve` automatically; the user reviews the list and resolves manually. If `parameters.flagFalselyResolved` is disabled, skip this scan entirely.
 
 ## Failure Handling
 
+Every bridge subcommand's result surfaces two things: the wrapper's process exit code (zero on success, non-zero on failure) and, on failure, a JSON body on stdout carrying a `status` field plus a `message`. The taxonomy below documents `status` values as they map onto the wrapper's output — treat "the client returns" and "the wrapper reports" as the same thing; the wrapper is a thin pass-through onto the same host-side response shape.
+
+- Exit code 2 -> the bridge server itself is unavailable (not a Ghola session, or the extension host isn't running the loopback server). This is not a Bitbucket error and there is no `status` field to inspect. Surface it to the user in one sentence — "the Bitbucket bridge isn't available in this session" — and stop; do not retry, do not fall back to another auth path.
 - Per-comment post failure -> tell the user, leave audit untouched, continue the batch. No silent retries (could double-post on timeouts). User retries via `address <ordinal>` again.
-- `status: 'network-error'` -> the client could not reach Bitbucket's API: either the 8-second AbortController timeout fired (message "Request timed out — try again") or a lower-level network error occurred (message "Network error — try again"). Surface the message to the user and suggest retrying. Do not retry automatically — on a timeout the request may have reached the server and a retry could double-post.
-- `status: 'not-found'` with `message` starting "Missing repo" -> the client detected that the `repoSlug` is empty or `prId` / `commentId` / `parentId` is not a finite number before making any request. This is a call-site gap, not a Bitbucket error. Surface the message to the user so they can check repo-slug resolution and PR-id lookup.
-- `status: 'unknown-error'` with `message` "Reply body is empty" -> the client detected an empty reply body before making any request in `replyToComment`. Surface the message and ask the user to provide reply text before retrying.
-- `status: 'unauthorized'` with `message` starting "Missing:" -> the client detected that `email`, `bitbucketWorkspace`, or `bitbucketToken` is unset before making any request. Cancel the batch and tell the user which fields are missing (the message names them) — this is a configuration gap, not a token-rejection; point the user at the Atlassian Suite settings to fill in the missing values.
-- 401 / 403 from the API (client returns `status: 'unauthorized'` with message "401 Unauthorized..." or `status: 'forbidden'`) -> cancel the batch, point the user at the Atlassian Suite's Set Token button. Do not echo the token, do not suggest the user paste it into chat.
+- `status: 'network-error'` -> the bridge could not reach Bitbucket's API: either the 8-second AbortController timeout fired (message "Request timed out — try again") or a lower-level network error occurred (message "Network error — try again"). Surface the message to the user and suggest retrying. Do not retry automatically — on a timeout the request may have reached the server and a retry could double-post.
+- `status: 'not-found'` with `message` starting "Missing repo" -> the bridge detected that `--repo` is empty or `--pr` / `--comment` / `--parent` is not a finite number before making any request. This is a call-site gap, not a Bitbucket error. Surface the message to the user so they can check repo-slug resolution and PR-id lookup.
+- `status: 'unknown-error'` with `message` "Reply body is empty" -> the bridge detected an empty reply body (stdin) before making any request in `reply`. Surface the message and ask the user to provide reply text before retrying.
+- `status: 'unauthorized'` with `message` starting "Missing:" -> the bridge detected that `email`, `bitbucketWorkspace`, or `bitbucketToken` is unset before making any request. Cancel the batch and tell the user which fields are missing (the message names them) — this is a configuration gap, not a token-rejection; point the user at the Atlassian Suite settings to fill in the missing values.
+- 401 / 403 from the API (`status: 'unauthorized'` with message "401 Unauthorized..." or `status: 'forbidden'`) -> cancel the batch, point the user at the Atlassian Suite's Set Token button. Do not echo the token, do not suggest the user paste it into chat.
 - 404 on the PR id -> the PR may have been merged or closed since the snapshot was taken. Refresh the snapshot via a fresh `address comments` rather than retrying the stale id.
-- 429 (rate limit) -> the client maps 429 to `status: 'unknown-error'` with a `message` of the form `"<status-code> <statusText>"` (e.g. "429 Too Many Requests") or `"429 request failed"` when statusText is absent. Detect this by checking `status === 'unknown-error' && message.startsWith('429 ')` (note the trailing space — avoids false positives from other codes that might begin with the digits "429"). Stop the batch, tell the user what completed, and recommend they retry after a short pause. Do not implement automatic backoff in this module's flow; that belongs in the client.
-- 5xx / other non-2xx -> the client maps all HTTP errors not explicitly handled (400, 409, 422, 500, 502, 503, etc.) to `status: 'unknown-error'` with a sanitized `message` of the form `"<status-code> <statusText>"`. Surface `message` to the user so they can see the raw code; do not retry automatically.
-- Snapshot staleness: if a comment in the snapshot has been deleted/resolved upstream between fetch and post, the client returns `not-found` — surface this to the user and continue.
+- 429 (rate limit) -> maps to `status: 'unknown-error'` with a `message` of the form `"<status-code> <statusText>"` (e.g. "429 Too Many Requests") or `"429 request failed"` when statusText is absent. Detect this by checking `status === 'unknown-error' && message.startsWith('429 ')` (note the trailing space — avoids false positives from other codes that might begin with the digits "429"). Stop the batch, tell the user what completed, and recommend they retry after a short pause. Do not implement automatic backoff in this module's flow; that belongs in the bridge.
+- 5xx / other non-2xx -> all HTTP errors not explicitly handled (400, 409, 422, 500, 502, 503, etc.) map to `status: 'unknown-error'` with a sanitized `message` of the form `"<status-code> <statusText>"`. Surface `message` to the user so they can see the raw code; do not retry automatically. This applies to `mark-ready` too — a `400` from `mark-ready` (e.g. the PR is already ready) should be surfaced loudly rather than treated as success.
+- Snapshot staleness: if a comment in the snapshot has been deleted/resolved upstream between fetch and post, the bridge returns `not-found` — surface this to the user and continue.
 
 ## Hard Rules
 
 - **No auto-posting.** Every reply requires explicit `ok` confirmation. `address all` still gates on the generate + approve step.
-- **No token echo.** The host-side client owns auth — tokens never appear in chat, logs, or error messages. Already enforced by the client.
-- **No git writes / no Jira writes.** Read-only git only. This module never touches Jira.
+- **No token echo.** Neither secret ever appears in chat, logs, or error messages: the Bitbucket token stays behind the AtlassianBridge on the host side, and the bridge server's own bearer token (`GHOLA_BRIDGE_TOKEN`) is read from the environment by the `bb-bridge.mjs` wrapper and never surfaced to or handled by the agent. Never echo either token, and never pass a token as a flag.
+- **No git writes / no Jira writes.** Read-only git only (local git — `git commit`, `git push`, etc.). This module never touches Jira. This is a separate concern from `mark ready` below: marking a PR ready is a Bitbucket API write, not a local git write, and is allowed — but only behind the explicit confirmation gate and the `markReadyEnabled` setting.
+- **`mark ready` requires explicit confirmation.** Same discipline as reply posting: show intent (repo, PR id, branch), require the user to type `ok`, never auto-run. Refuse the verb outright if `parameters.markReadyEnabled` is false.
 - **No new code in the work repo outside what SWEs are dispatched to do.** TPM does not author code in this flow; SWEs do.
 - **Generated reply must not include severity, rating, attribution, or any Ghola-internal filter metadata.** It's a public Bitbucket comment.
 - **Don't replace the user's words in manual replies.** When the user supplies reply text, post it verbatim (no generation step).
@@ -140,12 +179,12 @@ For each selected finding:
    - `inline-when-possible` — place inline at the file:line cited in the finding when one is parseable; fall back to the PR overview otherwise.
    - `inline-only` — refuse to post if no file:line is parseable; surface the refusal per ordinal so the user knows which findings were skipped.
    - `overview-only` — always post to the PR overview, regardless of any file:line in the finding.
-5. **Post.** Use the same AtlassianBridge / Bitbucket REST write path the `address` verb uses for replies. Do not introduce new infrastructure — call the same helper with the polished comment text and the resolved target placement. For inline placement, supply the `inline` block (`{ path, to }`) parsed from the finding's `file:line`. For overview placement, omit the `inline` block so the comment lands as a general PR comment.
+5. **Post.** Use the same `reply` bridge subcommand the `address` verb uses to post replies. Do not introduce new infrastructure — invoke `node "$GHOLA_ROOT/scripts/bb-bridge.mjs" reply` with the polished comment text piped via stdin and the resolved target placement. For inline placement, supply `--inline-path`/`--inline-to` parsed from the finding's `file:line`. For overview placement, omit the `--inline-*` flags so the comment lands as a general PR comment.
 6. **Report.** After posting, TPM reports each posted comment id back to the user as audit trail, in the same shape as the `address` post-batch summary.
 
 ### Symmetry With The Address Verb
 
-`address <ordinals>` is inbound (read inbound review comments, triage, reply); `post <ordinals>` is outbound (read SWE findings, polish, post). They share the ordinal grammar, the user-approval gate, and the Bitbucket REST write path. This module owns both halves of the PR-comment workflow — there is no separate "post" module.
+`address <ordinals>` is inbound (read inbound review comments, triage, reply); `post <ordinals>` is outbound (read SWE findings, polish, post). They share the ordinal grammar, the user-approval gate, and the same `bb-bridge.mjs` wrapper's `reply` subcommand as the write path. This module owns both halves of the PR-comment workflow — there is no separate "post" module.
 
 ### Dependency On tool.lenses
 
@@ -163,7 +202,7 @@ When `parameters.logCommentsEnabled` is true, PR comments seen during the `addre
 **What gets logged is gated by `parameters.logIncludeReplies`.** This setting decides whether the agent's own POSTED replies are logged alongside the inbound comments it READ:
 
 - **When on (default):** log inbound comments AND the replies the agent posts (the full round-trip, i.e. every entry regardless of its `isReply` flag). This is the current behavior and gives the fullest downstream training signal.
-- **When off:** log ONLY inbound comments (`isReply: false`). Skip writing a log entry for any reply the agent itself posts via `replyToComment`; do not append the `isReply: true` entry. This keeps the log a pure record of what colleagues said, with the agent's own outbound replies excluded. The address/post workflow is otherwise unchanged; only the reply-side log write is suppressed.
+- **When off:** log ONLY inbound comments (`isReply: false`). Skip writing a log entry for any reply the agent itself posts via the `reply` subcommand; do not append the `isReply: true` entry. This keeps the log a pure record of what colleagues said, with the agent's own outbound replies excluded. The address/post workflow is otherwise unchanged; only the reply-side log write is suppressed.
 
 Consult `parameters.logIncludeReplies` at the moment you would write a reply's log entry: if it is off, skip that write.
 
@@ -212,6 +251,23 @@ When `parameters.pipelineStatusEnabled` is true, TPM can fetch and report the la
 - **Read-only, always.** Never call any endpoint that triggers a new pipeline, stops a running one, or re-runs a failed one. If the user asks to run or re-run a build, refuse in one sentence and point them at Bitbucket directly; this module reports build state, it does not control builds.
 - When `parameters.pipelineStatusEnabled` is false, TPM does not fetch pipeline status; if the user asks, note that Pipeline Status is disabled in the Modules tab and point them there. The comment and post workflows are unaffected either way.
 
+## Mark Ready Verb
+
+`mark ready` / `ready for review` marks the current branch's draft Bitbucket PR ready for review. Unlike `address` and `post`, this is not a comment-thread action — it flips the PR's draft state via the `mark-ready` bridge subcommand. It is a Bitbucket API write, so it carries the same confirmation discipline as posting a reply, plus its own feature gate.
+
+1. **Gate check.** If `parameters.markReadyEnabled` is false, refuse the trigger in one sentence: "Mark Ready is disabled in the Modules tab. Enable it to mark PRs ready for review." Do not proceed to PR resolution.
+2. **PR resolution.** Resolve the open PR for the current branch via `find-pr --repo <slug> --branch <name>` (same resolution as the `address`/`post` flows). No matches -> ask the user.
+3. **Show intent.** Before doing anything, state plainly what is about to happen: the repo slug, the PR id, and the branch. This is a one-way state change on Bitbucket (draft -> ready) — the user must see exactly what will be affected before confirming.
+4. **Confirm.** Require the user to type `ok` (or explicitly cancel). No auto-run, even under `mark ready` invoked with no further discussion — always show intent and wait for confirmation first, mirroring the reply-posting gate. There is no `requireUserApproval`-style bypass for this verb; the gate is not configurable off.
+5. **Execute.** On `ok`, invoke `node "$GHOLA_ROOT/scripts/bb-bridge.mjs" mark-ready --repo <slug> --pr <id>`.
+6. **Report.** On success, tell the user the PR is now ready for review (include the PR id/link if the bridge's JSON result carries one). On `not-found` (PR id stale — it may have merged/closed since resolution), `unauthorized` (credentials gap or token rejection, per the Failure Handling taxonomy), or a `400`-class `unknown-error` (e.g. the PR was already ready), surface the exact status/message loudly rather than treating anything other than a clean success as done.
+
+### Module-Disabled Vs Feature-Disabled
+
+- **`integration.bitbucket-pr-comments` disabled**: `mark ready` is unavailable (the whole module is off).
+- **Module enabled, `markReadyEnabled` off (default)**: `mark ready` refuses per the gate-check message above. `address`/`post` verbs are unaffected.
+- **Module enabled, `markReadyEnabled` on**: `mark ready` works, still gated per-invocation on the explicit `ok` confirmation in step 4.
+
 ## Role-Specific Notes
 
 ### TPM
@@ -219,7 +275,8 @@ When `parameters.pipelineStatusEnabled` is true, TPM can fetch and report the la
 - You are the dispatcher. You read this module's content when the user invokes the trigger grammar above, or proactively offer it when you notice an open PR with unresolved comments at session start (but do not auto-fetch — ask first).
 - You hold the global ordinal numbering for the session. Ordinals are stable until a fresh `address comments` call refreshes the snapshot. If the user references an ordinal after a refresh, confirm which snapshot they mean.
 - Maintain a per-session audit of which comments have been addressed and how (code-fix, manual reply, dismiss). Surface the audit when the user asks for a status check, and include it in the closing summary of any batch.
-- For the `post <ordinals>` verb: parse the ordinals, source findings from the most recent Review Mode dispatch in session memory, polish each per `parameters.postPolishPrompt`, gate per `parameters.requireUserApproval`, place per `parameters.postCommentLocation`, and post via the AtlassianBridge write path. Report posted comment ids back to the user as audit trail. If `parameters.postOrdinalsEnabled` is false, refuse per the module-disabled message above.
+- For the `post <ordinals>` verb: parse the ordinals, source findings from the most recent Review Mode dispatch in session memory, polish each per `parameters.postPolishPrompt`, gate per `parameters.requireUserApproval`, place per `parameters.postCommentLocation`, and post via the `bb-bridge.mjs` wrapper's `reply` subcommand. Report posted comment ids back to the user as audit trail. If `parameters.postOrdinalsEnabled` is false, refuse per the module-disabled message above.
+- For the `mark ready` verb: gate on `parameters.markReadyEnabled`, resolve the PR, show intent, require explicit `ok`, then invoke the wrapper's `mark-ready` subcommand. Report success or surface the failure loudly per the Mark Ready Verb section above.
 - Settings (read from the module's parameters block in the Session Manifest):
   - `parameters.replyInstruction` — feed into the reply-generation step. If absent from the Session Manifest, the default applies: `"Write a 1-2 sentence professional PR reply confirming what was fixed and where. No double-dashes."`
   - `parameters.coderabbitReplyPersona` — optional voice/tone overlay layered onto `parameters.replyInstruction` when the parent comment author is CodeRabbit. If absent from the Session Manifest, the default applies: empty string (no overlay).
@@ -229,6 +286,7 @@ When `parameters.pipelineStatusEnabled` is true, TPM can fetch and report the la
   - `parameters.minRatingToPost` — minimum Rating a finding must carry for `post all` / `post all <lens>` to include it. Explicit ordinals bypass the filter. If absent from the Session Manifest, the default applies: `1` (include everything).
   - `parameters.postCommentLocation` — where the comment lands (`inline-when-possible`, `inline-only`, `overview-only`). If absent from the Session Manifest, the default applies: `"inline-when-possible"`.
   - `parameters.requireUserApproval` — when true, present polished comments for approval before posting. If absent from the Session Manifest, the default applies: `true` (the safety gate is on).
+  - `parameters.markReadyEnabled` — when false, refuse the `mark ready` verb outright. If absent from the Session Manifest, the default applies: `false` (the verb is disabled — off by default since it's a Bitbucket write).
 - When `parameters.logCommentsEnabled` is true, fetched comments are appended to `parameters.logFilePath` as JSON lines. Whether your own posted replies are logged too is gated by `parameters.logIncludeReplies`: on (default) logs inbound comments plus posted replies; off logs only inbound comments and skips the reply entries. You do not need to invoke logging explicitly; it happens passively during the address/post workflow.
 
 ### SWE

@@ -52,6 +52,31 @@ export class SessionLauncher {
     private readonly logger?: vscode.OutputChannel,
   ) {}
 
+  /**
+   * Loopback URL of the host-side Bitbucket bridge, when it started. Injected
+   * into the session terminal env (never the banner/log) so the CLI agent can
+   * reach the host-side `BitbucketPrClient`. Undefined when the bridge failed
+   * to bind — in that case no bridge env is injected.
+   */
+  private bridgeUrl?: string;
+
+  /**
+   * Per-session bearer token authenticating the CLI agent to the bridge. SECRET
+   * — it is injected into the terminal env ONLY and must never be written to
+   * the banner, a log line, or any `sendText` payload.
+   */
+  private bridgeToken?: string;
+
+  /**
+   * Supply the bridge coordinates after construction. Called once at activation
+   * only when the bridge bound successfully; if never called, launches proceed
+   * with no bridge env and the CLI-side module fails loud.
+   */
+  setBridge(url: string, token: string): void {
+    this.bridgeUrl = url;
+    this.bridgeToken = token;
+  }
+
   async launch(options?: LaunchOptions): Promise<void> {
     // One-shot dispatch mode: a caller (e.g. the Commit-and-Push button) wants a
     // self-contained prompt delivered to a fresh CLI, NOT a full TPM session.
@@ -60,7 +85,6 @@ export class SessionLauncher {
 
     const enabled = this.loader.getEnabled();
     const composedAgentIds = this.detectComposedAgentIds(enabled);
-    const banner = formatBanner({ enabledModules: enabled, composedAgentIds });
 
     const shellPath = this.pickShell();
     const shellArgs = this.pickShellArgs();
@@ -78,6 +102,30 @@ export class SessionLauncher {
     const cliCommand = (selectedAlias !== '' ? selectedAlias : cfg.get<string>('cliCommand', 'claude')).trim();
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate').trim();
 
+    // Computed once and reused for both the env block below and the banner,
+    // so the effective work dir's version/branch is never read twice.
+    const version = this.readExtensionVersion();
+    const effectiveDir = cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const branch = this.readGitBranch(effectiveDir);
+
+    const perfCores = cfg.get<number>('swe.performanceCores', 2);
+    const effCores = cfg.get<number>('swe.efficiencyCores', 1);
+    const perfModel = cfg.get<string>('swe.performanceCoresModel', 'opus');
+    const effModel = cfg.get<string>('swe.efficiencyCoresModel', 'sonnet');
+    const qaCount = cfg.get<number>('qa.count', 1);
+    const qaModel = cfg.get<string>('qa.model', 'sonnet');
+
+    const banner = formatBanner({
+      enabledModules: enabled,
+      composedAgentIds,
+      version,
+      cwd: effectiveDir,
+      branch,
+      team: { perfCores, effCores, perfModel, effModel, qaCount, qaModel },
+      cliCommand,
+      sessionCommand,
+    });
+
     // Base env shared by all launches. The GHOLA_{TPM,SWE,QA}_PROMPT_FILE
     // scaffolding is only needed for a full TPM session that may spawn
     // subagents, so it is omitted in one-shot dispatch mode.
@@ -85,21 +133,23 @@ export class SessionLauncher {
       GHOLA_ROOT: this.extensionPath,
       // Deterministic input for the startup sequence: the extension's own
       // semver, so the session can detect/report which Ghola build launched it.
-      GHOLA_VERSION: this.readExtensionVersion(),
+      GHOLA_VERSION: version,
       // Deterministic input for the startup sequence: the current git branch
       // of the repo the terminal is opening in (empty string when the
       // effective work dir is not a git repo or git is unavailable).
-      GHOLA_BRANCH: this.readGitBranch(cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath),
-      SWE_PERFORMANCE_CORES: String(cfg.get<number>('swe.performanceCores', 2)),
-      SWE_EFFICIENCY_CORES: String(cfg.get<number>('swe.efficiencyCores', 1)),
-      SWE_AGENT_COUNT: String(
-        cfg.get<number>('swe.performanceCores', 2) + cfg.get<number>('swe.efficiencyCores', 1),
-      ),
-      SWE_PERFORMANCE_MODEL: cfg.get<string>('swe.performanceCoresModel', 'opus'),
-      SWE_EFFICIENCY_MODEL: cfg.get<string>('swe.efficiencyCoresModel', 'sonnet'),
-      QA_AGENT_COUNT: String(cfg.get<number>('qa.count', 1)),
-      QA_MODEL: cfg.get<string>('qa.model', 'sonnet'),
+      GHOLA_BRANCH: branch,
+      SWE_PERFORMANCE_CORES: String(perfCores),
+      SWE_EFFICIENCY_CORES: String(effCores),
+      SWE_AGENT_COUNT: String(perfCores + effCores),
+      SWE_PERFORMANCE_MODEL: perfModel,
+      SWE_EFFICIENCY_MODEL: effModel,
+      QA_AGENT_COUNT: String(qaCount),
+      QA_MODEL: qaModel,
     };
+    // Bridge coordinates go into the terminal env ONLY (never the banner, a log
+    // line, or any sendText). The token is a per-session secret; keep it here.
+    if (this.bridgeUrl) env.GHOLA_BRIDGE_URL = this.bridgeUrl;
+    if (this.bridgeToken) env.GHOLA_BRIDGE_TOKEN = this.bridgeToken;
     if (!oneShot) {
       // Per-workspace paths written by SettingsPanel.writeAllAgentPromptFiles()
       // immediately before launch. Each path is stable across reopens of the

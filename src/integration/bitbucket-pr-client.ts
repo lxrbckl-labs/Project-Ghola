@@ -92,6 +92,11 @@ export interface PrResolveResult {
   message?: string;
 }
 
+export interface PrReadyResult {
+  status: BitbucketPrStatus;
+  message?: string;
+}
+
 // ─── Minimal slices of the Bitbucket response shapes we read ──────────────
 
 interface BitbucketUser {
@@ -129,6 +134,13 @@ interface BitbucketComment {
 interface BitbucketCommentListResponse {
   values?: BitbucketComment[];
   next?: string;
+}
+
+/** Minimal slice of `GET /pullrequests/{id}` we read for the ready flip —
+ *  Bitbucket's PUT treats the request as a full update, so we echo `title`
+ *  back to avoid a spurious 400 when we clear the draft flag. */
+interface BitbucketPullRequest {
+  title?: string;
 }
 
 /**
@@ -304,6 +316,38 @@ export class BitbucketPrClient {
 
     const res = await this.request(url, 'PUT', auth);
     if (!res.ok) return { status: res.status, message: res.message };
+    return { status: 'ok' };
+  }
+
+  /**
+   * Flip a draft PR to ready-for-review by clearing its `draft` flag.
+   *
+   * `GET /2.0/repositories/{workspace}/{repo_slug}/pullrequests/{pr_id}` then
+   * `PUT` the same URL with `{ title, draft: false }`. We always GET-then-PUT
+   * for predictability, and echo the current `title` back because Bitbucket's
+   * PUT-pullrequest endpoint treats the body as a full update and can reject
+   * the request with a 400 when `title` is omitted. Only the status is
+   * surfaced — the post-update PR body is not needed by the agent flow.
+   */
+  async markPrReady(args: { repoSlug: string; prId: number }): Promise<PrReadyResult> {
+    if (!args.repoSlug || !Number.isFinite(args.prId)) {
+      return { status: 'not-found', message: 'Missing repo or PR id' };
+    }
+    const { email, workspace, token, missing } = await this.readAuthContext();
+    if (missing) return { status: 'unauthorized', message: missing };
+
+    const auth = this.buildAuthHeader(email, token);
+    const url =
+      `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
+      `/${encodeURIComponent(args.repoSlug)}/pullrequests/${encodeURIComponent(String(args.prId))}`;
+
+    const getRes = await this.request(url, 'GET', auth);
+    if (!getRes.ok) return { status: getRes.status, message: getRes.message };
+    const current = getRes.body as BitbucketPullRequest | undefined;
+    const title = typeof current?.title === 'string' ? current.title : '';
+
+    const putRes = await this.request(url, 'PUT', auth, { title, draft: false });
+    if (!putRes.ok) return { status: putRes.status, message: putRes.message };
     return { status: 'ok' };
   }
 
