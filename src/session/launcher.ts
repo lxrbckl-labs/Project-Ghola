@@ -319,8 +319,45 @@ export class SessionLauncher {
       );
       return undefined;
     }
+
+    // Never land the terminal on a non-git parent when a real repo dir is
+    // known. The fast-path can resolve to a bare parent (e.g. an explicit
+    // `fastpathDirectory` of `~/projects` whose auto-cd candidate is missing),
+    // which opens the session in a dir that just contains many clones. Prefer
+    // the fast-path target only when it is itself a git repo (this preserves
+    // the legitimate `/mnt/c` -> WSL-native-clone translation, whose target IS
+    // a repo); otherwise, if the workspace folder is a git repo, open there —
+    // that is where the code actually lives.
+    if (this.isGitRepo(target)) {
+      this.logger?.appendLine(`[session] fast-path: opening terminal in ${target}`);
+      return target;
+    }
+    if (this.isGitRepo(workspacePath)) {
+      this.logger?.appendLine(
+        `[session] fast-path: target ${target} is not a git repo; opening terminal in workspace folder ${workspacePath}`,
+      );
+      return workspacePath;
+    }
     this.logger?.appendLine(`[session] fast-path: opening terminal in ${target}`);
     return target;
+  }
+
+  /**
+   * True when `dir` is inside a git work tree (`git rev-parse
+   * --is-inside-work-tree` succeeds). Used to keep the terminal from opening in
+   * a non-git parent when a real repo dir is known. Never throws.
+   */
+  private isGitRepo(dir: string): boolean {
+    try {
+      const result = childProcess.spawnSync(
+        'git',
+        ['-C', dir, 'rev-parse', '--is-inside-work-tree'],
+        { encoding: 'utf8' },
+      );
+      return result.status === 0 && typeof result.stdout === 'string' && result.stdout.trim() === 'true';
+    } catch {
+      return false;
+    }
   }
 
   /**

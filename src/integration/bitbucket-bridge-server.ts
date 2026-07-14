@@ -59,59 +59,77 @@ export interface BitbucketBridgeHandle {
 }
 
 /**
- * Start the loopback bridge. Returns a handle carrying the bound `url` and the
- * per-session `token`, or `null` when the server fails to bind — in which case
- * the caller injects no env and the CLI-side module fails loud rather than
+ * Start the loopback bridge. Resolves to a handle carrying the bound `url` and
+ * the per-session `token`, or `null` when the server fails to bind — in which
+ * case the caller injects no env and the CLI-side module fails loud rather than
  * silently talking to a phantom bridge.
+ *
+ * The returned promise resolves only AFTER the server is actually listening, so
+ * the random port (`server.address().port`) is guaranteed known by then. This
+ * matters: `listen()` binds asynchronously, so reading `server.address()`
+ * synchronously would return `null` and yield a bridge with no usable url.
  */
 export function startBitbucketBridge(
   client: BitbucketPrClient,
   getTicket: GetTicketFn,
   logger?: vscode.OutputChannel,
-): BitbucketBridgeHandle | null {
-  const token = crypto.randomBytes(32).toString('hex');
-  const expectedAuth = Buffer.from(`Bearer ${token}`);
+): Promise<BitbucketBridgeHandle | null> {
+  return new Promise((resolve) => {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expectedAuth = Buffer.from(`Bearer ${token}`);
 
-  const server = http.createServer((req, res) => {
-    handleRequest(req, res, client, getTicket, expectedAuth).catch(() => {
-      // Defensive: handleRequest already wraps its own body in try/catch, but a
-      // failure before/around that (or in the catch itself) must never leak.
-      sendJson(res, 500, { status: 'unknown-error', message: 'bridge error' });
+    const server = http.createServer((req, res) => {
+      handleRequest(req, res, client, getTicket, expectedAuth).catch(() => {
+        // Defensive: handleRequest already wraps its own body in try/catch, but a
+        // failure before/around that (or in the catch itself) must never leak.
+        sendJson(res, 500, { status: 'unknown-error', message: 'bridge error' });
+      });
+    });
+
+    // Bind errors surface asynchronously via the 'error' event (a synchronous
+    // try/catch around listen() would never see them). Resolve null on the
+    // first error so the caller injects no bridge env.
+    let settled = false;
+    server.once('error', (err) => {
+      if (settled) return;
+      settled = true;
+      logger?.appendLine(`[bb-bridge] failed to bind loopback server: ${describeError(err)}`);
+      resolve(null);
+    });
+
+    // The listen callback is the 'listening' listener: by the time it fires the
+    // port is bound and `server.address()` returns the real port.
+    server.listen(0, '127.0.0.1', () => {
+      if (settled) return;
+      settled = true;
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        logger?.appendLine('[bb-bridge] server bound but returned no port; not starting bridge');
+        try {
+          server.close();
+        } catch {
+          /* best-effort */
+        }
+        resolve(null);
+        return;
+      }
+
+      const url = `http://127.0.0.1:${address.port}`;
+      logger?.appendLine(`[bb-bridge] listening on ${url}`);
+
+      resolve({
+        url,
+        token,
+        dispose: () => {
+          try {
+            server.close();
+          } catch {
+            /* best-effort */
+          }
+        },
+      });
     });
   });
-
-  try {
-    server.listen(0, '127.0.0.1');
-  } catch (err) {
-    logger?.appendLine(`[bb-bridge] failed to bind loopback server: ${describeError(err)}`);
-    return null;
-  }
-
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    logger?.appendLine('[bb-bridge] server bound but returned no port; not starting bridge');
-    try {
-      server.close();
-    } catch {
-      /* best-effort */
-    }
-    return null;
-  }
-
-  const url = `http://127.0.0.1:${address.port}`;
-  logger?.appendLine(`[bb-bridge] listening on ${url}`);
-
-  return {
-    url,
-    token,
-    dispose: () => {
-      try {
-        server.close();
-      } catch {
-        /* best-effort */
-      }
-    },
-  };
 }
 
 /**

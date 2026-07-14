@@ -280,11 +280,19 @@ export function activate(context: vscode.ExtensionContext): void {
   // bridge fails to bind, `startBitbucketBridge` returns null and we inject no
   // env — the CLI-side module then fails loud instead of silently targeting a
   // phantom bridge.
-  const bbBridge = startBitbucketBridge(bitbucketPrClient, jiraGetTicket, logger);
-  if (bbBridge) {
-    context.subscriptions.push({ dispose: () => bbBridge.dispose() });
-    session.setBridge(bbBridge.url, bbBridge.token);
-  }
+  // `startBitbucketBridge` resolves only once the loopback server is actually
+  // listening (so its random port -> url is known). We await it in a
+  // fire-and-forget IIFE rather than blocking `activate`: binding a loopback
+  // socket completes within a tick, long before the user can click Launch, so
+  // `setBridge` runs well before any session starts and the env injects. The
+  // token is only ever handed to `setBridge` (terminal env) — never logged.
+  void (async () => {
+    const bbBridge = await startBitbucketBridge(bitbucketPrClient, jiraGetTicket, logger);
+    if (bbBridge) {
+      context.subscriptions.push({ dispose: () => bbBridge.dispose() });
+      session.setBridge(bbBridge.url, bbBridge.token);
+    }
+  })();
 
   const panel = new SettingsPanel(
     context,
