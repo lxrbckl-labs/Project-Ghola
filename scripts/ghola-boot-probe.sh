@@ -32,6 +32,15 @@ fi
 # 1b. current time (guarded; empty is fine if date is unavailable)
 now="$(date +'%Y-%m-%d %H:%M %Z (%A)' 2>/dev/null)"
 
+# 1c. session mode (exported by the launcher; empty => unconstrained). Used to
+# gate the ticket-key Jira pull and the ticket-notes lookup: a non-ticket mode
+# (support, cd) owns its own work surface, so the probe suppresses that work.
+mode_session="${GHOLA_MODE:-}"
+non_ticket_mode="no"
+case "$mode_session" in
+  *support*|*cd*) non_ticket_mode="yes" ;;
+esac
+
 # 2. environment
 env_state="ok"; missing=""
 [ -z "$GHOLA_ROOT" ] && env_state="fail" && missing="GHOLA_ROOT"
@@ -83,10 +92,15 @@ if [ -n "$repo" ]; then
 fi
 
 # 7. ticket key + Jira pull via the bridge
+# The key is derived from the branch ALWAYS (cheap regex, informational). The
+# Jira pull is gated on mode: a non-ticket mode (support, cd) is not
+# ticket-scoped, so it is a clean skip (ticket_state=skipped) with no bridge call.
 key=""
 [ -n "$branch" ] && key="$(printf '%s' "$branch" | grep -oiE '[A-Z][A-Z0-9]+-[0-9]+' | head -1 | tr 'a-z' 'A-Z')"
 ticket_state="none"; ticket_status=""; ticket_summary=""
-if [ -n "$key" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_ROOT/scripts/bb-bridge.mjs" ]; then
+if [ "$non_ticket_mode" = "yes" ]; then
+  ticket_state="skipped"
+elif [ -n "$key" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_ROOT/scripts/bb-bridge.mjs" ]; then
   tj="$(node "$GHOLA_ROOT/scripts/bb-bridge.mjs" get-ticket --key "$key" 2>/dev/null)"
   if [ -n "$tj" ]; then
     parsed="$(printf '%s' "$tj" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);if(j&&j.exists===true){process.stdout.write("ok\t"+(j.status||"")+"\t"+(j.summary||""))}else{process.stdout.write("missing\t\t")}}catch(e){process.stdout.write("err\t\t")}})' 2>/dev/null)"
@@ -111,7 +125,12 @@ if [ -z "$vault" ]; then
   done
 fi
 notes_exists="no"; notes_file=""; handoff_date=""
-if [ -n "$vault" ] && [ -n "$key" ]; then
+# The ticket-notes lookup is gated on mode: in a non-ticket mode (support, cd)
+# the session-mode module owns its own work surface (Support/<APP>.md,
+# Projects/<basename>.md), so the probe does not guess a ticket-notes path —
+# it still resolves and emits `vault` above (mode-agnostic), but leaves
+# notes_exists=no / notes_file=none.
+if [ "$non_ticket_mode" != "yes" ] && [ -n "$vault" ] && [ -n "$key" ]; then
   proj="${key%%-*}"; num="${key##*-}"
   notes_file="$vault/$proj/$num.md"
   if [ -f "$notes_file" ]; then
@@ -124,6 +143,7 @@ fi
 # digest
 emit version "$version"
 emit now "$now"
+emit session_mode "${mode_session:-unconstrained}"
 emit env_state "$env_state"; [ -n "$missing" ] && emit env_missing "$missing"
 emit team "${perf}p/${eff}e/${qa}qa"
 emit team_models "perf=${pm},eff=${em},qa=${qm}"

@@ -8,9 +8,24 @@ Ghola mode is themed on Dune's *ghola*: a being regrown from a template, blank u
 
 The goal is **free-form** — whatever the user states when they launch the session ("follow the testing procedures", "look at the AC", "make X do Y"). Ground it against whatever source it points at: if the goal implicitly references a ticket, pull that ticket's AC via the relevant integration module; if it references testing procedures, read those; if it's a bare instruction with no external grounding, the goal statement itself is the demand. Whatever you ground the goal in, validate the mission's eventual output against that same source — the demand is not renegotiable mid-mission just because a sub-purpose turned out to be harder or easier than expected.
 
+## Session-start orientation — one read-only aggregate
+
+At session start, gather ALL of your ledger orientation for this mission in a SINGLE read-only call rather than the separate control-file, ledger-root, `mission list`, `ls`, and operating-notes reads it used to take:
+
+```
+cd <work-repo-root> && node "$GHOLA_ROOT/scripts/ghola.mjs" boot --subject <subject>   # add --json for structured parsing
+```
+
+This one aggregate returns, for the subject, the cooperative-control state, the resolved ledger root, this subject's prior missions, its existing crew (with state + pass/rework record), and whether an `operating-notes.md` exists plus a short excerpt — everything the sections below (Cross-mission maturity, Gholas / reuse-vs-regrow) would otherwise open with. A fresh subject reads back cleanly as clean/none/absent; it is not an error.
+
+- **When it runs.** This is War Mode's contribution to **Wave 3** of `tool.session-bootstrap`'s parallel-wave boot sequence — the "mode-specific post-probe check" that Wave 3 already allows for. Issue it in the SAME Wave-3 message as the probe's `detail_file` read so the two run concurrently; both depend only on the probe's output, not on each other. Do not restate the bootstrap's wave mechanics here — `tool.session-bootstrap` owns them; this is just the War Mode check that slots into Wave 3.
+- **Subject and cwd.** The `<subject>` is the probe's `ticket_key`, lowercased (the ledger lowercases subjects, so `CMMS-2791` -> `cmms-2791`). The command must run from the **work-repo root** (the probe's `work_repo`) so `.ghola/` resolves there; the terminal cwd may be a subdirectory of the checkout (e.g. `cmms-api`), which is why the `cd <work-repo-root>` prefix is required rather than assuming cwd is already the repo root.
+- **Session-start only — it does NOT replace per-turn polling.** `boot` is a ONE-TIME orientation read at session start. It happens to also surface the FIRST turn's control-file state, but it is not a substitute for the standing **per-turn control-file polling** (awaken-all, declare-done, directive, resume, escalation) you run at the top of *every* turn — that ongoing polling stays exactly as written in the control-protocol sections below and continues unchanged after boot.
+- **Read-only, per the floor.** `boot` only reads; it never acks, writes, creates, or mutates anything (no control write, no ledger creation), fully consistent with the CRITICAL SAFETY floor below. It is orientation, never action.
+
 ## Cross-mission maturity — start smarter on a known subject
 
-Before you decompose the goal, check whether this subject has a track record with you. Read `<ledger-root>/<subject>/operating-notes.md` and skim `ghola mission list --subject <subject>` for prior missions on this subject. A subject you have worked before is not a blank slate: its operating notes carry lessons from past missions, and its mission history tells you what has already been tried, what shape of decomposition worked, and which gholas exist to reawaken rather than regrow.
+Before you decompose the goal, check whether this subject has a track record with you. The session-start `boot` aggregate above already returns this subject's operating-notes excerpt and its prior missions in one shot; lean on that instead of separately reading `<ledger-root>/<subject>/operating-notes.md` and running `ghola mission list --subject <subject>` (those standalone reads remain available if you need the full notes body or a mid-mission refresh). A subject you have worked before is not a blank slate: its operating notes carry lessons from past missions, and its mission history tells you what has already been tried, what shape of decomposition worked, and which gholas exist to reawaken rather than regrow.
 
 This is an enhancement to your decomposition, not a substitute for it — you still read the goal fresh and decompose on your own judgment, per "You are fully autonomous" below, but you decompose informed by what this subject has already taught you rather than from a cold start. As the mission proceeds, contribute new lessons back the same way: `ghola note --subject <subject> --text "..."` whenever you learn something worth carrying into the *next* mission on this subject, so cross-mission maturity compounds instead of resetting every time.
 

@@ -24,13 +24,14 @@ TPM parses the digest (one `key=value` per line) and renders the `[ghola]` trace
 
 | Step (order) | Digest field(s) | Renders |
 | --- | --- | --- |
+| (context) | `session_mode` | Not its own step — the modality (`ticket-work` / `support` / `cd` / `unconstrained`) that gates the `ticket` and `notes` steps; in `support`/`cd` the probe reports `ticket_state=skipped` and those steps render a clean mode-appropriate skip |
 | 1. `version` | `version` | `[ghola] ✅ Ghola v{version}` (or `❌ Version (unknown)` when `version=unknown`) |
 | 2. `environment` | `env_state`, `env_missing` | `[ghola] ✅ Environment: ...` when `env_state=ok`; `❌ Environment ({env_missing})` when `fail` |
 | 3. `team-allocation` | `team`, `team_models` | `[ghola] ✅ Team: {perf} performance + {eff} efficiency + {qa} QA (perf=..., eff=..., qa=...)` |
 | 4. `work-repo` | `work_repo` | `[ghola] ✅ Work repo: {basename} ({path})`; `❌` guidance line when `work_repo=none` |
 | 5. `branch` | `branch` | `[ghola] ✅ Branch: {branch}`; `✅ Branch: none (not a git repo)` when `branch=none` |
-| 6. `ticket` | `ticket_key`, `ticket_state`, `ticket_status`, `ticket_summary` | `[ghola] ✅ Ticket: {KEY} (pulled from Jira)` / `❌ Ticket: {KEY} (Jira unavailable ...)` / `✅ Ticket: none detected from branch` |
-| 7. `notes` | `vault`, `notes_file`, `notes_exists` | `[ghola] ✅ Notes: {Project}/{Number}.md resuming ...` / `... created` (see step 7 note on who creates) / clean skip when no vault or no ticket |
+| 6. `ticket` | `ticket_key`, `ticket_state`, `ticket_status`, `ticket_summary`, `session_mode` | `[ghola] ✅ Ticket: {KEY} (pulled from Jira)` / `❌ Ticket: {KEY} (Jira unavailable ...)` / `✅ Ticket: none detected from branch` / `✅ Ticket: n/a ({mode} mode — not ticket-scoped)` when `ticket_state=skipped` |
+| 7. `notes` | `vault`, `notes_file`, `notes_exists`, `session_mode` | `[ghola] ✅ Notes: {Project}/{Number}.md resuming ...` / `... created` (see step 7 note on who creates) / clean skip when no vault or no ticket / `✅ Notes: ({mode} mode — surface owned by mode.{mode})` when `ticket_state=skipped` |
 | 8. `mode-detection` | `mode`, `base`, `ahead` | `[ghola] ✅ Mode: planning \| review \| author` |
 | 9. `resume` | `handoff_date` (+ `detail_file` for the block) | `[ghola] ✅ Resume: {handoff_date} handoff found` / `✅ Resume: fresh session` |
 | 10. `ready` | all of the above + `now` + `detail_file` (ticket body) | `[ghola] ✅ Ready` + orientation paragraph (`now` supplies the current date/time — no separate `date` call) |
@@ -71,6 +72,7 @@ The probe consumes environment variables the launcher exports into the session t
 
 - **`GHOLA_VERSION`** — the extension semver, e.g. `0.4.0`. If unset, the probe falls back to `$GHOLA_ROOT/VERSION`; if that is also unreadable the digest carries `version=unknown`.
 - **`GHOLA_BRANCH`** — the current git branch of the work repo (the terminal cwd), or `""` when cwd is not a git repo. The probe also uses it to resolve the work repo by scanning for the clone checked out on that branch when cwd is a container directory rather than a repo.
+- **`GHOLA_MODE`** — the session modality string (`ticket-work` / `support` / `cd` / `unconstrained`, the enabled `mode.*` module ids with the `mode.` prefix stripped), exported by the launcher and consumed by the probe to gate ticket/Jira work. When the mode contains `support` or `cd` — a non-ticket mode — the probe suppresses the ticket-key Jira pull and the ticket-notes lookup (that mode owns its own work surface); `ticket-work`, `unconstrained`, and a war-only mode string behave as ticket-scoped. Unset degrades to `unconstrained`.
 - **`GHOLA_ROOT`** — the absolute path of the Ghola installation (used to resolve the probe script, `bb-bridge.mjs`, and the version fallback).
 - **`GHOLA_TPM_PROMPT_FILE`, `GHOLA_SWE_PROMPT_FILE`, `GHOLA_QA_PROMPT_FILE`** — the composed agent prompts on disk; the probe confirms each is readable for the `environment` step.
 - **`SWE_PERFORMANCE_CORES`, `SWE_EFFICIENCY_CORES`, `SWE_AGENT_COUNT`, `QA_AGENT_COUNT`** — the team envelope.
@@ -124,20 +126,22 @@ The resolved branch fed the probe's branch-to-key detection, so this step and th
 
 ### 6. `ticket`
 
-Read `ticket_key`, `ticket_state`, and (when present) `ticket_status`/`ticket_summary`. The probe derived the key from the branch and pulled the ticket via `bb-bridge.mjs` (`mode.ticket-work` remains authoritative for the semantics). Read the `detail_file` only in the `ready` step, when the ticket body is needed for orientation.
+Read `ticket_key`, `ticket_state`, and (when present) `ticket_status`/`ticket_summary`, plus `session_mode`. The probe derived the key from the branch and pulled the ticket via `bb-bridge.mjs` (`mode.ticket-work` remains authoritative for the semantics), EXCEPT in a non-ticket mode (see the skipped case below), where it derives the informational key but performs no Jira pull. Read the `detail_file` only in the `ready` step, when the ticket body is needed for orientation.
 
 - Pulled (`ticket_state=ok`): `[ghola] ✅ Ticket: {ticket_key} — {ticket_summary} [{ticket_status}] (pulled from Jira)`
 - Detected but Jira unavailable (`ticket_state=unavailable` — integration off, credentials missing, network error, or bridge not reachable): `[ghola] ❌ Ticket: {ticket_key} (Jira unavailable — paste the description)` and continue.
 - Detected but not found (`ticket_state=notfound`): `[ghola] ❌ Ticket: {ticket_key} (not found in Jira — paste the description)` and continue.
 - No key derivable from the branch (`ticket_key=none` — e.g. on `main`, detached HEAD, or a branch with no `KEY-123` segment): `[ghola] ✅ Ticket: none detected from branch`
+- Mode-gated skip (`ticket_state=skipped` — `session_mode` is `support` or `cd`): `[ghola] ✅ Ticket: n/a ({session_mode} mode — not ticket-scoped)`. This is a CLEAN skip, not a failure — render `✅`, never `❌`. The session is not ticket-scoped, so the probe made no Jira call; the work surface belongs to that mode's own module (`mode.support`'s app map/knowledge files, `mode.cd`'s project notes), and the bootstrap defers to it rather than reporting a missing ticket. The branch may still carry a `ticket_key` (informational) — you may append it (`... — branch carries {ticket_key}`) but do not treat it as a session ticket.
 - `mode.ticket-work` not enabled: `[ghola] ✅ Ticket: (ticket-work module off)` — the probe may still carry `ticket_*` fields, but with the module off, report it disabled.
 
 ### 7. `notes`
 
-Read `vault`, `notes_file`, and `notes_exists`. The probe READS the vault; it never writes. `tool.obsidian-notes` owns the vault path and the write discipline; `mode.ticket-work` owns the per-ticket file convention.
+Read `vault`, `notes_file`, `notes_exists`, and `session_mode`. The probe READS the vault; it never writes. `tool.obsidian-notes` owns the vault path and the write discipline; `mode.ticket-work` owns the per-ticket file convention.
 
 - Resuming an existing file (`notes_exists=yes`): `[ghola] ✅ Notes: {Project}/{Number}.md resuming` (append `from {handoff_date}` when the resume step has it).
 - Not yet created (`notes_exists=no`, vault + ticket present): render `[ghola] ✅ Notes: {Project}/{Number}.md (to create)`. **TPM creates the file AFTER the probe via `tool.obsidian-notes`** — the probe is read-only and never creates it. Once created, this line reflects `... created`.
+- Mode-gated skip (`ticket_state=skipped` — `session_mode` is `support` or `cd`): `[ghola] ✅ Notes: ({session_mode} mode — app knowledge owned by mode.{session_mode})`. This is a CLEAN skip, not a failure — render `✅`, never `❌`, and never report a missing ticket-notes file. In a non-ticket mode the probe does NOT guess a ticket-notes path (`notes_exists=no`, `notes_file=none`) because that mode owns its own work surface: `mode.support` uses `Support/<APP>.md` (its app map / knowledge files), `mode.cd` uses `Projects/<basename>.md`. The bootstrap defers to that mode's module for the notes surface; `vault` is still resolved and emitted (mode-agnostic).
 - No vault resolved (`vault=none`), no ticket (`ticket_key=none`), or `tool.obsidian-notes` off: skip cleanly — emit nothing for this step, or `[ghola] ✅ Notes: (no vault)` / `[ghola] ✅ Notes: (no ticket)` when a visible marker is preferred. Never block on missing notes.
 
 ### 8. `mode-detection`

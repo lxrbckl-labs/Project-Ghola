@@ -2,7 +2,7 @@
   "id": "tool.session-bootstrap",
   "name": "Session Bootstrap",
   "version": "0.2.0",
-  "description": "Orchestrates the ordered, diagnostic-rendering session-start sequence — version, environment, team allocation, work-repo + branch sanity, ticket auto-detect, notes, mode detection, resume, ready — by running one consolidated read-only probe (scripts/ghola-boot-probe.sh, which also reports the current time) batched concurrently with the proactive module reads in dependency-respecting waves, then rendering one [ghola] check/cross line per step from that digest before the first response while each domain module stays authoritative for meaning and any writes after the probe.",
+  "description": "Orchestrates the ordered, diagnostic-rendering session-start sequence — version, environment, team allocation, work-repo + branch sanity, ticket auto-detect, notes, mode detection, resume, ready — by running one consolidated read-only probe (scripts/ghola-boot-probe.sh, which also reports the current time) batched concurrently with the proactive module reads in dependency-respecting waves, then rendering one [ghola] check/cross line per step from that digest before the first response while each domain module stays authoritative for meaning and any writes after the probe. The boot is mode-aware: in a non-ticket session mode (support, cd) it cleanly skips the ticket-key Jira pull and the ticket-notes lookup, deferring to that mode's own work surface.",
   "proactive": true,
   "category": "workflow",
   "kind": "capability",

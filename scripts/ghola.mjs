@@ -2578,6 +2578,134 @@ function cmdBoard({ flags }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Commands — boot (read-only session-start orientation aggregate)
+// ─────────────────────────────────────────────────────────────────────────
+
+// Excerpts a subject's operating-notes.md WITHOUT dumping the whole file:
+// reports existence, total line count, and the first `maxLines` lines as a
+// short preview. Read-only — readFileOr degrades a missing file to null, so
+// this never creates operating-notes.md (a fresh subject reads as absent).
+function operatingNotesSummary(root, subject, maxLines = 15) {
+  const p = notesFilePath(root, subject);
+  const raw = readFileOr(p, null);
+  if (raw === null) return { path: p, exists: false, lines: 0, excerpt: '', truncated: false, maxLines };
+  const allLines = raw.split('\n');
+  // Drop a single trailing empty line (from the file's final newline) so the
+  // reported count reflects visible content, not the trailing blank.
+  const totalLines = raw.endsWith('\n') ? allLines.length - 1 : allLines.length;
+  return {
+    path: p,
+    exists: true,
+    lines: totalLines,
+    excerpt: allLines.slice(0, maxLines).join('\n'),
+    truncated: totalLines > maxLines,
+    maxLines,
+  };
+}
+
+// Aggregates, for one --subject, the entire READ-ONLY orientation a War Mode
+// session needs at start — cooperative-control state, the resolved ledger root,
+// prior missions, existing crew, and an operating-notes excerpt — in ONE
+// invocation, so mode-start costs a single node startup instead of the 3+ it
+// took across separate awaken --status / ledger-root / mission list / ls /
+// operating-notes calls. STRICTLY READ-ONLY: it reuses the same readers those
+// standalone commands use (readControl, resolveContext, parseMissionsFile,
+// collectGholas, notesFilePath) and never writes, creates, acks, or mutates
+// anything — no ensureLedger, no control write, no file creation. It degrades
+// cleanly on a fresh subject / missing control file (the normal case) to
+// empty/none/clean sections and exits 0; it never throws for those.
+function cmdBoot({ flags }) {
+  const usage = 'ghola boot --subject S [--json]';
+  const ctx = resolveContext(flags);
+  // control.json lives under the workspace, exactly as the --status commands
+  // resolve it (resolveContext's workspace === resolveWorkspace(flags)).
+  const workspace = ctx.workspace;
+  const subject = slugify(requireFlag(flags, 'subject', usage));
+
+  // control — the same reader the awaken/resume/directive/declaredone/escalate
+  // --status commands use. Absent, corrupt, or non-object control.json all
+  // degrade to the "no control active" shape (exists:false); never throws.
+  const control = readControl(workspace);
+
+  // ledgerRoot — reuse resolveContext's resolution (identical to ls /
+  // mission list). It always resolves to a path (vault-based, or the
+  // workspace-local fallback when no vault exists); report whether that
+  // directory currently exists on disk and whether it came from a vault.
+  const ledgerRoot = { path: ctx.root, exists: fs.existsSync(ctx.root), fromVault: ctx.vault !== null };
+
+  // missions — the same data `mission list --subject S` returns (empty for a
+  // fresh subject: readFileOr degrades the missing _missions.md to '').
+  const missions = parseMissionsFile(readFileOr(missionsFilePath(ctx.root, subject), ''));
+
+  // gholas — the same data `ls --subject S` returns (empty for a fresh subject).
+  const rows = collectGholas(ctx.root, subject);
+
+  // operatingNotes — existence + short excerpt, never the whole file.
+  const operatingNotes = operatingNotesSummary(ctx.root, subject);
+
+  if (flags.json) {
+    printJson({
+      subject,
+      control,
+      ledgerRoot,
+      missions: missions.map(missionToJson),
+      gholas: rows.map(gholaToJson),
+      counts: countsByState(rows),
+      operatingNotes,
+    });
+    return;
+  }
+
+  // Text default — a compact, human-readable orientation block.
+  console.log(`Boot orientation — subject: ${subject}`);
+  console.log('='.repeat(60));
+
+  if (!control.exists) {
+    console.log(`Control: clean (no control file at ${control.path})`);
+  } else {
+    console.log(`Control: active (${control.path})`);
+    const parts = [
+      `awakenAll:${control.awakenAll}`,
+      `resumeMission:${control.resumeMission ?? '(none)'}`,
+      `directive:${control.directive ?? '(none)'}`,
+      `declareDone:${control.declareDone ?? '(none)'}`,
+      `escalationResolve:${control.escalationResolve.length}`,
+    ];
+    console.log(`  ${parts.join('  ')}`);
+  }
+
+  console.log(`Ledger root: ${ledgerRoot.path}${ledgerRoot.exists ? '' : ' (does not exist yet)'}`);
+
+  if (missions.length === 0) {
+    console.log('Missions: none');
+  } else {
+    console.log(`Missions (${missions.length}):`);
+    for (const m of missions) {
+      const budgetSuffix = m.budget ? `  [budget: ${m.budget}]` : '';
+      console.log(`  ${m.id}  (${m.status})  ${m.date}  ${m.goal}${budgetSuffix}`);
+    }
+  }
+
+  if (rows.length === 0) {
+    console.log('Gholas: none');
+  } else {
+    const counts = countsByState(rows);
+    console.log(`Gholas (${counts.active} active, ${counts.dormant} dormant, ${counts.archived} archived, ${counts.total} total):`);
+    for (const g of rows) {
+      console.log(`  ${String(g.id ?? 'unknown')} [${g.state ?? 'unknown'}] ${truncate(g.purpose ?? 'unknown', 40)}${lineageSuffix(gholaToJson(g))}`);
+    }
+  }
+
+  if (!operatingNotes.exists) {
+    console.log('Operating notes: absent');
+  } else {
+    const more = operatingNotes.truncated ? `, first ${operatingNotes.maxLines} shown` : '';
+    console.log(`Operating notes: present (${operatingNotes.lines} line${operatingNotes.lines === 1 ? '' : 's'}${more}):`);
+    for (const line of operatingNotes.excerpt.split('\n')) console.log(`  | ${line}`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Help + dispatch
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -2699,6 +2827,13 @@ Commands:
                                                                              subject scope includes alerts; roster
                                                                              entries include generation/parent/
                                                                              reliability)
+  boot            --subject S [--json]                                     read-only session-start orientation: one
+                                                                             aggregate of control-file state, resolved
+                                                                             ledger root, prior missions, existing crew,
+                                                                             and an operating-notes excerpt (fresh
+                                                                             subject -> clean/none sections). Reuses the
+                                                                             --status / mission list / ls / notes
+                                                                             readers; never writes or acks anything.
   --help                                                                    show this message
 `;
 
@@ -2748,6 +2883,7 @@ function main() {
     groom: cmdGroom,
     ls: cmdLs,
     board: cmdBoard,
+    boot: cmdBoot,
   };
 
   const key = (command === 'mission' || command === 'template') ? `${command}:${subcommand}` : command;

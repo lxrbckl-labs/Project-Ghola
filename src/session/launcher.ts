@@ -108,6 +108,16 @@ export class SessionLauncher {
     const effectiveDir = cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const branch = this.readGitBranch(effectiveDir);
 
+    // Session modality string, mirroring banner.ts's formatMode: the enabled
+    // `mode.*` module ids with the `mode.` prefix stripped, joined by ', '
+    // (e.g. 'ticket-work', 'support', 'cd'); 'unconstrained' when no mode module
+    // is enabled. Kept identical to the banner's derivation so the env var and
+    // the banner's Mode row never disagree.
+    const modes = enabled
+      .filter((h) => h.manifest.id.startsWith('mode.'))
+      .map((h) => h.manifest.id.slice('mode.'.length));
+    const sessionMode = modes.length > 0 ? modes.join(', ') : 'unconstrained';
+
     const perfCores = cfg.get<number>('swe.performanceCores', 2);
     const effCores = cfg.get<number>('swe.efficiencyCores', 1);
     const perfModel = cfg.get<string>('swe.performanceCoresModel', 'opus');
@@ -138,6 +148,11 @@ export class SessionLauncher {
       // of the repo the terminal is opening in (empty string when the
       // effective work dir is not a git repo or git is unavailable).
       GHOLA_BRANCH: branch,
+      // Carries the session modality (enabled mode.* modules, or
+      // 'unconstrained') for the boot probe's mode-gating: the probe suppresses
+      // the ticket-key Jira pull and ticket-notes lookup in non-ticket modes
+      // (support, cd). Mirrors the banner's Mode row.
+      GHOLA_MODE: sessionMode,
       SWE_PERFORMANCE_CORES: String(perfCores),
       SWE_EFFICIENCY_CORES: String(effCores),
       SWE_AGENT_COUNT: String(perfCores + effCores),
