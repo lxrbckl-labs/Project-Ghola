@@ -168,5 +168,5 @@ function formatTeam(team: BannerTeamInput): string {
  * "there is no fixed roster shape") — so there is no stable count to report here.
  */
 function formatGholas(): string {
-  return 'autonomous crew · free-form roster, sized by mission decomposition';
+  return 'Amorphic Crew';
 }
