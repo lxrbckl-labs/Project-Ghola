@@ -2,7 +2,7 @@
   "id": "integration.bitbucket-pr-comments",
   "name": "PR Monitor",
   "version": "0.3.2",
-  "description": "Owns the Bitbucket PR review-comment workflow — addressing inbound comments via the address ordinal grammar, posting Review Mode findings outbound via the post ordinal grammar, optionally logging every comment to a persistent JSON file for downstream learning, and reusing Atlassian Suite credentials.",
+  "description": "Owns the Bitbucket PR review-comment workflow — addressing inbound comments via the address ordinal grammar, posting Review Mode findings outbound via the post ordinal grammar, resolving comment threads via the resolve ordinal grammar, optionally logging every comment to a persistent JSON file for downstream learning, and reusing Atlassian Suite credentials.",
   "proactive": false,
   "author": "aarbuckle",
   "category": "integration",

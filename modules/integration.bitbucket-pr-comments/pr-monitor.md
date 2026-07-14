@@ -66,6 +66,7 @@ The user invokes this flow by typing one of:
 - `address all` — every comment in the snapshot (TPM still asks per-action what to do).
 - `address all <author-substring>` — filter by comment author display name (case-insensitive substring match; e.g., `address all coderabbit`).
 - `mark ready` / `ready for review` — marks the current branch's draft PR ready for review via the `mark-ready` bridge subcommand. This is a Bitbucket write; see "Mark Ready Verb" below for the confirmation gate and the `markReadyEnabled` setting that gate it.
+- `resolve <ordinals>` — `resolve 1`, `resolve 1, 3`, `resolve 2-4`, `resolve all`. Resolves comment threads from the current snapshot (same ordinal grammar as `address`/`post`). This is a Bitbucket write; see "Resolve Ordinals Verb" below for the confirmation gate that guards it.
 
 Ambiguous gestures (`address that one`, `address the rest`) should be confirmed with the user, not guessed. When the user references an ordinal that isn't in the current snapshot, ask whether they meant to refresh the snapshot first.
 
@@ -131,6 +132,7 @@ Every bridge subcommand's result surfaces two things: the wrapper's process exit
 - **No token echo.** Neither secret ever appears in chat, logs, or error messages: the Bitbucket token stays behind the AtlassianBridge on the host side, and the bridge server's own bearer token (`GHOLA_BRIDGE_TOKEN`) is read from the environment by the `bb-bridge.mjs` wrapper and never surfaced to or handled by the agent. Never echo either token, and never pass a token as a flag.
 - **No git writes / no Jira writes.** Read-only git only (local git — `git commit`, `git push`, etc.). This module never touches Jira. This is a separate concern from `mark ready` below: marking a PR ready is a Bitbucket API write, not a local git write, and is allowed — but only behind the explicit confirmation gate and the `markReadyEnabled` setting.
 - **`mark ready` requires explicit confirmation.** Same discipline as reply posting: show intent (repo, PR id, branch), require the user to type `ok`, never auto-run. Refuse the verb outright if `parameters.markReadyEnabled` is false.
+- **`resolve <ordinals>` requires explicit confirmation.** Like reply and mark-ready, resolving a thread is a Bitbucket write: show intent (the selected threads), require the user to type `ok`, never auto-run. `resolve all` still gates on this confirmation. It never auto-resolves.
 - **No new code in the work repo outside what SWEs are dispatched to do.** TPM does not author code in this flow; SWEs do.
 - **Generated reply must not include severity, rating, attribution, or any Ghola-internal filter metadata.** It's a public Bitbucket comment.
 - **Don't replace the user's words in manual replies.** When the user supplies reply text, post it verbatim (no generation step).
@@ -266,6 +268,30 @@ When `parameters.pipelineStatusEnabled` is true, TPM can fetch and report the la
 - **Module enabled, `markReadyEnabled` off (default)**: `mark ready` refuses per the gate-check message above. `address`/`post` verbs are unaffected.
 - **Module enabled, `markReadyEnabled` on**: `mark ready` works, still gated per-invocation on the explicit `ok` confirmation in step 4.
 
+## Resolve Ordinals Verb
+
+`resolve <ordinals>` flips the resolved state of comment THREADS via the `resolve` bridge subcommand. It is distinct from replying: resolving does not post any text, and the user can resolve a thread with or without having replied to it first. Where `address` reads and triages and `reply`/`post` write text, `resolve` only changes a thread's resolved-state on Bitbucket. It is a Bitbucket API write, so it carries the same confirmation discipline as posting a reply.
+
+### Grammar
+
+The ordinal grammar mirrors `address` and `post` exactly: `resolve 1`, `resolve 1, 3`, `resolve 2-4`, `resolve all`. Ranges (`1-3`), comma-separated lists (`1, 4, 7`), and combinations (`1, 3-5, 9`) all parse the same way. Whitespace inside the expression is forgiven. Out-of-range ordinals are reported back with the valid range, not silently dropped.
+
+### Source Snapshot
+
+`resolve <ordinals>` operates on the CURRENT snapshot — the list of comments returned by the most recent `address comments` fetch, with its assigned ordinals. Ordinals reference that snapshot only. If no snapshot exists this session, tell the user to run `address comments` first; do not resolve comments that are not in the snapshot.
+
+### Resolve Flow
+
+1. **Select.** Parse the ordinals against the current snapshot. Report any out-of-range ordinal with the valid range.
+2. **Show intent.** List the selected threads by ordinal with their `file:line` (or `general`), author, and current resolved-state before doing anything. This is a Bitbucket state change (unresolved -> resolved) — the user must see exactly which threads will be affected before confirming.
+3. **Confirm.** Require the user to type `ok` (or explicitly cancel). No auto-run — `resolve all` still gates on this confirmation, mirroring the reply-posting and mark-ready gates. There is no bypass for this verb.
+4. **Execute.** On `ok`, invoke `node "$GHOLA_ROOT/scripts/bb-bridge.mjs" resolve --repo <slug> --pr <id> --comment <id>` once per selected comment id, using the same repo-slug and PR-id resolution the `address`/`post`/`mark ready` verbs use.
+5. **Report.** After the batch, report each resolved thread id back to the user as an audit trail, in the same shape as the `address`/`post` post-batch summary.
+
+Per-comment failure handling mirrors the taxonomy in "Failure Handling" above — surface each failure loudly, continue the batch, no silent retries. A `not-found` (404) on a comment id means the snapshot is stale (the thread was deleted/resolved upstream since the fetch) -> refresh via a fresh `address comments` rather than retrying the stale id.
+
+This verb never AUTO-resolves, consistent with the "Flag falsely-resolved comments" rule in the Round-Trip Flow: that scan flags claim-phrases but does not resolve anything on its own. `resolve <ordinals>` is the explicit, user-directed way to resolve a thread.
+
 ## Role-Specific Notes
 
 ### TPM
@@ -275,6 +301,7 @@ When `parameters.pipelineStatusEnabled` is true, TPM can fetch and report the la
 - Maintain a per-session audit of which comments have been addressed and how (code-fix, manual reply, dismiss). Surface the audit when the user asks for a status check, and include it in the closing summary of any batch.
 - For the `post <ordinals>` verb: parse the ordinals, source findings from the most recent Review Mode dispatch in session memory, polish each per `parameters.postPolishPrompt`, gate per `parameters.requireUserApproval`, place per `parameters.postCommentLocation`, and post via the `bb-bridge.mjs` wrapper's `reply` subcommand. Report posted comment ids back to the user as audit trail. If `parameters.postOrdinalsEnabled` is false, refuse per the module-disabled message above.
 - For the `mark ready` verb: gate on `parameters.markReadyEnabled`, resolve the PR, show intent, require explicit `ok`, then invoke the wrapper's `mark-ready` subcommand. Report success or surface the failure loudly per the Mark Ready Verb section above.
+- For the `resolve <ordinals>` verb: parse the ordinals against the current snapshot, show intent (selected threads by ordinal with `file:line`/author + resolved-state), require explicit `ok`, then invoke the wrapper's `resolve` subcommand once per selected comment id. Report each resolved thread id back as audit trail per the Resolve Ordinals Verb section above.
 - Settings (read from the module's parameters block in the Session Manifest):
   - `parameters.replyInstruction` — feed into the reply-generation step. If absent from the Session Manifest, the default applies: `"Write a 1-2 sentence professional PR reply confirming what was fixed and where. No double-dashes."`
   - `parameters.coderabbitReplyPersona` — optional voice/tone overlay layered onto `parameters.replyInstruction` when the parent comment author is CodeRabbit. If absent from the Session Manifest, the default applies: empty string (no overlay).
