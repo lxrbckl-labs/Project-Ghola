@@ -6,7 +6,7 @@ This module is **proactive**: TPM reads it once, at session start, before respon
 
 This module depends on `tool.obsidian-notes` (optional — for per-app knowledge files when `parameters.knowledgeFilePerApp` is true), `tool.session-handoff` (for wrap-up), `tool.database-access` (for investigative queries when available), and `tool.lenses` (for the structural dispatch pattern — but support mode uses its OWN support-specific lenses defined in `parameters.investigationLenses`, not the review/planning lenses from that module). All dependencies are soft: if any is disabled or degraded, this mode degrades gracefully — see "Dependency failure modes" below.
 
-In this version of Ghola there is no mode-selector UI on the panel; Support mode is active whenever this module is present in the Session Manifest. Support mode is mutually exclusive with `mode.cd` and `mode.ticket-work` — only one session mode is active at a time. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
+In this version of Ghola there is no mode-selector UI on the panel; Support mode is active whenever this module is present in the Session Manifest. Support mode is mutually exclusive with `mode.cd`, `mode.ticket-work`, and `mode.sardaukar` — only one session mode is active at a time. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
 
 ## What Support mode does (at a glance)
 
@@ -84,13 +84,15 @@ When `parameters.knowledgeFilePerApp` is false (the default), no knowledge files
 
 ## Mutual exclusion with other modes
 
-Support mode is intended to be mutually exclusive with `mode.cd` and `mode.ticket-work`. The three modes carve up the work-scope space — support is multi-app-bound, Directory Navigation is project-bound, Ticket Work is ticket-bound — and enabling two at once creates ambiguity about which scope owns the session. Precedence: ticket-work > support > cd (most specific wins).
+Support mode is intended to be mutually exclusive with `mode.cd`, `mode.ticket-work`, and `mode.sardaukar`. The four modes carve up the work-scope space — support is multi-app-bound, Directory Navigation is project-bound, Ticket Work is ticket-bound, and Sardaukar is the general, no-scope-lock modality — and enabling two at once creates ambiguity about which scope owns the session. Precedence: ticket-work > support > cd > sardaukar (most specific wins).
 
 If `mode.support` and `mode.ticket-work` both appear in the Session Manifest, TPM surfaces the conflict to the user once at session start: "Multiple session modes enabled — Support and Ticket Work. Support mode is not ticket-scoped — disable Ticket Work in the Modules tab if you intended multi-app support work, or disable Support if you intended single-ticket work." Then proceed with **Ticket Work active** and Support mode suppressed — ticket-bound work is more specific than multi-app support, so it wins the precedence tie.
 
 If `mode.support` and `mode.cd` both appear in the Session Manifest, TPM surfaces the conflict: "Multiple session modes enabled — Support and Directory Navigation. Support mode manages its own work-repo routing via the app map — disable Directory Navigation in the Modules tab to avoid conflicting path bindings." Then proceed with **Support active** and Directory Navigation suppressed — support's multi-app routing subsumes directory binding.
 
-If all three are enabled, Ticket Work wins (most specific), Support and Directory Navigation are both suppressed, and TPM surfaces the full conflict once.
+If `mode.support` and `mode.sardaukar` both appear in the Session Manifest, TPM surfaces the conflict: "Multiple session modes enabled — Support and Sardaukar. Sardaukar is the general, no-scope-lock catch-all — disable it in the Modules tab if you intended multi-app support work." Then proceed with **Support active** and Sardaukar suppressed — multi-app support is more specific than Sardaukar's no-scope-lock modality, so it wins the precedence tie.
+
+If all four are enabled, Ticket Work wins (most specific), Support, Directory Navigation, and Sardaukar are all suppressed, and TPM surfaces the full conflict once.
 
 ## Dependency failure modes
 

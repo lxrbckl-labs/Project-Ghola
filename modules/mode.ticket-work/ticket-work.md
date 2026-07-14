@@ -6,7 +6,7 @@ This module is **proactive**: TPM reads it once, at session start, before respon
 
 This module depends on `integration.atlassian-suite` for Jira credentials, base URL, and the token — those stay behind the host and are never handled directly by the agent. The agent-facing ticket pull itself goes through `scripts/bb-bridge.mjs`'s `get-ticket` subcommand (a loopback bridge call into the host), not through any host-only Atlassian Suite method called directly by the agent — see ticket resolution step 4 below for the exact invocation. It also depends on `tool.obsidian-notes` for file location — per-ticket notes live at `<vault>/<ProjectName>/<TicketNumber>.md` and the vault path resolution is that module's job. And it depends on `tool.session-handoff` for the resume surfacing — the most-recent `## Session Handoff` block in the per-ticket notes file is read and summarized by that module, not by this mode directly. All three dependencies are soft: if any of them is disabled or degraded, this mode degrades gracefully — see "Dependency failure modes" below.
 
-In this version of Ghola there is no mode-selector UI on the panel; Ticket Work mode is active whenever this module is present in the Session Manifest. Ticket Work is mutually exclusive with `mode.cd` and `mode.support` — only one session mode is active at a time. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
+In this version of Ghola there is no mode-selector UI on the panel; Ticket Work mode is active whenever this module is present in the Session Manifest. Ticket Work is mutually exclusive with `mode.cd`, `mode.support`, and `mode.sardaukar` — only one session mode is active at a time. Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
 
 ## What Ticket Work mode does (at a glance)
 
@@ -102,15 +102,17 @@ What does NOT go in the per-ticket notes:
 
 ## Mutual exclusion with other modes
 
-Ticket Work mode is intended to be mutually exclusive with `mode.cd` and `mode.support`. The three modes carve up the work-scope space — Ticket Work is ticket-bound, Support is multi-app-bound, Directory Navigation is project-bound — and enabling two at once creates ambiguity about which scope owns the session.
+Ticket Work mode is intended to be mutually exclusive with `mode.cd`, `mode.support`, and `mode.sardaukar`. The four modes carve up the work-scope space — Ticket Work is ticket-bound, Support is multi-app-bound, Directory Navigation is project-bound, and Sardaukar is the general, no-scope-lock modality — and enabling two at once creates ambiguity about which scope owns the session.
 
-Precedence: ticket-work > support > cd (most specific wins).
+Precedence: ticket-work > support > cd > sardaukar (most specific wins).
 
 If `mode.ticket-work` and `mode.cd` both appear in the Session Manifest, Ticket Work takes precedence — Jira-bound work is more specific than directory-bound. TPM surfaces the conflict once: "Multiple session modes enabled — Ticket Work wins; disable Directory Navigation if you intended directory-bound work." Then proceeds with Ticket Work active and Directory Navigation suppressed.
 
 If `mode.ticket-work` and `mode.support` both appear in the Session Manifest, Ticket Work takes precedence — single-ticket focus is more specific than multi-app support. TPM surfaces the conflict once: "Multiple session modes enabled — Ticket Work wins; disable Support if you intended multi-app support work." Then proceeds with Ticket Work active and Support suppressed.
 
-If all three are enabled, Ticket Work wins (most specific). Support and Directory Navigation are both suppressed. TPM surfaces the full conflict once.
+If `mode.ticket-work` and `mode.sardaukar` both appear in the Session Manifest, Ticket Work takes precedence — single-ticket focus is more specific than Sardaukar's no-scope-lock modality. TPM surfaces the conflict once: "Multiple session modes enabled — Ticket Work wins; Sardaukar is the general catch-all, disable it if you intended single-ticket work." Then proceeds with Ticket Work active and Sardaukar suppressed.
+
+If all four are enabled, Ticket Work wins (most specific). Support, Directory Navigation, and Sardaukar are all suppressed. TPM surfaces the full conflict once.
 
 Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
 

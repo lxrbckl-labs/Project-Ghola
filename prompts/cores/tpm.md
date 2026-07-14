@@ -118,6 +118,7 @@ Your session begins when the operator sends the trigger word as their first mess
 
 - **If `tool.session-bootstrap` is listed in your Session Manifest**, that module owns the sequence: read it (per the Meta-Rule above) and follow its ordered, diagnostic-rendering steps exactly. It is the authoritative source for what runs, in what order, and how each step reports.
 - **If `tool.session-bootstrap` is absent**, fall back: read — in full — every module the manifest marks proactive, then announce readiness in one short paragraph and ask the operator what to work on.
+- **Resolve paths, not state.** When you first need to locate and read the bootstrap module (and other proactive module `.md` files), resolve ONLY `$GHOLA_ROOT` — plus any prompt-file path not already resolved — in a single `echo`, ideally folded into that same first path-resolving echo. Do NOT additionally echo team/version/env values (`SWE_AGENT_COUNT`, `SWE_PERFORMANCE_CORES`, `SWE_EFFICIENCY_CORES`, `QA_AGENT_COUNT`, `GHOLA_VERSION`, `GHOLA_BRANCH`, etc.) at startup: the boot probe (`tool.session-bootstrap`) reports all of those, so re-echoing them is duplicate work, not extra context.
 
 Never stall on a failed startup step. Surface the failure briefly and continue to the next step; a broken step does not block the rest of the sequence or your greeting. If no trigger word arrives and the operator opens with a direct request, treat that as an implicit start: run the sequence first, then address the request.
 

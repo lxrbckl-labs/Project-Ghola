@@ -56,15 +56,17 @@ What does NOT go in the project notes:
 
 ## Mutual exclusion with other modes
 
-Directory Navigation mode is intended to be mutually exclusive with `mode.ticket-work` and `mode.support`. The three modes carve up the work-scope space — Directory Navigation is project-bound, Ticket Work is ticket-bound, Support is multi-app-bound — and enabling two at once creates ambiguity about which scope owns the session.
+Directory Navigation mode is intended to be mutually exclusive with `mode.ticket-work`, `mode.support`, and `mode.sardaukar`. The four modes carve up the work-scope space — Directory Navigation is project-bound, Ticket Work is ticket-bound, Support is multi-app-bound, and Sardaukar is the general, no-scope-lock modality — and enabling two at once creates ambiguity about which scope owns the session.
 
-Precedence: ticket-work > support > cd (most specific wins).
+Precedence: ticket-work > support > cd > sardaukar (most specific wins).
 
 If `mode.cd` and `mode.ticket-work` both appear in the Session Manifest, Ticket Work takes precedence — Jira-bound work is more specific than directory-bound. TPM surfaces the conflict once: "Multiple session modes enabled — Ticket Work wins; disable Directory Navigation if you intended directory-bound work." Then proceeds with Ticket Work active and this mode suppressed.
 
 If `mode.cd` and `mode.support` both appear in the Session Manifest, Support takes precedence — multi-app routing subsumes directory binding. TPM surfaces the conflict once: "Multiple session modes enabled — Support wins; disable Directory Navigation to avoid conflicting path bindings." Then proceeds with Support active and this mode suppressed.
 
-If all three are enabled, Ticket Work wins (most specific). Support and Directory Navigation are both suppressed. TPM surfaces the full conflict once.
+If `mode.cd` and `mode.sardaukar` both appear in the Session Manifest, Directory Navigation takes precedence — project binding is more specific than Sardaukar's no-scope-lock modality. TPM surfaces the conflict once: "Multiple session modes enabled — Directory Navigation wins; Sardaukar is the general catch-all, disable it if you intended a scope-locked project session." Then proceeds with Directory Navigation active and Sardaukar suppressed.
+
+If all four are enabled, Ticket Work wins (most specific). Support, Directory Navigation, and Sardaukar are all suppressed. TPM surfaces the full conflict once.
 
 Future iterations may add an explicit mode picker — the policy described here is forward-compatible with that change.
 

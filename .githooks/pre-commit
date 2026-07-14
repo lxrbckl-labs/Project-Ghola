@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# .githooks/pre-commit
+# Ghola version sync: VERSION is the single source of truth. Before each commit,
+# rewrite package.json's top-level "version" to match the VERSION file and stage
+# it, so the VSIX (vsce reads package.json) and the vX.Y.Z tag (post-commit hook
+# reads VERSION) always agree. No-op when they already match.
+#
+# Skip a single run with:   GHOLA_SKIP_HOOK=1 git commit ...
+#
+# Never blocks a commit: every failure path exits 0 and leaves package.json as-is.
+set -uo pipefail
+
+[ -n "${GHOLA_SKIP_HOOK:-}" ] && exit 0
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$REPO_ROOT" || exit 0
+
+[ -f VERSION ] || exit 0
+[ -f package.json ] || exit 0
+command -v node >/dev/null 2>&1 || exit 0
+
+ver="$(tr -d ' \t\r\n' < VERSION 2>/dev/null)"
+[ -z "$ver" ] && exit 0
+
+cur="$(node -e 'try{process.stdout.write(String(require("./package.json").version||""))}catch(e){}' 2>/dev/null)"
+[ "$cur" = "$ver" ] && exit 0   # already in sync — nothing to do
+
+# Rewrite ONLY the first (top-level) "version": "..." string; preserve all other formatting.
+if node -e '
+  const fs = require("fs");
+  const ver = process.argv[1];
+  const p = fs.readFileSync("package.json", "utf8");
+  const out = p.replace(/("version"\s*:\s*")[^"]*(")/, (m, a, b) => a + ver + b);
+  if (out === p) process.exit(2);   // no top-level version found — do not write
+  fs.writeFileSync("package.json", out);
+' "$ver" 2>/dev/null; then
+  git add package.json 2>/dev/null || true
+  echo "[ghola-hook] pre-commit: synced package.json version -> $ver"
+else
+  echo "[ghola-hook] pre-commit: could not sync package.json version (left unchanged)."
+fi
+
+exit 0
