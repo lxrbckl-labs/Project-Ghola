@@ -13,6 +13,13 @@ export interface BannerTeamInput {
 
 export interface BannerInput {
   enabledModules: ModuleHandle[];
+  /**
+   * Whether War Mode (`mode.war`) is on. Source of truth is the
+   * `mode.war::enabled` setting (an Agents configuration), NOT loader state —
+   * `mode.war` is never in `enabledModules`. The launcher computes this from the
+   * same store the composer gates off, so the banner and the composed prompt agree.
+   */
+  warMode: boolean;
   /** Kept for callers that still track composed agent ids; not rendered in the box. */
   composedAgentIds: string[];
   version: string;
@@ -33,12 +40,12 @@ const MAX_INNER_WIDTH = 52;
 
 export function formatBanner(input: BannerInput): string {
   const title = `GHOLA v${input.version}`;
-  const warMode = isWarMode(input.enabledModules);
+  const warMode = input.warMode;
 
   const workRepoValue = formatWorkRepo(input.cwd);
   const branchValueRaw = input.branch !== '' ? stripBranchToTicket(input.branch) : '(not a git repo)';
   const ticketValue = formatTicket(input.branch);
-  const modeValue = formatMode(input.enabledModules);
+  const modeValue = formatModeWithWar(input.enabledModules, warMode);
   const crewLabel = warMode ? 'Gholas' : 'Team';
   const crewValue = warMode ? formatGholas() : formatTeam(input.team);
   const modulesValue = `${input.enabledModules.length} enabled`;
@@ -132,17 +139,26 @@ function formatMode(enabled: ModuleHandle[]): string {
   return modes.length > 0 ? modes.join(', ') : 'unconstrained';
 }
 
+/**
+ * Mode-field value with the War Mode marker layered on. War Mode layers on top
+ * of the session modality, so when it is on we append `+ war` to the modality
+ * (e.g. `ticket-work + war`). When there is no modality (`unconstrained`), War
+ * Mode IS the meaningful modality, so we show `war` alone rather than
+ * `unconstrained + war`. Non-war sessions are unaffected — `formatMode` itself
+ * is untouched and the marker is gated on `warMode`.
+ */
+function formatModeWithWar(enabled: ModuleHandle[], warMode: boolean): string {
+  const base = formatMode(enabled);
+  if (!warMode) return base;
+  return base === 'unconstrained' ? 'war' : `${base} + war`;
+}
+
 function formatTeam(team: BannerTeamInput): string {
   return (
     `${team.perfCores} perf·${team.perfModel}  ` +
     `${team.effCores} eff·${team.effModel}  ` +
     `${team.qaCount} QA·${team.qaModel}`
   );
-}
-
-/** True when `mode.war` (Ghola mode) is among the enabled modules. */
-function isWarMode(enabled: ModuleHandle[]): boolean {
-  return enabled.some((h) => h.manifest.id === 'mode.war');
 }
 
 /**

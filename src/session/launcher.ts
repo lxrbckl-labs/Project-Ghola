@@ -20,6 +20,13 @@ const CLI_BOOT_DELAY_MS = 3000;
 /** Module id whose enablement gates the WSL fast-path `cd`. */
 const FASTPATH_MODULE_ID = 'tool.fastpath-check';
 
+/**
+ * `mode.war` (War Mode). Not loader-toggleable — enablement is the
+ * `mode.war::enabled` setting in the module-settings store, mirroring the
+ * composer's gate (see `src/prompts/composer.ts` renderGholaEntry).
+ */
+const GHOLA_MODE_ID = 'mode.war';
+
 /** Field key on `tool.fastpath-check` for an explicit user-supplied target directory. */
 const FASTPATH_SETTING_KEY = 'fastpathDirectory';
 
@@ -118,6 +125,13 @@ export class SessionLauncher {
       .map((h) => h.manifest.id.slice('mode.'.length));
     const sessionMode = modes.length > 0 ? modes.join(', ') : 'unconstrained';
 
+    // War Mode (`mode.war`) is NOT a loader-toggleable module — its enablement
+    // is the `mode.war::enabled` setting (an Agents configuration). Read it from
+    // the SAME module-settings store the composer gates off (see
+    // PromptComposer.renderGholaEntry / host.isGholaEnabled), so the banner's
+    // War-Mode indicator is true exactly when the composer injects mode.war.
+    const warMode = this.readModuleSetting(GHOLA_MODE_ID, 'enabled') === true;
+
     const perfCores = cfg.get<number>('swe.performanceCores', 2);
     const effCores = cfg.get<number>('swe.efficiencyCores', 1);
     const perfModel = cfg.get<string>('swe.performanceCoresModel', 'opus');
@@ -127,6 +141,7 @@ export class SessionLauncher {
 
     const banner = formatBanner({
       enabledModules: enabled,
+      warMode,
       composedAgentIds,
       version,
       cwd: effectiveDir,
