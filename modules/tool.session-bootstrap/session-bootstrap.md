@@ -83,6 +83,8 @@ The probe consumes environment variables the launcher exports into the session t
 
 TPM walks `parameters.steps` in declared order, rendering each step whose `enabled` flag is true from the probe's digest. The seeded defaults are the ten steps below, in this order. Each step emits exactly one diagnostic line per `parameters.outputFormat` (see "Output Formats") before the next step renders.
 
+A proactive session-mode module may contribute one additional `[ghola]` diagnostic line of its own, OR substitute the rendering of a step whose default line doesn't fit that mode, sourced from that module's Wave-3 post-probe check and rendered in trace order at the position that module specifies; this bootstrap stays agnostic about its content and simply leaves room for the addition or substitution in the sequence.
+
 **HARD RULE — never stall on a failed step.** The whole sequence renders before the first substantive response. When a digest field is missing, `none`, or `fail`, render the `❌`/degraded line with a one-clause reason and CONTINUE to the next step. A broken step degrades what depends on it; it never blocks the rest of the sequence or the final greeting. This rule holds regardless of `parameters.failureBehavior` for the git/ticket/notes steps, whose downstream degrades gracefully by design. Because all data comes from one probe, a partial probe result (some fields `none`) is the normal degraded path — render what is present and continue.
 
 ### 1. `version`
@@ -105,6 +107,8 @@ Read `team` (shape `{perf}p/{eff}e/{qa}qa`) and `team_models` (`perf=...,eff=...
 
 - Success: `[ghola] ✅ Team: {perf} performance + {eff} efficiency + {qa} QA (perf={SWE_PERFORMANCE_MODEL}, eff={SWE_EFFICIENCY_MODEL}, qa={QA_MODEL})`.
 - Degraded (an env var was unset): the probe already substituted the core defaults (perf 2, eff 1, qa 1; perf `opus`, eff `sonnet`, qa `sonnet`) — render the shape anyway.
+
+This step's fixed-core line may be SUBSTITUTED in place by a proactive session-mode module whose crew model is not a fixed-core allocation: such a module renders its own crew line at this position instead of the `Team:` line above (per "A proactive session-mode module may contribute one additional `[ghola]` line OR substitute the rendering of a step" in "The Ordered Startup Sequence"). When a mode substitutes here, render its line, not both — the substitution replaces the fixed-core `Team:` line, it does not sit beside it. This bootstrap stays agnostic about which mode substitutes and what its crew line says.
 
 ### 4. `work-repo`
 

@@ -112,7 +112,7 @@ function collapseHome(p: string): string {
 
 function formatWorkRepo(cwd: string | undefined): string {
   if (!cwd) return '(none - launched outside a repo)';
-  return `${path.basename(cwd)}  (${collapseHome(cwd)})`;
+  return collapseHome(cwd);
 }
 
 /** Derive a Jira-style ticket key from a branch name, e.g. `feature/CMMS-2791-foo` -> `CMMS-2791`. */

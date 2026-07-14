@@ -41,4 +41,29 @@ else
   echo "[ghola-hook] pre-commit: could not sync package.json version (left unchanged)."
 fi
 
+# Also sync package-lock.json so the lockfile never drifts a version behind
+# package.json. Rewrite ONLY the first two "version": "..." strings (the root
+# version and packages[""].version); dependency versions come after and are
+# left untouched. Node exit 2 == already in sync (clean no-op).
+if [ -f package-lock.json ]; then
+  node -e '
+    const fs = require("fs");
+    const ver = process.argv[1];
+    const p = fs.readFileSync("package-lock.json", "utf8");
+    let n = 0;
+    const out = p.replace(/("version"\s*:\s*")[^"]*(")/g, (m, a, b) => (n++ < 2) ? a + ver + b : m);
+    if (out === p) process.exit(2);   // nothing changed (already in sync or no match)
+    fs.writeFileSync("package-lock.json", out);
+  ' "$ver" 2>/dev/null
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    git add package-lock.json 2>/dev/null || true
+    echo "[ghola-hook] pre-commit: synced package-lock.json version -> $ver"
+  elif [ "$rc" -eq 2 ]; then
+    :   # already in sync — silent no-op
+  else
+    echo "[ghola-hook] pre-commit: could not sync package-lock.json version (left unchanged)."
+  fi
+fi
+
 exit 0
