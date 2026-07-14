@@ -465,6 +465,9 @@ export class SettingsPanel implements vscode.Disposable {
       case 'obsidianDetectVault':
         await this.detectObsidianVault();
         break;
+      case 'githubAuthLogin':
+        this.launchGithubAuthLogin();
+        break;
       case 'atlassianValidate':
         // Execute the command registered by SWE-1. The bridge fires onDidChangeValidation
         // when done, which the constructor subscription above will broadcast.
@@ -957,6 +960,21 @@ export class SettingsPanel implements vscode.Disposable {
         error: message,
       });
     }
+  }
+
+  /**
+   * Handle the `githubAuthLogin` message: open (or reuse) a named terminal and
+   * start the interactive `gh auth login` flow in it. `gh auth login` cannot run
+   * headlessly, so we never exec it or capture output — the user completes the
+   * browser/token flow in the terminal. This only launches the official gh
+   * command; it handles no tokens itself.
+   */
+  private launchGithubAuthLogin(): void {
+    const terminalName = 'GitHub Login';
+    const existing = vscode.window.terminals.find((t) => t.name === terminalName);
+    const terminal = existing ?? vscode.window.createTerminal({ name: terminalName });
+    terminal.show();
+    terminal.sendText('gh auth login', true);
   }
 
   /** Re-broadcast composed prompts for all three agents to the webview. */

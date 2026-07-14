@@ -416,6 +416,13 @@ export type WebviewToHostMessage =
    * `obsidianVaultResult` message.
    */
   | { type: 'obsidianDetectVault' }
+  /**
+   * Launch the interactive `gh auth login` flow in a VS Code terminal. `gh auth
+   * login` cannot run headlessly, so the host opens a named terminal and sends
+   * the command; the user completes the browser/token flow there. No host reply
+   * is sent — the terminal itself is the feedback.
+   */
+  | { type: 'githubAuthLogin' }
   /** Open an external https: URL via vscode.env.openExternal. Only https: scheme is accepted. */
   | { type: 'openExternal'; url: string }
   /**

@@ -2140,6 +2140,14 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
     container.appendChild(detectBlock);
   }
 
+  // GitHub module: render the login block below the instructions, so operators
+  // can launch the interactive `gh auth login` flow in a terminal.
+  if (m.id === 'tool.github') {
+    const loginBlock = renderGithubLoginBlock();
+    loginBlock.id = 'github-login-block';
+    container.appendChild(loginBlock);
+  }
+
   // Feedback Logging module: render the feedback entry card UI below the
   // instructions. Scoped exclusively to this module's detail view.
   if (m.id === 'tool.feedback-log') {
@@ -4138,6 +4146,40 @@ function renderObsidianDetectBlock(): HTMLElement {
     status.textContent = 'No Obsidian vault found. Set Vault Path manually.';
   }
   block.appendChild(status);
+
+  return block;
+}
+
+/**
+ * GitHub "Login to GitHub" block, shown in the `tool.github` module detail
+ * view below the instructions. Lets the operator launch the interactive
+ * `gh auth login` flow in a VS Code terminal. Unlike the detect/discover
+ * blocks this has no in-flight state or host reply: the terminal itself is the
+ * feedback, and the user completes the browser/token flow there. `gh auth
+ * login` cannot run headlessly, so a terminal is the correct mechanism.
+ */
+function renderGithubLoginBlock(): HTMLElement {
+  const block = el('div', { class: 'support-discovery-block' });
+
+  const header = textEl('div', 'Login to GitHub', 'details-header');
+  block.appendChild(header);
+
+  const loginBtn = el('button', {
+    class: 'primary',
+    type: 'button',
+  }) as HTMLButtonElement;
+  loginBtn.textContent = 'Login to GitHub';
+  loginBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'githubAuthLogin' });
+  });
+  block.appendChild(loginBtn);
+
+  const note = textEl(
+    'div',
+    'Runs `gh auth login` in a terminal to authenticate the GitHub CLI.',
+    'support-discovery-status support-discovery-status--hint',
+  );
+  block.appendChild(note);
 
   return block;
 }

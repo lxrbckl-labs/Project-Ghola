@@ -57,7 +57,7 @@ If the object is empty, no repositories are protected by this module - but you s
 
 ## Authentication
 
-gh operations require the user to have authenticated gh beforehand. `gh auth login` is interactive and is NOT in the allowlist; the agent never runs it. The agent may check authentication state with `gh auth status` when that command is enabled. If a gh command fails because gh is not authenticated (or the token lacks scope), surface the failure to the user (TPM) rather than attempting to authenticate or work around it.
+gh operations require the user to have authenticated gh beforehand. `gh auth login` is interactive and is NOT in the allowlist; the agent never runs it. The user can trigger `gh auth login` themselves via the "Login to GitHub" button in the `tool.github` module panel, which opens a terminal running the command — this is a HOST/user action, not something the agent performs. The agent may check authentication state with `gh auth status` when that command is enabled. If a gh command fails because gh is not authenticated (or the token lacks scope), surface the failure to the user (TPM) rather than attempting to authenticate or work around it.
 
 ## Role-Specific Notes
 
