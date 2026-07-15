@@ -3467,7 +3467,7 @@ function renderGholaConfigBlock(): HTMLElement {
   // The three boolean sub-toggles that must read + persist false when the master
   // switch is off. Kept as a list so the master-off handler and the sub-control
   // renderer agree on exactly which keys are gated.
-  const gholaBooleanKeys = ['autoOpenWarRoom', 'tournament', 'dryRun'];
+  const gholaBooleanKeys = ['autoOpenWarRoom', 'tournament', 'dryRun', 'autoVerify'];
 
   // Master toggle commit: when the switch has just been flipped to OFF, force
   // the three boolean sub-values to false in the store (a number field like
@@ -3527,7 +3527,7 @@ function renderGholaConfigBlock(): HTMLElement {
   const subControls = el('div', {
     class: masterEnabled ? 'ghola-subcontrols' : 'ghola-subcontrols ghola-subcontrols--disabled',
   });
-  ['autoOpenWarRoom', 'tournament', 'maxConcurrentGholas', 'dryRun'].forEach((key) => {
+  ['autoOpenWarRoom', 'tournament', 'maxConcurrentGholas', 'dryRun', 'autoVerify'].forEach((key) => {
     const field = fields[key];
     if (!field) return;
     const isGatedBoolean = !masterEnabled && gholaBooleanKeys.includes(key);
@@ -4410,7 +4410,7 @@ function renderSessions(wrapper: HTMLElement): void {
  * library / resume picker, and read-only status chips mirroring the
  * mode.war sub-toggles. Mostly an observability surface — the only
  * cooperative actions are "Awaken All" and per-mission "Resume", both of
- * which just write a request into `.ghola/control.json` for the TPM agent
+ * which just write a request into `control.json` for the TPM agent
  * to pick up out of band; nothing here directly wakes/retires a ghola.
  *
  * The rail item that reaches this function only appears while `mode.war`
@@ -4616,7 +4616,7 @@ function renderWarRoom(wrapper: HTMLElement): void {
  * Prominent banner shown while a "gholaAwakenAll" kill-switch request is
  * pending team stand-down (`control.awakenAll === true`). Purely
  * informational — the actual stand-down is cooperative: the TPM agent polls
- * `.ghola/control.json` out of band and clears it once the team has stood
+ * `control.json` out of band and clears it once the team has stood
  * down, at which point the next `warRoomData` push stops rendering this.
  */
 function renderWarRoomAwakenAllBanner(control: NonNullable<WarRoomData['control']>): HTMLElement {
@@ -5188,7 +5188,7 @@ function renderWarRoomCounts(counts: NonNullable<WarRoomData['counts']>): HTMLEl
  * status chips only — not editable here; the note below points to where
  * they're actually configured. Also hosts the Awaken All control and the
  * god-console directive input, both of which write cooperative requests into
- * `.ghola/control.json` for the TPM agent to pick up out of band.
+ * `control.json` for the TPM agent to pick up out of band.
  */
 function renderWarRoomControls(
   settings: NonNullable<WarRoomData['settings']>,
@@ -5206,6 +5206,7 @@ function renderWarRoomControls(
     ),
   );
   chips.appendChild(warRoomChip('Dry run', settings.dryRun));
+  chips.appendChild(warRoomChip('Auto-verify', settings.autoVerify));
   chips.appendChild(warRoomChip('Hard-rules floor: enforced', true));
   card.appendChild(chips);
 
@@ -5298,7 +5299,7 @@ function renderWarRoomGodConsole(control: WarRoomData['control']): HTMLElement {
  * Emergency "Awaken All" affordance: a danger-styled button that requests a
  * cooperative team stand-down, plus a one-line caption explaining what it
  * does and does not do (it is a request, not a kill — the TPM agent polls
- * `.ghola/control.json` and stands the team down on its own schedule).
+ * `control.json` and stands the team down on its own schedule).
  */
 function renderWarRoomAwakenAllControl(): HTMLElement {
   const wrap = el('div', { class: 'warroom-awaken-control' });

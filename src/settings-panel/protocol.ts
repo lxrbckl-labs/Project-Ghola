@@ -234,6 +234,7 @@ export interface WarRoomSettings {
   tournament: boolean;
   maxConcurrentGholas: number;
   dryRun: boolean;
+  autoVerify: boolean;
 }
 
 /**
@@ -272,9 +273,11 @@ export interface WarRoomData {
   /** Resolved `mode.war` sub-toggle values. */
   settings?: WarRoomSettings;
   /**
-   * Kill-switch state read from `<workspace>/.ghola/control.json`, when that
-   * file exists and parses. Omitted/undefined when the file is absent — the
-   * War Room treats that identically to `{ awakenAll: false }` (no banner).
+   * Kill-switch state read from `<ledger-root>/<subject>/control.json` (the
+   * per-subject cooperative-control file, resolved globally — never the work
+   * repo), when that file exists and parses. Omitted/undefined when the file is
+   * absent — the War Room treats that identically to `{ awakenAll: false }` (no
+   * banner).
    */
   control?: {
     awakenAll: boolean;
@@ -433,7 +436,7 @@ export type WebviewToHostMessage =
   | { type: 'requestWarRoom'; subject?: string }
   /**
    * Emergency team stand-down request from the War Room's "Awaken All"
-   * button. The host writes `<workspace>/.ghola/control.json` with
+   * button. The host writes `<ledger-root>/<subject>/control.json` with
    * `{ awakenAll: true, requestedAt }` and re-posts War Room data; the TPM
    * agent (out of band) polls this file and stands the team down
    * cooperatively — this message does not itself stop anything.
@@ -441,7 +444,7 @@ export type WebviewToHostMessage =
   | { type: 'gholaAwakenAll' }
   /**
    * Mission-library "Resume" click. The host reads-modify-writes
-   * `<workspace>/.ghola/control.json`, setting `resumeMission: id` and
+   * `<ledger-root>/<subject>/control.json`, setting `resumeMission: id` and
    * `resumeRequestedAt` while PRESERVING every other existing field
    * (`awakenAll`/`requestedAt`/`acknowledgedAt` etc. — never clobbered), then
    * re-posts War Room data so the picker shows a "Resuming <id>..." pending
@@ -458,7 +461,7 @@ export type WebviewToHostMessage =
   | { type: 'requestGholaDetail'; subject: string; ghola: string }
   /**
    * God-console instruction for the running mission. The host
-   * read-modify-writes `<workspace>/.ghola/control.json`, setting
+   * read-modify-writes `<ledger-root>/<subject>/control.json`, setting
    * `directive: text` and `directiveRequestedAt` while PRESERVING every other
    * existing field (`awakenAll`/`resumeMission`/etc. — never clobbered), then
    * re-posts War Room data so the pending directive shows. Like
@@ -468,7 +471,7 @@ export type WebviewToHostMessage =
   | { type: 'gholaDirective'; text: string }
   /**
    * "Declare Done" click on the open mission's War Room header. The host
-   * read-modify-writes `<workspace>/.ghola/control.json`, setting
+   * read-modify-writes `<ledger-root>/<subject>/control.json`, setting
    * `declareDone: id` and `declareDoneRequestedAt` while PRESERVING every
    * other existing field (`awakenAll`/`resumeMission`/`directive`/etc. —
    * never clobbered), then re-posts War Room data so the mission header shows
@@ -480,7 +483,7 @@ export type WebviewToHostMessage =
   | { type: 'gholaDeclareDone'; id: string }
   /**
    * Approve/deny click on a War Room escalation. The host read-modify-writes
-   * `<workspace>/.ghola/control.json`, APPENDING `{ id, subject, decision }`
+   * `<ledger-root>/<subject>/control.json`, APPENDING `{ id, subject, decision }`
    * to the `escalationResolve` queue and setting `escalationResolveRequestedAt`
    * while PRESERVING every other existing field (`awakenAll`/`resumeMission`/
    * `directive`/`declareDone`/etc. are never clobbered), then re-posts War Room

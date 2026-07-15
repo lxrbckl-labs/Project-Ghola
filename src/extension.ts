@@ -1,4 +1,4 @@
-import * as fsSync from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { TicketWidgetProvider } from './ticket-widget/provider';
@@ -111,6 +111,32 @@ export interface AtlassianBridge {
   getLastValidation(): AtlassianValidationResult | undefined;
   /** Fires every time `validate()` completes (or a token is cleared). */
   onDidChangeValidation: vscode.Event<AtlassianValidationResult>;
+}
+
+/**
+ * Resolve the War Mode ledger root GLOBALLY, with the SAME precedence the
+ * `ghola` CLI (`scripts/ghola.mjs` resolveLedgerRoot), the session launcher, and
+ * `SettingsPanel.resolveLedgerRoot` use, so every surface agrees:
+ *   1. GHOLA_LEDGER_ROOT env (non-empty)                 -> used verbatim.
+ *   2. Else the `tool.obsidian-notes` `vaultPath` setting -> <vault>/_Gholas.
+ *   3. Else                                               -> <homedir>/.ghola/ledger.
+ * NEVER resolves under the open work repo — no `.ghola/` is read from or written
+ * to the workspace. Never throws.
+ */
+function resolveLedgerRoot(context: vscode.ExtensionContext): string {
+  const envRoot = process.env.GHOLA_LEDGER_ROOT;
+  if (typeof envRoot === 'string' && envRoot.trim() !== '') {
+    return envRoot.trim();
+  }
+  const flat = context.workspaceState.get<Record<string, unknown>>(
+    WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
+    {},
+  );
+  const vaultSetting = flat['tool.obsidian-notes::vaultPath'];
+  if (typeof vaultSetting === 'string' && vaultSetting.trim() !== '') {
+    return path.join(vaultSetting.trim(), '_Gholas');
+  }
+  return path.join(os.homedir(), '.ghola', 'ledger');
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -591,21 +617,25 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // ───── War Room ledger watchers (War Mode) ────────────────────────
-  // Two-watcher scheme (mirrors loader.watchManifests' 250ms debounce):
-  //   A (bootstrap): watches the workspace pointer file
-  //     <workspaceFolder>/.ghola/ledger-path. The launched `ghola` CLI writes
-  //     the absolute ledger-root path there on the first mission. On
-  //     create/change we (re)build watcher B and refresh the War Room.
-  //   B (ledger): created lazily once the pointer resolves to an existing dir,
-  //     watching <ledgerRoot>/**/*.md. On any ghola-command write it debounces
-  //     then re-posts the War Room payload.
-  // Guards: no workspace folder -> skip entirely; pointer absent -> B not
-  // created (A stays armed); stale pointer (path gone) -> skip B, keep A armed.
-  // Both watchers + the debounce timer are disposed on deactivate.
-  const warRoomFolder = vscode.workspace.workspaceFolders?.[0];
-  if (warRoomFolder) {
-    const pointerPath = path.join(warRoomFolder.uri.fsPath, '.ghola', 'ledger-path');
-    let ledgerWatcher: vscode.FileSystemWatcher | undefined;
+  // The ledger root is resolved GLOBALLY (GHOLA_LEDGER_ROOT env, else the
+  // `tool.obsidian-notes` `vaultPath` setting -> <vault>/_Gholas, else
+  // <homedir>/.ghola/ledger) — the SAME resolution the CLI, launcher, and host
+  // use, and NEVER the open work repo. Two watchers on that real location
+  // (mirroring loader.watchManifests' 250ms debounce), each re-posting the War
+  // Room on any ghola-command / control write:
+  //   - ledger:  <root>/**/*.md          — mission/ghola/alerts/notes writes.
+  //   - control: <root>/**/control.json  — per-subject cooperative-control writes
+  //              (a CLI `*-ack` or a host button touches only control.json, not
+  //              any .md, so it needs its own watcher or pending indicators go
+  //              stale). control.json is not a .md file, so the ledger watcher
+  //              never sees it.
+  // The root is static for the session, so both watchers are created once at
+  // activation and target the real path even before the dir exists (the CLI's
+  // resolveContext mkdir -p's it on first write). Watching a vault on /mnt/c can
+  // be unreliable; that is fine — the War Room tab re-reads on open. Both
+  // watchers + the debounce timer are disposed on deactivate.
+  {
+    const ledgerRoot = resolveLedgerRoot(context);
     let warRoomDebounce: ReturnType<typeof setTimeout> | undefined;
 
     const scheduleWarRoomRefresh = (): void => {
@@ -616,62 +646,23 @@ export function activate(context: vscode.ExtensionContext): void {
       }, 250);
     };
 
-    const disposeLedgerWatcher = (): void => {
-      ledgerWatcher?.dispose();
-      ledgerWatcher = undefined;
-    };
-
-    // (Re)create watcher B from the current pointer contents. No-op (leaving B
-    // torn down) when the pointer is absent or points at a missing dir.
-    const rebuildLedgerWatcher = (): void => {
-      disposeLedgerWatcher();
-      let root: string;
-      try {
-        root = fsSync.readFileSync(pointerPath, 'utf-8').trim();
-      } catch {
-        return; // pointer absent -> no mission yet -> B not created
-      }
-      if (!root || !fsSync.existsSync(root)) return; // stale pointer -> skip B
-      const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(root, '**/*.md'),
-      );
-      watcher.onDidCreate(scheduleWarRoomRefresh);
-      watcher.onDidChange(scheduleWarRoomRefresh);
-      watcher.onDidDelete(scheduleWarRoomRefresh);
-      ledgerWatcher = watcher;
-    };
-
-    const bootstrapWatcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(warRoomFolder, '.ghola/ledger-path'),
+    const ledgerWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(ledgerRoot, '**/*.md'),
     );
-    const onPointerChanged = (): void => {
-      rebuildLedgerWatcher();
-      scheduleWarRoomRefresh();
-    };
-    bootstrapWatcher.onDidCreate(onPointerChanged);
-    bootstrapWatcher.onDidChange(onPointerChanged);
-    // Arm B immediately if the pointer already exists at activation.
-    rebuildLedgerWatcher();
+    ledgerWatcher.onDidCreate(scheduleWarRoomRefresh);
+    ledgerWatcher.onDidChange(scheduleWarRoomRefresh);
+    ledgerWatcher.onDidDelete(scheduleWarRoomRefresh);
 
-    // Watcher C (control): the ledger watcher (B) only sees `**/*.md` under the
-    // ledger root, so a CLI `*-ack` that writes ONLY <workspace>/.ghola/control.json
-    // (no ledger .md touched) never refreshed the War Room (pending indicators
-    // went stale and operators re-clicked). Watch the workspace control JSON so an
-    // ack (or any control.json create/change/delete) re-posts the War Room. Reuses
-    // the same 250ms debounce as B, which also coalesces the redundant refresh
-    // that follows the host's own control.json writes (each host writer already
-    // calls postWarRoom directly, then this watcher fires once more, debounced).
     const controlWatcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(warRoomFolder, '.ghola/control.json'),
+      new vscode.RelativePattern(ledgerRoot, '**/control.json'),
     );
     controlWatcher.onDidCreate(scheduleWarRoomRefresh);
     controlWatcher.onDidChange(scheduleWarRoomRefresh);
     controlWatcher.onDidDelete(scheduleWarRoomRefresh);
 
-    context.subscriptions.push(bootstrapWatcher, controlWatcher, {
+    context.subscriptions.push(ledgerWatcher, controlWatcher, {
       dispose: () => {
         if (warRoomDebounce !== undefined) clearTimeout(warRoomDebounce);
-        disposeLedgerWatcher();
       },
     });
   }

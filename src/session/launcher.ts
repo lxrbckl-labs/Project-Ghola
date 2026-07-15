@@ -21,6 +21,13 @@ const CLI_BOOT_DELAY_MS = 3000;
 const FASTPATH_MODULE_ID = 'tool.fastpath-check';
 
 /**
+ * `tool.obsidian-notes`. Its `vaultPath` setting is the single source of truth
+ * for the Obsidian vault, used here to resolve the War Mode ledger root the
+ * SAME way the extension host and the `ghola` CLI do.
+ */
+const OBSIDIAN_MODULE_ID = 'tool.obsidian-notes';
+
+/**
  * `tool.self-upgrade`. When it is enabled and NO `mode.*` module is, the session
  * is a Self Upgrade session — its own non-ticket-scoped modality. The launcher
  * labels `GHOLA_MODE` as `self-upgrade` (not `unconstrained`) so the probe
@@ -205,6 +212,15 @@ export class SessionLauncher {
       QA_AGENT_COUNT: String(qaCount),
       QA_MODEL: qaModel,
     };
+    // War Mode ledger root, resolved GLOBALLY and identically to the extension
+    // host and the `ghola` CLI (see resolveLedgerRoot). Exporting GHOLA_LEDGER_ROOT
+    // (and GHOLA_VAULT when a vault resolved) means the in-session CLI resolves the
+    // exact same ledger location this launcher and the host computed — no workspace
+    // pointer, and no drift that would silently break War Mode.
+    const ledger = this.resolveLedgerRoot();
+    env.GHOLA_LEDGER_ROOT = ledger.root;
+    if (ledger.vault) env.GHOLA_VAULT = ledger.vault;
+
     // Bridge coordinates go into the terminal env ONLY (never the banner, a log
     // line, or any sendText). The token is a per-session secret; keep it here.
     if (this.bridgeUrl) env.GHOLA_BRIDGE_URL = this.bridgeUrl;
@@ -507,6 +523,29 @@ export class SessionLauncher {
     }
 
     return undefined;
+  }
+
+  /**
+   * Resolve the War Mode ledger root GLOBALLY, with the SAME precedence the
+   * `ghola` CLI (`scripts/ghola.mjs` resolveLedgerRoot) and the extension host
+   * (`SettingsPanel.resolveLedgerRoot`) use, so all three surfaces always agree:
+   *   1. GHOLA_LEDGER_ROOT env (non-empty)                 -> used verbatim.
+   *   2. Else the `tool.obsidian-notes` `vaultPath` setting -> <vault>/_Gholas.
+   *   3. Else                                               -> <homedir>/.ghola/ledger.
+   * NEVER resolves under the launched work repo. Returns the resolved root plus
+   * the vault it came from (or null) so the caller can also export GHOLA_VAULT.
+   */
+  private resolveLedgerRoot(): { root: string; vault: string | null } {
+    const envRoot = process.env.GHOLA_LEDGER_ROOT;
+    if (typeof envRoot === 'string' && envRoot.trim() !== '') {
+      return { root: envRoot.trim(), vault: null };
+    }
+    const vaultSetting = this.readModuleSetting(OBSIDIAN_MODULE_ID, 'vaultPath');
+    if (typeof vaultSetting === 'string' && vaultSetting.trim() !== '') {
+      const vault = vaultSetting.trim();
+      return { root: path.join(vault, '_Gholas'), vault };
+    }
+    return { root: path.join(os.homedir(), '.ghola', 'ledger'), vault: null };
   }
 
   /**

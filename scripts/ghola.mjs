@@ -11,34 +11,28 @@
 // the single source of truth. Pure ESM, Node builtins only (fs, path, os,
 // process) — no npm dependencies.
 //
-// ── Workspace, vault + ledger resolution ─────────────────────────────────
-// Workspace = the launched session's working repo. It defaults to
-// process.cwd() with an optional --workspace <path> override.
+// ── Ledger-root resolution (GLOBAL — never the work repo) ────────────────
+// The ledger root is resolved GLOBALLY, identically to the extension host and
+// the session launcher, so all three surfaces agree on one location. NOTHING
+// is ever written to or read from the launched work repo (<workspace>/.ghola/
+// is gone entirely). Resolution precedence:
+//   1. GHOLA_LEDGER_ROOT env (set/non-empty) -> used verbatim. This is what the
+//      launcher exports, so an in-session CLI resolves the exact same root the
+//      host and launcher computed.
+//   2. Else GHOLA_VAULT env (set/non-empty) -> <vault>/_Gholas/.
+//   3. Else the home fallback -> <homedir>/.ghola/ledger/ (so War Mode works
+//      even with no Obsidian vault and no launcher env at all).
+// The resolved root is created with mkdir -p if it does not yet exist (it may
+// be the home fallback, or a vault subdir that has never been written).
 //
-// Ledger-root resolution precedence:
-//   --vault <path> > GHOLA_VAULT env > SWT_OBSIDIAN_PATH env
-//   > auto-discover (search known roots for a directory containing a
-//     .obsidian marker)
-//   > workspace-local fallback: <workspace>/.ghola/gholas/
-// An explicit vault (flag or env) is trusted verbatim and created with
-// mkdir -p if it does not yet exist (so a scratch test dir can be pointed at
-// directly); auto-discovery requires the .obsidian marker because it is
-// guessing rather than being told. When a real vault resolves, the ledger
-// root is <vault>/_Gholas/. When nothing resolves, the ledger root is the
-// workspace-local fallback <workspace>/.ghola/gholas/ (that directory IS
-// the ledger root — nothing further is nested under it), so ghola mode
-// works even with no Obsidian vault present at all.
-//
-// ── Pointer file (how the extension learns where the ledger is) ──────────
-// The AUTHORITATIVE pointer lives in the WORKSPACE at
-// <workspace>/.ghola/ledger-path and contains the absolute path to the
-// ledger root (trailing newline). Phase 3's War Room file-watcher runs in
-// the extension host, which has NO vault path and only knows the workspace
-// — so it reads this workspace pointer to learn where to watch. A
-// convenience copy is also written inside the ledger root (.ledger-path).
-// Both writes are content-idempotent (same path every run for a given
-// workspace/vault) so they deliberately happen outside the lock below;
-// concurrent identical writes are harmless.
+// ── Pointer file (convenience only) ──────────────────────────────────────
+// A convenience copy of the ledger-root path is written INSIDE the ledger root
+// itself at <ledger-root>/.ledger-path (trailing newline). It lives in the
+// vault/home ledger, never the work repo. The extension host does NOT read it
+// — the host resolves the ledger root globally the same way this CLI does — so
+// it is retained purely as a human-readable breadcrumb. The write is
+// content-idempotent (same path every run for a given root) so it deliberately
+// happens outside the lock below; concurrent identical writes are harmless.
 //
 // ── Concurrency approach (CHOSEN: single advisory lockfile) ─────────────
 // All ledger mutations for a given ledger root are serialized through one
@@ -71,14 +65,15 @@
 // and destroyed within this script, never ledger content.
 //
 // ── Ledger layout (created on demand) ────────────────────────────────────
-//   <ledger-root>/                       <vault>/_Gholas/ OR <workspace>/.ghola/gholas/
-//     .ledger-path                       convenience copy of the pointer
+//   <ledger-root>/                       <vault>/_Gholas/ OR <homedir>/.ghola/ledger/
+//     .ledger-path                       convenience copy of the root path
 //     <subject>/
 //       <ghola-slug>.md                  one file per ghola (frontmatter + body)
 //       _missions.md                     mission records for this subject
 //       operating-notes.md               self-tuning notes (scaffolded lazily)
+//       control.json                     per-subject cooperative-control file
+//       control.lock                     per-subject control-write lock
 //     _archive/<subject>/<ghola-slug>.md soft-archived gholas (moved, not deleted)
-//   <workspace>/.ghola/ledger-path      AUTHORITATIVE pointer (extension reads this)
 //
 // Run with --help (or no arguments) for the full command list.
 
@@ -225,109 +220,42 @@ function requireFlag(flags, name, usage) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Workspace + vault resolution
+// Ledger-root resolution (GLOBAL — identical to the host + launcher)
 // ─────────────────────────────────────────────────────────────────────────
 
-function safeReaddirDirs(dir) {
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-  } catch {
-    return [];
+// Resolves the ledger root and the vault it came from (or null), GLOBALLY per
+// the contract shared by the extension host and the session launcher:
+//   1. GHOLA_LEDGER_ROOT env (non-empty)  -> used verbatim (vault: null).
+//   2. Else GHOLA_VAULT env (non-empty)   -> <vault>/_Gholas (vault: <vault>).
+//   3. Else                               -> <homedir>/.ghola/ledger (vault: null).
+// It NEVER resolves anything under the launched work repo. Nothing is
+// auto-discovered here so the CLI can never drift from the host/launcher, which
+// export GHOLA_LEDGER_ROOT/GHOLA_VAULT into the session env.
+function resolveLedgerRoot() {
+  const envRoot = process.env.GHOLA_LEDGER_ROOT;
+  if (typeof envRoot === 'string' && envRoot.trim() !== '') {
+    return { root: path.resolve(envRoot.trim()), vault: null };
   }
+  const vaultEnv = process.env.GHOLA_VAULT;
+  if (typeof vaultEnv === 'string' && vaultEnv.trim() !== '') {
+    const vault = path.resolve(vaultEnv.trim());
+    return { root: path.join(vault, '_Gholas'), vault };
+  }
+  return { root: path.join(os.homedir(), '.ghola', 'ledger'), vault: null };
 }
 
-function findVaultsUnder(root, maxDepth, found) {
-  if (!fs.existsSync(root)) return;
-  const stack = [{ dir: root, depth: 0 }];
-  while (stack.length) {
-    const { dir, depth } = stack.pop();
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const e of entries) {
-      if (!e.isDirectory()) continue;
-      if (e.name === '.obsidian') {
-        found.push(dir);
-        continue;
-      }
-      if (depth < maxDepth) stack.push({ dir: path.join(dir, e.name), depth: depth + 1 });
-    }
-  }
-}
-
-function autoDiscoverVault() {
-  const home = os.homedir();
-  const roots = [
-    path.join(home, 'Documents', 'Obsidian'),
-    path.join(home, 'Obsidian'),
-  ];
-  if (fs.existsSync('/mnt/c/Users')) {
-    for (const user of safeReaddirDirs('/mnt/c/Users')) {
-      roots.push(`/mnt/c/Users/${user}/Documents/Obsidian`);
-      roots.push(`/mnt/c/Users/${user}/Obsidian`);
-    }
-  }
-  const found = [];
-  for (const root of roots) findVaultsUnder(root, 3, found);
-  return Array.from(new Set(found.map((f) => path.resolve(f))));
-}
-
-function resolveWorkspace(flags) {
-  return path.resolve(typeof flags.workspace === 'string' ? flags.workspace : process.cwd());
-}
-
-// Resolves the vault path (flag/env/auto-discover) or null when no Obsidian
-// vault can be found — null signals the caller to use the workspace-local
-// fallback ledger root instead.
-function resolveVaultOrNull(flags) {
-  if (typeof flags.vault === 'string') {
-    const p = path.resolve(flags.vault);
-    ensureDirSync(p);
-    return p;
-  }
-  if (process.env.GHOLA_VAULT) {
-    const p = path.resolve(process.env.GHOLA_VAULT);
-    ensureDirSync(p);
-    return p;
-  }
-  if (process.env.SWT_OBSIDIAN_PATH) {
-    const p = path.resolve(process.env.SWT_OBSIDIAN_PATH);
-    ensureDirSync(p);
-    return p;
-  }
-  const found = autoDiscoverVault();
-  if (found.length > 1) {
-    fail(`multiple candidate vaults found; pass --vault <path> to pick one, or --local to force the workspace-local ledger:\n${found.map((f) => `  - ${f}`).join('\n')}`);
-  }
-  if (found.length === 1) return found[0];
-  return null; // no vault -> workspace-local fallback
-}
-
-// The resolution context shared by every command: the workspace, the
-// resolved vault (or null), and the ledger root that follows from them.
-// --local forces the workspace-local ledger (skips vault resolution
-// entirely), even when an Obsidian vault would otherwise be discoverable.
-function resolveContext(flags) {
-  const workspace = resolveWorkspace(flags);
-  const vault = flags.local ? null : resolveVaultOrNull(flags);
-  const root = vault
-    ? path.join(vault, '_Gholas')
-    : path.join(workspace, '.ghola', 'gholas');
-  return { workspace, vault, root };
+// The resolution context shared by every command: the resolved vault (or null)
+// and the ledger root that follows from it. The root is created with mkdir -p
+// if absent (it may be the home fallback, or a never-written vault subdir).
+function resolveContext() {
+  const { root, vault } = resolveLedgerRoot();
+  ensureDirSync(root);
+  return { vault, root };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Ledger paths (all keyed off the resolved ledger root)
 // ─────────────────────────────────────────────────────────────────────────
-
-function workspacePointerPath(workspace) {
-  return path.join(workspace, '.ghola', 'ledger-path');
-}
 
 // The cooperative kill-switch + resume + directive + declare-done control
 // file. Shape: { awakenAll: boolean, requestedAt?: string, acknowledgedAt?:
@@ -350,9 +278,11 @@ function workspacePointerPath(workspace) {
 // one file but are otherwise independent: acking one never disturbs any
 // other's fields. Like every other ledger write in this file, updates are
 // full-content overwrites via atomicWriteFileSync (temp+rename) — never a
-// delete.
-function controlFilePath(workspace) {
-  return path.join(workspace, '.ghola', 'control.json');
+// delete. control.json is now PER-SUBJECT under the ledger root
+// (<ledger-root>/<subject>/control.json), living beside that subject's
+// missions/gholas — never in the work repo.
+function controlFilePath(root, subject) {
+  return path.join(subjectDir(root, subject), 'control.json');
 }
 
 function localPointerPath(root) {
@@ -363,13 +293,14 @@ function lockFilePath(root) {
   return path.join(root, '.ghola.lock');
 }
 
-// The control lock lives beside control.json under the WORKSPACE .ghola dir
-// (NOT the ledger root), because control.json is a workspace-scoped file that
-// two independent writers touch: this CLI and the VS Code host. Both implement
-// the IDENTICAL lock protocol on this exact path so their read-modify-write of
-// control.json is serialized across processes (see withControlLock below).
-function controlLockFilePath(workspace) {
-  return path.join(workspace, '.ghola', 'control.lock');
+// The control lock lives beside control.json in the subject's ledger dir
+// (<ledger-root>/<subject>/control.lock), because control.json is a
+// per-subject file that two independent writers touch: this CLI and the VS
+// Code host. Both implement the IDENTICAL lock protocol on this exact path so
+// their read-modify-write of control.json is serialized across processes (see
+// withControlLock below).
+function controlLockFilePath(root, subject) {
+  return path.join(subjectDir(root, subject), 'control.lock');
 }
 
 function subjectDir(root, subject) {
@@ -412,13 +343,12 @@ function escalationsFilePath(root, subject) {
   return path.join(subjectDir(root, subject), 'escalations.md');
 }
 
-// Creates the ledger root and writes both pointer files (authoritative
-// workspace copy + convenience ledger-root copy), each idempotently.
+// Creates the ledger root and writes the convenience ledger-root pointer copy
+// (<ledger-root>/.ledger-path) idempotently. No work-repo pointer is written —
+// the host resolves the ledger root globally, the same way this CLI does.
 function ensureLedger(ctx) {
   ensureDirSync(ctx.root);
   const desired = `${ctx.root}\n`;
-  const wsPointer = workspacePointerPath(ctx.workspace);
-  if (readFileOr(wsPointer, null) !== desired) atomicWriteFileSync(wsPointer, desired);
   const localPointer = localPointerPath(ctx.root);
   if (readFileOr(localPointer, null) !== desired) atomicWriteFileSync(localPointer, desired);
   return ctx.root;
@@ -520,8 +450,8 @@ function withLock(root, fn) {
 // processes (this CLI's *-ack commands + the host's War Room buttons). Without
 // a shared lock, concurrent writers read the same "before" state and clobber
 // each other (a lost kill-switch, a lost resolve). This mirrors the ledger
-// withLock semantics but on <workspace>/.ghola/control.lock. PINNED PROTOCOL
-// (the host implements the identical one on the same file):
+// withLock semantics but on <ledger-root>/<subject>/control.lock. PINNED
+// PROTOCOL (the host implements the identical one on the same file):
 //   - Acquire: exclusive create (openSync 'wx'); on EEXIST retry with ~20ms
 //     backoff up to a ~2000ms timeout. The lock file holds a UNIQUE NONCE
 //     (pid-rand-timestamp). A STALE lock (mtime older than ~5000ms) is a
@@ -536,8 +466,8 @@ function withLock(root, fn) {
 // Returns a release HANDLE { lockPath, nonce } (same nonce+rename-steal
 // protocol as acquireLock above); the host implements the identical protocol
 // on this exact control.lock path.
-function acquireControlLock(workspace, { timeoutMs = 2000, staleMs = 5000, backoffMs = 20 } = {}) {
-  const lockPath = controlLockFilePath(workspace);
+function acquireControlLock(root, subject, { timeoutMs = 2000, staleMs = 5000, backoffMs = 20 } = {}) {
+  const lockPath = controlLockFilePath(root, subject);
   ensureDirSync(path.dirname(lockPath));
   const nonce = `${process.pid}-${Math.random().toString(36).slice(2)}-${Date.now()}`;
   const start = Date.now();
@@ -587,8 +517,8 @@ function releaseControlLock(handle) {
   }
 }
 
-function withControlLock(workspace, fn) {
-  const handle = acquireControlLock(workspace);
+function withControlLock(root, subject, fn) {
+  const handle = acquireControlLock(root, subject);
   try {
     return fn();
   } finally {
@@ -1151,8 +1081,8 @@ function parseEscalationResolve(v) {
   return out;
 }
 
-function readControl(workspace) {
-  const p = controlFilePath(workspace);
+function readControl(root, subject) {
+  const p = controlFilePath(root, subject);
   const raw = readFileOr(p, null);
   if (raw === null) return noControlState(p);
   let parsed;
@@ -1196,11 +1126,12 @@ function readControl(workspace) {
 }
 
 function cmdAwaken({ flags }) {
-  const usage = 'ghola awaken --status | --ack [--workspace <path>] [--json]';
+  const usage = 'ghola awaken --subject S --status | --ack [--json]';
   if (!flags.status && !flags.ack) {
     fail(`awaken requires --status or --ack. Usage: ${usage}`);
   }
-  const workspace = resolveWorkspace(flags);
+  const ctx = resolveContext();
+  const subject = slugify(requireFlag(flags, 'subject', usage));
 
   if (flags.ack) {
     // TPM calls this AFTER standing the whole team down. Only this command
@@ -1210,8 +1141,8 @@ function cmdAwaken({ flags }) {
     // preserve them untouched (all four protocols mutually preserve). The
     // read+mutate+write runs under the control lock so a concurrent host write
     // cannot clobber this stand-down ack (FIX A).
-    withControlLock(workspace, () => {
-      const before = readControl(workspace);
+    withControlLock(ctx.root, subject, () => {
+      const before = readControl(ctx.root, subject);
       const next = { awakenAll: false, acknowledgedAt: nowIso() };
       if (before.requestedAt) next.requestedAt = before.requestedAt;
       if (before.resumeMission !== null) next.resumeMission = before.resumeMission;
@@ -1226,9 +1157,9 @@ function cmdAwaken({ flags }) {
       if (before.escalationResolve.length) next.escalationResolve = before.escalationResolve;
       if (before.escalationResolveRequestedAt) next.escalationResolveRequestedAt = before.escalationResolveRequestedAt;
       if (before.escalationResolveAcknowledgedAt) next.escalationResolveAcknowledgedAt = before.escalationResolveAcknowledgedAt;
-      atomicWriteFileSync(controlFilePath(workspace), `${JSON.stringify(next, null, 2)}\n`);
+      atomicWriteFileSync(controlFilePath(ctx.root, subject), `${JSON.stringify(next, null, 2)}\n`);
     });
-    const state = readControl(workspace);
+    const state = readControl(ctx.root, subject);
     if (flags.json) {
       printJson(state);
     } else {
@@ -1241,7 +1172,7 @@ function cmdAwaken({ flags }) {
   }
 
   // --status
-  const state = readControl(workspace);
+  const state = readControl(ctx.root, subject);
   if (flags.json) {
     printJson(state);
     return;
@@ -1261,11 +1192,12 @@ function cmdAwaken({ flags }) {
 // ─────────────────────────────────────────────────────────────────────────
 
 function cmdResume({ flags }) {
-  const usage = 'ghola resume --status | --ack [--workspace <path>] [--json]';
+  const usage = 'ghola resume --subject S --status | --ack [--json]';
   if (!flags.status && !flags.ack) {
     fail(`resume requires --status or --ack. Usage: ${usage}`);
   }
-  const workspace = resolveWorkspace(flags);
+  const ctx = resolveContext();
+  const subject = slugify(requireFlag(flags, 'subject', usage));
 
   if (flags.ack) {
     // TPM calls this AFTER reawakening the requested mission's crew from the
@@ -1277,8 +1209,8 @@ function cmdResume({ flags }) {
     // preserve).
     // The read+mutate+write runs under the control lock so a concurrent host
     // write cannot clobber this resume ack (FIX A).
-    withControlLock(workspace, () => {
-      const before = readControl(workspace);
+    withControlLock(ctx.root, subject, () => {
+      const before = readControl(ctx.root, subject);
       const next = {
         awakenAll: before.awakenAll,
         resumeMission: null,
@@ -1296,9 +1228,9 @@ function cmdResume({ flags }) {
       if (before.escalationResolve.length) next.escalationResolve = before.escalationResolve;
       if (before.escalationResolveRequestedAt) next.escalationResolveRequestedAt = before.escalationResolveRequestedAt;
       if (before.escalationResolveAcknowledgedAt) next.escalationResolveAcknowledgedAt = before.escalationResolveAcknowledgedAt;
-      atomicWriteFileSync(controlFilePath(workspace), `${JSON.stringify(next, null, 2)}\n`);
+      atomicWriteFileSync(controlFilePath(ctx.root, subject), `${JSON.stringify(next, null, 2)}\n`);
     });
-    const state = readControl(workspace);
+    const state = readControl(ctx.root, subject);
     if (flags.json) {
       printJson(state);
     } else {
@@ -1311,7 +1243,7 @@ function cmdResume({ flags }) {
   }
 
   // --status
-  const state = readControl(workspace);
+  const state = readControl(ctx.root, subject);
   if (flags.json) {
     printJson(state);
     return;
@@ -1331,11 +1263,12 @@ function cmdResume({ flags }) {
 // ─────────────────────────────────────────────────────────────────────────
 
 function cmdDirective({ flags }) {
-  const usage = 'ghola directive --status | --ack [--workspace <path>] [--json]';
+  const usage = 'ghola directive --subject S --status | --ack [--json]';
   if (!flags.status && !flags.ack) {
     fail(`directive requires --status or --ack. Usage: ${usage}`);
   }
-  const workspace = resolveWorkspace(flags);
+  const ctx = resolveContext();
+  const subject = slugify(requireFlag(flags, 'subject', usage));
 
   if (flags.ack) {
     // TPM calls this AFTER acting on the operator's god-console directive
@@ -1348,8 +1281,8 @@ function cmdDirective({ flags }) {
     // protocols mutually preserve).
     // The read+mutate+write runs under the control lock so a concurrent host
     // write cannot clobber this directive ack (FIX A).
-    withControlLock(workspace, () => {
-      const before = readControl(workspace);
+    withControlLock(ctx.root, subject, () => {
+      const before = readControl(ctx.root, subject);
       const next = {
         awakenAll: before.awakenAll,
         directive: null,
@@ -1367,9 +1300,9 @@ function cmdDirective({ flags }) {
       if (before.escalationResolve.length) next.escalationResolve = before.escalationResolve;
       if (before.escalationResolveRequestedAt) next.escalationResolveRequestedAt = before.escalationResolveRequestedAt;
       if (before.escalationResolveAcknowledgedAt) next.escalationResolveAcknowledgedAt = before.escalationResolveAcknowledgedAt;
-      atomicWriteFileSync(controlFilePath(workspace), `${JSON.stringify(next, null, 2)}\n`);
+      atomicWriteFileSync(controlFilePath(ctx.root, subject), `${JSON.stringify(next, null, 2)}\n`);
     });
-    const state = readControl(workspace);
+    const state = readControl(ctx.root, subject);
     if (flags.json) {
       printJson(state);
     } else {
@@ -1382,7 +1315,7 @@ function cmdDirective({ flags }) {
   }
 
   // --status
-  const state = readControl(workspace);
+  const state = readControl(ctx.root, subject);
   if (flags.json) {
     printJson(state);
     return;
@@ -1402,11 +1335,12 @@ function cmdDirective({ flags }) {
 // ─────────────────────────────────────────────────────────────────────────
 
 function cmdDeclareDone({ flags }) {
-  const usage = 'ghola declaredone --status | --ack [--workspace <path>] [--json]';
+  const usage = 'ghola declaredone --subject S --status | --ack [--json]';
   if (!flags.status && !flags.ack) {
     fail(`declaredone requires --status or --ack. Usage: ${usage}`);
   }
-  const workspace = resolveWorkspace(flags);
+  const ctx = resolveContext();
+  const subject = slugify(requireFlag(flags, 'subject', usage));
 
   if (flags.ack) {
     // TPM calls this AFTER finishing up in response to the operator's P4
@@ -1421,8 +1355,8 @@ function cmdDeclareDone({ flags }) {
     // four protocols mutually preserve).
     // The read+mutate+write runs under the control lock so a concurrent host
     // write cannot clobber this declaredone ack (FIX A).
-    withControlLock(workspace, () => {
-      const before = readControl(workspace);
+    withControlLock(ctx.root, subject, () => {
+      const before = readControl(ctx.root, subject);
       const next = {
         awakenAll: before.awakenAll,
         declareDone: null,
@@ -1440,9 +1374,9 @@ function cmdDeclareDone({ flags }) {
       if (before.escalationResolve.length) next.escalationResolve = before.escalationResolve;
       if (before.escalationResolveRequestedAt) next.escalationResolveRequestedAt = before.escalationResolveRequestedAt;
       if (before.escalationResolveAcknowledgedAt) next.escalationResolveAcknowledgedAt = before.escalationResolveAcknowledgedAt;
-      atomicWriteFileSync(controlFilePath(workspace), `${JSON.stringify(next, null, 2)}\n`);
+      atomicWriteFileSync(controlFilePath(ctx.root, subject), `${JSON.stringify(next, null, 2)}\n`);
     });
-    const state = readControl(workspace);
+    const state = readControl(ctx.root, subject);
     if (flags.json) {
       printJson(state);
     } else {
@@ -1455,7 +1389,7 @@ function cmdDeclareDone({ flags }) {
   }
 
   // --status
-  const state = readControl(workspace);
+  const state = readControl(ctx.root, subject);
   if (flags.json) {
     printJson(state);
     return;
@@ -2266,7 +2200,6 @@ function cmdEscalate({ flags }) {
     // (3) a short, fast control-lock RMW that RE-READS control.json fresh and
     // removes ONLY those exact processed tuples. Neither lock is ever nested
     // inside the other.
-    const workspace = resolveWorkspace(flags);
     const applied = [];
     const warned = []; // ids present in the queue but absent from escalations.md
     const skippedTerminal = []; // {id, status}: matched a NON-pending row (FIX B)
@@ -2291,7 +2224,7 @@ function cmdEscalate({ flags }) {
     // has no queued resolves at all. The AUTHORITATIVE decision read happens in
     // phase 2 (fresh, under the ledger lock); the AUTHORITATIVE removal happens
     // in phase 3 (fresh, under the control lock).
-    const initial = readControl(workspace);
+    const initial = readControl(ctx.root, subject);
     if (initial.escalationResolve.filter((e) => e.subject === subject).length === 0) {
       fail(`escalate --ack: no pending escalationResolve entries for subject '${subject}' in control.json`);
     }
@@ -2303,7 +2236,7 @@ function cmdEscalate({ flags }) {
     // full ~15s budget, the control lock is not held during that wait, so its
     // ~5s stale window and the host's 2s fail-open are never outlived.
     withLock(ctx.root, () => {
-      const fresh2 = readControl(workspace);
+      const fresh2 = readControl(ctx.root, subject);
       const forSubject = fresh2.escalationResolve.filter((e) => e.subject === subject);
       const p = escalationsFilePath(ctx.root, subject);
       const rows = parseEscalationsFile(readFileOr(p, ''));
@@ -2343,8 +2276,8 @@ function cmdEscalate({ flags }) {
     // subjects' entries are untouched, and the awaken/resume/directive/declaredone
     // fields are carried over from the FRESH read so a concurrent host write to
     // any of them wins.
-    withControlLock(workspace, () => {
-      const fresh = readControl(workspace);
+    withControlLock(ctx.root, subject, () => {
+      const fresh = readControl(ctx.root, subject);
       remaining = fresh.escalationResolve.filter((e) => !processedTuples.has(tupleKey(e)));
       const next = {
         awakenAll: fresh.awakenAll,
@@ -2363,7 +2296,7 @@ function cmdEscalate({ flags }) {
       if (fresh.declareDoneRequestedAt) next.declareDoneRequestedAt = fresh.declareDoneRequestedAt;
       if (fresh.declareDoneAcknowledgedAt) next.declareDoneAcknowledgedAt = fresh.declareDoneAcknowledgedAt;
       if (fresh.escalationResolveRequestedAt) next.escalationResolveRequestedAt = fresh.escalationResolveRequestedAt;
-      atomicWriteFileSync(controlFilePath(workspace), `${JSON.stringify(next, null, 2)}\n`);
+      atomicWriteFileSync(controlFilePath(ctx.root, subject), `${JSON.stringify(next, null, 2)}\n`);
     });
     for (const wid of warned) {
       console.error(`ghola: warning: escalate --ack: escalation '${wid}' not found in escalations.md for subject '${subject}'; skipped`);
@@ -2371,7 +2304,7 @@ function cmdEscalate({ flags }) {
     for (const s of skippedTerminal) {
       console.error(`ghola: warning: escalate --ack: escalation '${s.id}' is already ${s.status} (not pending); skipped without change`);
     }
-    const state = readControl(workspace);
+    const state = readControl(ctx.root, subject);
     if (flags.json) {
       printJson(state);
     } else {
@@ -2386,8 +2319,7 @@ function cmdEscalate({ flags }) {
   }
 
   // --status
-  const workspace = resolveWorkspace(flags);
-  const state = readControl(workspace);
+  const state = readControl(ctx.root, subject);
   const rows = parseEscalationsFile(readFileOr(escalationsFilePath(ctx.root, subject), ''));
   const pendingForSubject = state.escalationResolve.filter((e) => e.subject === subject);
   if (flags.json) {
@@ -2610,27 +2542,28 @@ function operatingNotesSummary(root, subject, maxLines = 15) {
 // took across separate awaken --status / ledger-root / mission list / ls /
 // operating-notes calls. STRICTLY READ-ONLY: it reuses the same readers those
 // standalone commands use (readControl, resolveContext, parseMissionsFile,
-// collectGholas, notesFilePath) and never writes, creates, acks, or mutates
-// anything — no ensureLedger, no control write, no file creation. It degrades
-// cleanly on a fresh subject / missing control file (the normal case) to
-// empty/none/clean sections and exits 0; it never throws for those.
+// collectGholas, notesFilePath) and never acks or mutates ledger content — no
+// ensureLedger, no control write, no ghola/mission write. (resolveContext does
+// mkdir -p the ledger ROOT so a home-fallback root exists to read from, but it
+// writes no content.) It degrades cleanly on a fresh subject / missing control
+// file (the normal case) to empty/none/clean sections and exits 0; it never
+// throws for those.
 function cmdBoot({ flags }) {
   const usage = 'ghola boot --subject S [--json]';
-  const ctx = resolveContext(flags);
-  // control.json lives under the workspace, exactly as the --status commands
-  // resolve it (resolveContext's workspace === resolveWorkspace(flags)).
-  const workspace = ctx.workspace;
+  const ctx = resolveContext();
   const subject = slugify(requireFlag(flags, 'subject', usage));
 
   // control — the same reader the awaken/resume/directive/declaredone/escalate
-  // --status commands use. Absent, corrupt, or non-object control.json all
-  // degrade to the "no control active" shape (exists:false); never throws.
-  const control = readControl(workspace);
+  // --status commands use, now per-subject under the ledger root
+  // (<ledger-root>/<subject>/control.json). Absent, corrupt, or non-object
+  // control.json all degrade to the "no control active" shape (exists:false);
+  // never throws.
+  const control = readControl(ctx.root, subject);
 
   // ledgerRoot — reuse resolveContext's resolution (identical to ls /
   // mission list). It always resolves to a path (vault-based, or the
-  // workspace-local fallback when no vault exists); report whether that
-  // directory currently exists on disk and whether it came from a vault.
+  // <homedir>/.ghola/ledger fallback when no vault env is set); report whether
+  // that directory currently exists on disk and whether it came from a vault.
   const ledgerRoot = { path: ctx.root, exists: fs.existsSync(ctx.root), fromVault: ctx.vault !== null };
 
   // missions — the same data `mission list --subject S` returns (empty for a
@@ -2711,15 +2644,13 @@ function cmdBoot({ flags }) {
 
 const HELP = `ghola — Ghola Mode command layer (reads/writes the _Gholas/ ledger)
 
-Global flags (accepted by any command):
-  --vault <path>       override vault discovery (ledger goes to <vault>/_Gholas/)
-  --workspace <path>   override the workspace (default: cwd); pointer + fallback ledger live here
-  --local              force the workspace-local ledger (skip vault resolution entirely)
-Ledger-root resolution order:
-  --local              -> <workspace>/.ghola/gholas/  (forced, skips everything below)
-  --vault > GHOLA_VAULT env > SWT_OBSIDIAN_PATH env > auto-discover .obsidian
-  > <workspace>/.ghola/gholas/  (workspace-local fallback when no vault exists)
-The authoritative pointer file is always written to <workspace>/.ghola/ledger-path.
+Ledger-root resolution (GLOBAL — identical to the extension host + launcher;
+NOTHING is ever written to or read from the launched work repo):
+  1. GHOLA_LEDGER_ROOT env (non-empty)  -> used verbatim
+  2. GHOLA_VAULT env (non-empty)        -> <vault>/_Gholas/
+  3. otherwise                          -> <homedir>/.ghola/ledger/
+A convenience copy of the root path is written to <ledger-root>/.ledger-path.
+Per-subject cooperative control lives at <ledger-root>/<subject>/control.json.
 
 Commands:
   mission start   --subject S --goal "..." [--grounded-in "..."] [--budget "..."] [--id ID]
@@ -2736,13 +2667,13 @@ Commands:
                                                                              to pending so resumed work must re-integrate,
                                                                              progress history preserved. Already-open is a
                                                                              no-op; not-found -> clear non-zero error.)
-  awaken          --status | --ack [--workspace <path>] [--json]            read/ack the kill-switch control file
-                                                                             (<workspace>/.ghola/control.json; the
+  awaken          --subject S --status | --ack [--json]                     read/ack the kill-switch control file
+                                                                             (<ledger-root>/<subject>/control.json; the
                                                                              CLI never sets awakenAll true — that is
                                                                              the host/human's job via the War Room
                                                                              button. --ack is called by TPM only
                                                                              after standing the whole team down.)
-  resume          --status | --ack [--workspace <path>] [--json]            read/ack a per-mission resume request
+  resume          --subject S --status | --ack [--json]                     read/ack a per-mission resume request
                                                                              (same control.json, field resumeMission;
                                                                              the CLI never sets resumeMission to a
                                                                              mission id — that is the host's Resume
@@ -2751,7 +2682,7 @@ Commands:
                                                                              crew from the ledger. Independent of
                                                                              awaken's fields — neither ack disturbs
                                                                              the other's.)
-  directive       --status | --ack [--workspace <path>] [--json]            read/ack the god-console directive field
+  directive       --subject S --status | --ack [--json]                     read/ack the god-console directive field
                                                                              (same control.json, field directive; the
                                                                              CLI never sets directive to non-null —
                                                                              that is the host/god-console's job. --ack
@@ -2760,7 +2691,7 @@ Commands:
                                                                              resume's, and declaredone's fields — no
                                                                              ack disturbs another protocol's fields;
                                                                              all four mutually preserve.)
-  declaredone     --status | --ack [--workspace <path>] [--json]            read/ack the operator's P4 Declare Done
+  declaredone     --subject S --status | --ack [--json]                     read/ack the operator's P4 Declare Done
                                                                              field (same control.json, field
                                                                              declareDone: mission-id | null; the CLI
                                                                              never sets declareDone to non-null —

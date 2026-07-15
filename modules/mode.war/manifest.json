@@ -37,6 +37,12 @@
         "label": "Dry Run",
         "description": "When on, TPM plans the crew and the first moves for the mission (decomposition, roster shape, initial ghola briefs) without spawning gholas or editing any files, then reports the plan for review. When off, TPM proceeds straight into an autonomous run. Default off (full autonomy is the point of ghola mode); turn dry-run on as a one-time sanity check before loosing a mission whose blast radius is unfamiliar or high-stakes.",
         "default": false
+      },
+      "autoVerify": {
+        "type": "boolean",
+        "label": "Auto-run QA Verification",
+        "description": "Controls WHEN the QA/verification pass is dispatched, not WHETHER it is required. When off (default), the TPM does not auto-spawn the QA ghola once the crew returns fixes; instead it PROPOSES the verification pass (the per-sub-purpose adversarial 'done means verified' check and the mission integration checkpoint over the combined diff) and WAITS for the operator's go-ahead before dispatching a QA ghola, leaving unverified sub-purposes in a pending-verification state until approved. When on, the TPM auto-dispatches verification as soon as the crew returns (the prior behavior). Either way the 'done means verified' quality gate still holds: a sub-purpose is not done until verification has PASSED and the mission cannot Declare-Done without it — this toggle only defers the dispatch, never the requirement.",
+        "default": false
       }
     }
   }

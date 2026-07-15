@@ -228,8 +228,22 @@ async function dispatch(
   client: BitbucketPrClient,
 ): Promise<unknown> {
   switch (route) {
-    case '/find-pr':
-      return client.findOpenPrForBranch(str(args.repoSlug), str(args.branch));
+    case '/find-pr': {
+      // `findOpenPrForBranch` returns `PrLookupResult` (`{ prUrl, prTitle?,
+      // prId? }`) with NO `status` field — a successful lookup and a "no open
+      // PR" both come back shapeless from the wrapper's perspective. The
+      // bb-bridge.mjs client judges success by `status === 'ok'`, so we tag the
+      // response here to fit that taxonomy (matching list-comments / reply /
+      // resolve / mark-ready) rather than making the client special-case this
+      // route. A finite `prId` is the found-a-PR signal the downstream
+      // pr-monitor / comment / mark-ready flows depend on.
+      const branch = str(args.branch);
+      const lookup = await client.findOpenPrForBranch(str(args.repoSlug), branch);
+      if (typeof lookup.prId === 'number' && Number.isFinite(lookup.prId)) {
+        return { status: 'ok', ...lookup };
+      }
+      return { status: 'not-found', message: `No open PR for branch ${branch}` };
+    }
     case '/list-comments':
       return client.listPullRequestComments(str(args.repoSlug), num(args.prId));
     case '/reply':

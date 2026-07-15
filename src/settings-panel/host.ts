@@ -1049,11 +1049,12 @@ export class SettingsPanel implements vscode.Disposable {
    * plus host-materialized `mode.war` defaults.
    *
    * The composer renders a module's parameters as `(defaults)` when the user
-   * has no overrides, so a pristine War Mode session would hide its four
-   * sub-toggles (autoOpenWarRoom / tournament / maxConcurrentGholas / dryRun)
+   * has no overrides, so a pristine War Mode session would hide its five
+   * sub-toggles (autoOpenWarRoom / tournament / maxConcurrentGholas / dryRun /
+   * autoVerify)
    * from TPM — yet those values gate real autonomous behavior. To fix this we
    * resolve `mode.war`'s schema defaults from the loaded manifest and layer
-   * any user overrides on top, so all four keys always render with concrete
+   * any user overrides on top, so all five keys always render with concrete
    * values in the Session Manifest.
    *
    * This is deliberately NARROW to `mode.war`: materializing defaults for
@@ -1098,7 +1099,7 @@ export class SettingsPanel implements vscode.Disposable {
   // ─── War Room (War Mode) ────────────────────────────────────────────
 
   /**
-   * Resolve `mode.war`'s four sub-toggles to concrete values, always. Reads
+   * Resolve `mode.war`'s five sub-toggles to concrete values, always. Reads
    * the compose-time resolved settings (schema defaults layered with user
    * overrides) and coerces each key to its declared type with a hardcoded
    * fallback so the snapshot never carries `undefined`. Used both for the War
@@ -1112,6 +1113,7 @@ export class SettingsPanel implements vscode.Disposable {
       tournament: typeof g.tournament === 'boolean' ? g.tournament : false,
       maxConcurrentGholas: typeof g.maxConcurrentGholas === 'number' ? g.maxConcurrentGholas : 0,
       dryRun: typeof g.dryRun === 'boolean' ? g.dryRun : false,
+      autoVerify: typeof g.autoVerify === 'boolean' ? g.autoVerify : false,
     };
   }
 
@@ -1142,14 +1144,14 @@ export class SettingsPanel implements vscode.Disposable {
    * Read the ghola ledger for one subject and post a `warRoomData` payload to
    * the webview.
    *
-   * Pointer resolution: the launched `ghola` CLI writes the absolute ledger-
-   * root path to `<workspaceFolder>/.ghola/ledger-path`. The extension host
-   * has no vault path, so it reads that pointer to learn where to look. When
-   * there is no workspace folder, no pointer file, an empty pointer, a ledger
-   * dir that no longer exists, or no subject directories, we post
-   * `{ empty: true }` — plus `control` when a workspace resolved and
-   * `.ghola/control.json` has recognized fields, so the Awaken-All /
-   * Declare-Done / resume / directive banners can still render pre-ledger.
+   * Ledger resolution: the root is resolved GLOBALLY (GHOLA_LEDGER_ROOT env, else
+   * the `tool.obsidian-notes` `vaultPath` setting -> <vault>/_Gholas, else
+   * <homedir>/.ghola/ledger) — the SAME resolution the CLI and launcher use, and
+   * NEVER the open work repo. When that ledger dir does not exist or has no
+   * subject directories, we post `{ empty: true }`. Control is now PER-SUBJECT
+   * (<root>/<subject>/control.json), so it is read only once a subject resolves;
+   * an empty ledger carries no control (there is no subject to key the Awaken-All
+   * / Declare-Done / resume / directive banners off yet).
    *
    * Parsing is done directly in TS (no child_process): a small self-contained
    * frontmatter reader over `<root>/<subject>/*.md` (skipping `_missions.md`
@@ -1208,33 +1210,70 @@ export class SettingsPanel implements vscode.Disposable {
     }
   }
 
-  private async buildWarRoomData(subject?: string): Promise<WarRoomData> {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) return { empty: true };
-
-    // Read control.json up front (it lives under the workspace, not the
-    // ledger root) so every empty-ledger early-return below can still carry
-    // it — the Awaken-All / Declare-Done / resume / directive banners must
-    // render even before any mission/ghola has ever been created.
-    const control = await this.readControlState(folder.uri.fsPath);
-    const emptyData: WarRoomData = { empty: true, ...(control ? { control } : {}) };
-
-    const pointerPath = path.join(folder.uri.fsPath, '.ghola', 'ledger-path');
-    let root: string;
-    try {
-      root = (await fs.readFile(pointerPath, 'utf-8')).trim();
-    } catch {
-      return emptyData;
+  /**
+   * Resolve the War Mode ledger root GLOBALLY, with the SAME precedence the
+   * `ghola` CLI (`scripts/ghola.mjs` resolveLedgerRoot) and the session launcher
+   * (`SessionLauncher.resolveLedgerRoot`) use, so all three surfaces always agree:
+   *   1. GHOLA_LEDGER_ROOT env (non-empty)                 -> used verbatim.
+   *   2. Else the `tool.obsidian-notes` `vaultPath` setting -> <vault>/_Gholas.
+   *   3. Else                                               -> <homedir>/.ghola/ledger.
+   * NEVER resolves under the open work repo — no `.ghola/` is read from or
+   * written to the workspace. Returns just the root path (the vault provenance
+   * is not needed by the host).
+   */
+  private resolveLedgerRoot(): string {
+    const envRoot = process.env.GHOLA_LEDGER_ROOT;
+    if (typeof envRoot === 'string' && envRoot.trim() !== '') {
+      return envRoot.trim();
     }
-    if (!root || !fsSync.existsSync(root)) return emptyData;
+    const flat = this.context.workspaceState.get<Record<string, unknown>>(
+      WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
+      {},
+    );
+    const vaultSetting = flat['tool.obsidian-notes::vaultPath'];
+    if (typeof vaultSetting === 'string' && vaultSetting.trim() !== '') {
+      return path.join(vaultSetting.trim(), '_Gholas');
+    }
+    return path.join(os.homedir(), '.ghola', 'ledger');
+  }
+
+  /**
+   * Resolve which subject the per-subject control file belongs to for a control
+   * WRITE (Awaken-All / Resume / Directive / Declare Done). Mirrors
+   * `buildWarRoomData`'s subject selection so a button acts on the subject the
+   * War Room is currently rendering: the sticky operator selection when it names
+   * a live subject, else the subject whose most-recent open mission is newest,
+   * else the first subject alphabetically. Returns `undefined` when the ledger
+   * has no subjects yet (nothing to control) — callers no-op in that case rather
+   * than writing to the work repo.
+   */
+  private resolveControlSubject(root: string): string | undefined {
+    const subjects = listLedgerSubjects(root);
+    if (subjects.length === 0) return undefined;
+    const sticky = this.lastRequestedSubject;
+    if (sticky && subjects.includes(sticky)) return sticky;
+    return pickSubjectByRecentOpenMission(root, subjects) ?? subjects[0]!;
+  }
+
+  private async buildWarRoomData(subject?: string): Promise<WarRoomData> {
+    // The ledger root is resolved GLOBALLY (vault/home), NOT from the work repo.
+    // Control is now per-subject under the ledger root, so it can only be read
+    // once a subject resolves — an empty ledger (no subjects) therefore carries
+    // no control (the banners have no subject to key off yet), which is fine:
+    // the buttons only appear once a mission/crew exists for a subject.
+    const root = this.resolveLedgerRoot();
+    if (!root || !fsSync.existsSync(root)) return { empty: true };
 
     const subjects = listLedgerSubjects(root);
-    if (subjects.length === 0) return emptyData;
+    if (subjects.length === 0) return { empty: true };
 
     const target =
       subject && subjects.includes(subject)
         ? subject
         : pickSubjectByRecentOpenMission(root, subjects) ?? subjects[0]!;
+
+    // Per-subject cooperative-control state (<root>/<target>/control.json).
+    const control = await this.readControlState(root, target);
 
     // ALL missions (open + done) — the Mission Library / resume picker needs
     // the full history. Callers that want "the current mission" (the mission
@@ -1275,8 +1314,9 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Read `<workspace>/.ghola/control.json` and return its full resolved
-   * shape (awaken-all fields plus the resume/directive/declare-done fields),
+   * Read `<ledger-root>/<subject>/control.json` (the per-subject cooperative
+   * control file, resolved GLOBALLY — never from the work repo) and return its
+   * full resolved shape (awaken-all fields plus the resume/directive/declare-done fields),
    * or `undefined` when the file is absent, unparseable, or parses to an
    * empty object. Never throws.
    *
@@ -1295,9 +1335,10 @@ export class SettingsPanel implements vscode.Disposable {
    * light up the control zone.
    */
   private async readControlState(
-    workspacePath: string,
+    root: string,
+    subject: string,
   ): Promise<NonNullable<WarRoomData['control']> | undefined> {
-    const controlPath = path.join(workspacePath, '.ghola', 'control.json');
+    const controlPath = path.join(ledgerSubjectDir(root, subject), 'control.json');
     try {
       const raw = await fs.readFile(controlPath, 'utf-8');
       const parsed = JSON.parse(raw) as {
@@ -1428,12 +1469,12 @@ export class SettingsPanel implements vscode.Disposable {
    * Serialize a control.json read-modify-write against concurrent writers.
    *
    * The host's War Room buttons and the `ghola` CLI's `*-ack` commands both do a
-   * full-file read-modify-OVERWRITE of `<workspace>/.ghola/control.json`. Without
-   * a shared lock, two writers read the same "before" state and the later write
-   * clobbers the earlier one (a lost kill-switch, a lost escalation resolve). This
-   * helper implements the EXACT lock protocol the CLI uses (`scripts/ghola.mjs`
-   * `acquireControlLock`) on the co-located `<workspace>/.ghola/control.lock`, so
-   * host and CLI mutually exclude. The protocol is ATOMIC and ownership-tokened -
+   * full-file read-modify-OVERWRITE of `<ledger-root>/<subject>/control.json`.
+   * Without a shared lock, two writers read the same "before" state and the later
+   * write clobbers the earlier one (a lost kill-switch, a lost escalation resolve).
+   * This helper implements the EXACT lock protocol the CLI uses (`scripts/ghola.mjs`
+   * `acquireControlLock`) on the co-located `<ledger-root>/<subject>/control.lock`,
+   * so host and CLI mutually exclude. The protocol is ATOMIC and ownership-tokened -
    * there is no blind unlink that could delete a live lock:
    *   - Acquire: exclusive create via `fs.open(path, 'wx')`, then write a unique
    *     NONCE (`<pid>-<rand>-<epochMs>`) into the file and keep it for release.
@@ -1459,10 +1500,10 @@ export class SettingsPanel implements vscode.Disposable {
    * lifecycle.
    */
   private async withControlLock(
-    workspacePath: string,
+    subjectDir: string,
     fn: () => Promise<void>,
   ): Promise<void> {
-    const gholaDir = path.join(workspacePath, '.ghola');
+    const gholaDir = subjectDir;
     const lockPath = path.join(gholaDir, 'control.lock');
     const timeoutMs = 2000;
     const staleMs = 5000;
@@ -1563,8 +1604,8 @@ export class SettingsPanel implements vscode.Disposable {
    * observes a half-written file: it sees either the OLD complete contents or
    * the NEW complete contents, never a truncated blob that would be misread as
    * "no control active". The temp name (`<filePath>.tmp-<pid>-<rand>`)
-   * deliberately does NOT match the literal `.ghola/control.json` path the
-   * control watcher observes, so creating/renaming it triggers no spurious War
+   * deliberately does NOT end in `control.json`, the filename the control
+   * watcher's glob observes, so creating/renaming it triggers no spurious War
    * Room refresh. The temp file is unlinked in a finally so a failed rename
    * leaves no litter behind (after a successful rename the unlink is a harmless
    * ENOENT that we swallow).
@@ -1581,27 +1622,31 @@ export class SettingsPanel implements vscode.Disposable {
 
   /**
    * Write the emergency "Awaken All" request into
-   * `<workspace>/.ghola/control.json`: `{ awakenAll: true, requestedAt }`.
+   * `<ledger-root>/<subject>/control.json`: `{ awakenAll: true, requestedAt }`.
    * This is a read-modify-write (matching `requestGholaResumeMission` /
    * `requestGholaDirective`): the existing file (if any) is read first and
    * every other field (`resumeMission`, `directive`, their timestamps,
    * `acknowledgedAt`, etc.) is preserved verbatim; only `awakenAll` and
    * `requestedAt` are overwritten. This matters because an operator can click
    * Awaken All while a resume or directive request is still pending-unacked,
-   * and a fresh-object write would silently clobber those. Creates `.ghola/`
+   * and a fresh-object write would silently clobber those. Creates the subject dir
    * if missing and never deletes the file — this is the host's own
    * extension-owned state file. Wrapped in try/catch so a write failure never
    * throws out of the message handler. Re-posts War Room data afterwards so
    * the UI reflects the pending request.
    */
   private async requestGholaAwakenAll(): Promise<void> {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) return;
+    const root = this.resolveLedgerRoot();
+    const subject = this.resolveControlSubject(root);
+    if (!subject) {
+      this.logger?.appendLine('[panel] gholaAwakenAll: no ledger subject resolved; skipping');
+      return;
+    }
+    const dir = ledgerSubjectDir(root, subject);
     try {
-      await this.withControlLock(folder.uri.fsPath, async () => {
-      const gholaDir = path.join(folder.uri.fsPath, '.ghola');
-      await fs.mkdir(gholaDir, { recursive: true });
-      const controlPath = path.join(gholaDir, 'control.json');
+      await this.withControlLock(dir, async () => {
+      await fs.mkdir(dir, { recursive: true });
+      const controlPath = path.join(dir, 'control.json');
 
       // Read-modify-write: start from whatever is already on disk (tolerant
       // of a missing/unparseable file — treat that as an empty object) so
@@ -1633,25 +1678,29 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Write a "Resume mission" request into `<workspace>/.ghola/control.json`:
+   * Write a "Resume mission" request into `<ledger-root>/<subject>/control.json`:
    * `{ resumeMission: id, resumeRequestedAt }`. This is a read-modify-write —
    * the existing file (if any) is read first and every other field
    * (`awakenAll`, `requestedAt`, `acknowledgedAt`, and any prior resume
    * fields) is preserved verbatim; only `resumeMission` and
-   * `resumeRequestedAt` are overwritten. Creates `.ghola/` if missing and
+   * `resumeRequestedAt` are overwritten. Creates the subject dir if missing and
    * never deletes the file — this is the host's own extension-owned state
    * file. Wrapped in try/catch so a write failure never throws out of the
    * message handler. Re-posts War Room data afterwards so the picker shows
    * the pending indicator.
    */
   private async requestGholaResumeMission(id: string): Promise<void> {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) return;
+    const root = this.resolveLedgerRoot();
+    const subject = this.resolveControlSubject(root);
+    if (!subject) {
+      this.logger?.appendLine('[panel] gholaResumeMission: no ledger subject resolved; skipping');
+      return;
+    }
+    const dir = ledgerSubjectDir(root, subject);
     try {
-      await this.withControlLock(folder.uri.fsPath, async () => {
-      const gholaDir = path.join(folder.uri.fsPath, '.ghola');
-      await fs.mkdir(gholaDir, { recursive: true });
-      const controlPath = path.join(gholaDir, 'control.json');
+      await this.withControlLock(dir, async () => {
+      await fs.mkdir(dir, { recursive: true });
+      const controlPath = path.join(dir, 'control.json');
 
       // Read-modify-write: start from whatever is already on disk (tolerant
       // of a missing/unparseable file — treat that as an empty object) so
@@ -1683,24 +1732,28 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Write a god-console directive into `<workspace>/.ghola/control.json`:
+   * Write a god-console directive into `<ledger-root>/<subject>/control.json`:
    * `{ directive: text, directiveRequestedAt }`. Read-modify-write, mirroring
    * `requestGholaResumeMission`: the existing file (if any) is read first and
    * every other field (`awakenAll`, `resumeMission`, prior directive fields,
    * etc.) is preserved verbatim; only `directive` and `directiveRequestedAt`
-   * are overwritten. Creates `.ghola/` if missing and never deletes the
+   * are overwritten. Creates the subject dir if missing and never deletes the
    * file. Wrapped in try/catch so a write failure never throws out of the
    * message handler. Re-posts War Room data afterwards so the pending
    * directive is shown.
    */
   private async requestGholaDirective(text: string): Promise<void> {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) return;
+    const root = this.resolveLedgerRoot();
+    const subject = this.resolveControlSubject(root);
+    if (!subject) {
+      this.logger?.appendLine('[panel] gholaDirective: no ledger subject resolved; skipping');
+      return;
+    }
+    const dir = ledgerSubjectDir(root, subject);
     try {
-      await this.withControlLock(folder.uri.fsPath, async () => {
-      const gholaDir = path.join(folder.uri.fsPath, '.ghola');
-      await fs.mkdir(gholaDir, { recursive: true });
-      const controlPath = path.join(gholaDir, 'control.json');
+      await this.withControlLock(dir, async () => {
+      await fs.mkdir(dir, { recursive: true });
+      const controlPath = path.join(dir, 'control.json');
 
       let existing: Record<string, unknown> = {};
       try {
@@ -1729,25 +1782,29 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Write a "Declare Done" request into `<workspace>/.ghola/control.json`:
+   * Write a "Declare Done" request into `<ledger-root>/<subject>/control.json`:
    * `{ declareDone: id, declareDoneRequestedAt }`. Read-modify-write,
    * mirroring `requestGholaResumeMission` / `requestGholaDirective`: the
    * existing file (if any) is read first and every other field (`awakenAll`,
    * `resumeMission`, `directive`, prior declareDone fields, etc.) is preserved
    * verbatim; only `declareDone` and `declareDoneRequestedAt` are overwritten.
-   * Creates `.ghola/` if missing and never deletes the file. Wrapped in
+   * Creates the subject dir if missing and never deletes the file. Wrapped in
    * try/catch so a write failure never throws out of the message handler.
    * Re-posts War Room data afterwards so the mission header shows the
    * "Declaring done..." pending indicator in place of the button.
    */
   private async requestGholaDeclareDone(id: string): Promise<void> {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) return;
+    const root = this.resolveLedgerRoot();
+    const subject = this.resolveControlSubject(root);
+    if (!subject) {
+      this.logger?.appendLine('[panel] gholaDeclareDone: no ledger subject resolved; skipping');
+      return;
+    }
+    const dir = ledgerSubjectDir(root, subject);
     try {
-      await this.withControlLock(folder.uri.fsPath, async () => {
-      const gholaDir = path.join(folder.uri.fsPath, '.ghola');
-      await fs.mkdir(gholaDir, { recursive: true });
-      const controlPath = path.join(gholaDir, 'control.json');
+      await this.withControlLock(dir, async () => {
+      await fs.mkdir(dir, { recursive: true });
+      const controlPath = path.join(dir, 'control.json');
 
       let existing: Record<string, unknown> = {};
       try {
@@ -1777,7 +1834,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   /**
    * APPEND an escalation-resolution request into the queue in
-   * `<workspace>/.ghola/control.json`:
+   * `<ledger-root>/<subject>/control.json`:
    * `{ escalationResolve: [...prior, { id, subject, decision }], escalationResolveRequestedAt }`.
    * Read-modify-write, mirroring `requestGholaResumeMission` /
    * `requestGholaDirective` / `requestGholaDeclareDone`: the existing file (if
@@ -1789,7 +1846,7 @@ export class SettingsPanel implements vscode.Disposable {
    * earlier one is still pending-unacked no longer clobbers the first (the
    * clobber bug this fixes). A prior queued entry with the same id+subject is
    * replaced in place rather than duplicated, so re-clicking a decision updates
-   * it instead of stacking. Creates `.ghola/` if missing and never deletes the
+   * it instead of stacking. Creates the subject dir if missing and never deletes the
    * file. Wrapped in try/catch so a write failure never throws out of the
    * message handler. Re-posts War Room data afterwards so the escalation shows a
    * pending indicator.
@@ -1799,13 +1856,15 @@ export class SettingsPanel implements vscode.Disposable {
     subject: string,
     decision: 'approve' | 'deny',
   ): Promise<void> {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) return;
+    // The decision belongs to the escalation's own subject (carried in the
+    // webview message), so control is written to THAT subject's per-subject
+    // control.json under the globally-resolved ledger root — never the work repo.
+    const root = this.resolveLedgerRoot();
+    const dir = ledgerSubjectDir(root, subject);
     try {
-      await this.withControlLock(folder.uri.fsPath, async () => {
-      const gholaDir = path.join(folder.uri.fsPath, '.ghola');
-      await fs.mkdir(gholaDir, { recursive: true });
-      const controlPath = path.join(gholaDir, 'control.json');
+      await this.withControlLock(dir, async () => {
+      await fs.mkdir(dir, { recursive: true });
+      const controlPath = path.join(dir, 'control.json');
 
       let existing: Record<string, unknown> = {};
       try {
@@ -1853,11 +1912,10 @@ export class SettingsPanel implements vscode.Disposable {
   /**
    * Read a single ghola's `.md` file for the War Room drill-in view and post
    * a `gholaDetail` message. Resolves the ledger root the same way
-   * `buildWarRoomData` does (via the `.ghola/ledger-path` pointer); when
-   * there is no workspace, no pointer, or no ledger dir, posts an
-   * absent-flagged detail rather than throwing. Looks in the subject dir
-   * first, then falls back to `_archive/<subject>/` (mirrors
-   * `collectRoster`'s two-directory scan).
+   * `buildWarRoomData` does (GLOBALLY — vault/home, never the work repo); when
+   * there is no ledger dir, posts an absent-flagged detail rather than
+   * throwing. Looks in the subject dir first, then falls back to
+   * `_archive/<subject>/` (mirrors `collectRoster`'s two-directory scan).
    */
   private async postGholaDetail(subject: string, ghola: string): Promise<void> {
     if (!this.panel) return;
@@ -1878,19 +1936,7 @@ export class SettingsPanel implements vscode.Disposable {
       found: false,
     };
     try {
-      const folder = vscode.workspace.workspaceFolders?.[0];
-      if (!folder) {
-        this.post({ type: 'gholaDetail', data: emptyDetail });
-        return;
-      }
-      const pointerPath = path.join(folder.uri.fsPath, '.ghola', 'ledger-path');
-      let root: string;
-      try {
-        root = (await fs.readFile(pointerPath, 'utf-8')).trim();
-      } catch {
-        this.post({ type: 'gholaDetail', data: emptyDetail });
-        return;
-      }
+      const root = this.resolveLedgerRoot();
       if (!root || !fsSync.existsSync(root)) {
         this.post({ type: 'gholaDetail', data: emptyDetail });
         return;
