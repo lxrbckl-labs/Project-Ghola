@@ -73,8 +73,10 @@ export interface PromptFragmentDetail {
  * `ghola.activeConfigurationId`.
  *
  * `settings` is the flattened `{ "moduleId::fieldKey": value }` shape that
- * mirrors the `ghola.moduleSettings` workspaceState entry, so apply / save
- * are straight memcpys against the existing settings store.
+ * mirrors the GLOBAL `ghola.moduleSettings` map. Applying a preset MERGES its
+ * declared settings over that global map (never a full replace) so global
+ * identity/credential fields survive; "modified" compares only preset-declared
+ * keys.
  */
 export interface NamedConfiguration {
   id: string;
@@ -547,7 +549,17 @@ export type HostToWebviewMessage =
   | { type: 'aliasesLoaded'; aliases: CliAlias[]; selectedAlias: string; aliasFile: string }
   | { type: 'aliasesSaved'; ok: boolean; error?: string }
   | { type: 'feedbackLoaded'; entries: FeedbackEntry[] }
-  | { type: 'atlassianTokenStatus'; jiraSet: boolean; bitbucketSet: boolean }
+  // `jiraLast4` / `bitbucketLast4` are the LAST FOUR characters of each stored
+  // token (a masked confirmation fingerprint), or undefined when unset / shorter
+  // than 4 chars. Only this 4-char fragment ever crosses the webview boundary —
+  // never the full token — so the operator can confirm a token was replaced.
+  | {
+      type: 'atlassianTokenStatus';
+      jiraSet: boolean;
+      bitbucketSet: boolean;
+      jiraLast4?: string;
+      bitbucketLast4?: string;
+    }
   /**
    * Sent after a validation probe completes (event-driven) or in response to
    * `atlassianValidationStatusRequested` (synchronous pull). `result` is null

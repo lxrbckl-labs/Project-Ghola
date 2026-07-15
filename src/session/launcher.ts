@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
 import type { ModuleHandle } from '../modules/handle';
-import { WORKSPACE_STATE_KEYS } from '../state/keys';
+import { readModuleSettings } from '../state/module-settings';
 import { formatBanner } from './banner';
 import { resolveAgentPromptFilePath } from './prompt-file';
 
@@ -70,6 +70,7 @@ export class SessionLauncher {
   constructor(
     private readonly loader: ModuleLoader,
     private readonly extensionPath: string,
+    private readonly globalState: vscode.Memento,
     private readonly workspaceState: vscode.Memento,
     private readonly logger?: vscode.OutputChannel,
   ) {}
@@ -549,13 +550,14 @@ export class SessionLauncher {
   }
 
   /**
-   * Read a single field from a module's persisted settings. The panel stores
-   * settings under workspace-state key `ghola.moduleSettings` as a flat
-   * dictionary keyed by `moduleId::fieldKey` — match that shape here so we
-   * stay in sync without depending on the panel.
+   * Read a single field from a module's persisted settings. Settings live in
+   * the GLOBAL `ghola.moduleSettings` map (via `readModuleSettings`, which also
+   * falls back to any not-yet-migrated per-workspace value) as a flat dictionary
+   * keyed by `moduleId::fieldKey` — match that shape here so we stay in sync
+   * without depending on the panel.
    */
   private readModuleSetting(moduleId: string, fieldKey: string): unknown {
-    const flat = this.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
+    const flat = readModuleSettings(this.globalState, this.workspaceState);
     return flat[`${moduleId}::${fieldKey}`];
   }
 

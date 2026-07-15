@@ -9,7 +9,7 @@ import {
   extractBitbucketRepoSlug,
   extractBitbucketWorkspace,
 } from './url-builder';
-import { WORKSPACE_STATE_KEYS } from '../state/keys';
+import { readModuleSettings } from '../state/module-settings';
 
 /** Module id that supplies the Atlassian connection settings (jiraBase, etc.). */
 const ATLASSIAN_MODULE_ID = 'integration.atlassian-suite';
@@ -145,7 +145,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
 
   /**
    * @param context Extension context — used to read flattened module settings
-   *   from workspaceState under `ghola.moduleSettings`.
+   *   from the GLOBAL `ghola.moduleSettings` map (via `readModuleSettings`).
    * @param moduleSettingsEvent Event fired by the host whenever
    *   `ghola.moduleSettings` is rewritten. We re-pull config and refresh.
    * @param moduleEnabledEvent Loader event fired when modules are toggled.
@@ -641,10 +641,7 @@ export class TicketWidgetProvider implements vscode.WebviewViewProvider {
    * or the stored value is the empty string.
    */
   private readAtlassianStringSetting(fieldKey: string, defaultValue: string): string {
-    const flat = this.context.workspaceState.get<Record<string, unknown>>(
-      WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-      {},
-    );
+    const flat = readModuleSettings(this.context.globalState, this.context.workspaceState);
     const v = flat[`${ATLASSIAN_MODULE_ID}::${fieldKey}`];
     if (typeof v === 'string' && v !== '') return v;
     return defaultValue;

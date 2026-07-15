@@ -44,6 +44,9 @@ interface AtlassianTokenStatusMessage {
   type: 'atlassianTokenStatus';
   jiraSet: boolean;
   bitbucketSet: boolean;
+  /** Last 4 chars of the stored token (masked confirmation hint), if any. */
+  jiraLast4?: string;
+  bitbucketLast4?: string;
 }
 
 interface AtlassianValidationProductStatus {
@@ -223,6 +226,13 @@ interface UIState {
    * actual token value.
    */
   atlassianBitbucketTokenSet: boolean;
+  /**
+   * Last 4 characters of the stored Jira / Bitbucket token — a masked
+   * confirmation fingerprint sent by the host so the operator can verify a
+   * token was replaced. Never the full token. Undefined when unset.
+   */
+  atlassianJiraTokenLast4?: string;
+  atlassianBitbucketTokenLast4?: string;
   /** Whether the Jira Clear token button is in its two-step confirm state. */
   atlassianJiraTokenConfirming: boolean;
   /** Whether the Bitbucket Clear token button is in its two-step confirm state. */
@@ -723,6 +733,8 @@ function handleFeedbackLoaded(msg: FeedbackLoadedMessage): void {
 function handleAtlassianTokenStatus(msg: AtlassianTokenStatusMessage): void {
   state.atlassianJiraTokenSet = msg.jiraSet;
   state.atlassianBitbucketTokenSet = msg.bitbucketSet;
+  state.atlassianJiraTokenLast4 = msg.jiraLast4;
+  state.atlassianBitbucketTokenLast4 = msg.bitbucketLast4;
   // Reset confirming state when tokens flip — the button context changes.
   state.atlassianJiraTokenConfirming = false;
   state.atlassianBitbucketTokenConfirming = false;
@@ -3793,6 +3805,7 @@ function renderAtlassianTokenSlots(): HTMLElement {
   wrapper.appendChild(renderSingleTokenSlot({
     label: 'Jira API Token',
     tokenSet: state.atlassianJiraTokenSet,
+    last4: state.atlassianJiraTokenLast4,
     confirming: state.atlassianJiraTokenConfirming,
     validationStatus: validation?.jira?.status,
     onSet: () => {
@@ -3808,6 +3821,7 @@ function renderAtlassianTokenSlots(): HTMLElement {
   wrapper.appendChild(renderSingleTokenSlot({
     label: 'Bitbucket API Token',
     tokenSet: state.atlassianBitbucketTokenSet,
+    last4: state.atlassianBitbucketTokenLast4,
     confirming: state.atlassianBitbucketTokenConfirming,
     validationStatus: validation?.bitbucket?.status,
     onSet: () => {
@@ -3843,6 +3857,7 @@ function renderAtlassianTokenSlots(): HTMLElement {
 function renderSingleTokenSlot(opts: {
   label: string;
   tokenSet: boolean;
+  last4?: string;
   confirming: boolean;
   validationStatus?: 'ok' | 'failed' | 'skipped';
   onSet: () => void;
@@ -3850,7 +3865,7 @@ function renderSingleTokenSlot(opts: {
   setConfirming: (v: boolean) => void;
   getConfirming: () => boolean;
 }): HTMLElement {
-  const { label, tokenSet, confirming, onSet, onClear, setConfirming, getConfirming } = opts;
+  const { label, tokenSet, last4, confirming, onSet, onClear, setConfirming, getConfirming } = opts;
 
   const slot = el('div', { class: 'atlassian-token-slot' });
 
@@ -3869,9 +3884,13 @@ function renderSingleTokenSlot(opts: {
   }
   slot.appendChild(slotLabel);
 
-  // Status line.
+  // Status line. When the token is set and long enough to have surfaced a
+  // last-4 hint, show it (masked) so the operator can confirm which token is
+  // stored / that a replacement took effect — e.g. "●●●●1234 set".
   const statusLine = el('div', { class: 'atlassian-token-status' });
-  statusLine.textContent = tokenSet ? '●●●●●● set' : 'not set';
+  statusLine.textContent = tokenSet
+    ? (last4 ? `●●●●${last4} set` : '●●●●●● set')
+    : 'not set';
   slot.appendChild(statusLine);
 
   // Button row.

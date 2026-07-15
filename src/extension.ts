@@ -17,6 +17,11 @@ import { BUILT_IN_CONFIGURATIONS, DEFAULT_ENABLED_IDS } from './settings-panel/b
 import { ConfigurationsStore } from './settings-panel/configurations-store';
 import { SettingsPanel } from './settings-panel/host';
 import { SET_CONTEXT_KEYS, WORKSPACE_STATE_KEYS } from './state/keys';
+import {
+  readModuleSettings,
+  writeModuleSettings,
+  migrateModuleSettingsToGlobal,
+} from './state/module-settings';
 import { ModeStatusBarItem, MODE_STATUS_BAR_CONFIG_SECTION } from './status-bar/mode-status-bar';
 
 /** Module id for the atlassian-suite integration. */
@@ -81,14 +86,16 @@ export interface AtlassianBridge {
   /**
    * Read the stored Jira token. Intended ONLY for host-side consumers that
    * need to construct an authenticated HTTP request (the Ticket Widget
-   * provider and the validation routine). The returned value MUST NOT be
-   * forwarded across the webview boundary or written to any log / output
-   * channel.
+   * provider and the validation routine) or to derive a masked LAST-4
+   * fingerprint. The full returned value MUST NOT be forwarded across the
+   * webview boundary or written to any log / output channel — only a derived
+   * last-4 fragment may cross the boundary (see `broadcastAtlassianTokenStatus`).
    */
   getJiraToken(): Promise<string | undefined>;
   /**
    * Read the stored Bitbucket token. Same host-only contract as
-   * `getJiraToken()`. Never crosses the webview boundary.
+   * `getJiraToken()`. The full value never crosses the webview boundary; only a
+   * derived last-4 fragment may.
    */
   getBitbucketToken(): Promise<string | undefined>;
 
@@ -127,10 +134,7 @@ function resolveLedgerRoot(context: vscode.ExtensionContext): string {
   if (typeof envRoot === 'string' && envRoot.trim() !== '') {
     return envRoot.trim();
   }
-  const flat = context.workspaceState.get<Record<string, unknown>>(
-    WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-    {},
-  );
+  const flat = readModuleSettings(context.globalState, context.workspaceState);
   const vaultSetting = flat['tool.obsidian-notes::vaultPath'];
   if (typeof vaultSetting === 'string' && vaultSetting.trim() !== '') {
     return path.join(vaultSetting.trim(), '_Gholas');
@@ -142,6 +146,13 @@ export function activate(context: vscode.ExtensionContext): void {
   const logger = vscode.window.createOutputChannel('Ghola');
   context.subscriptions.push(logger);
   logger.appendLine('[ghola] activating v0.0.1');
+
+  // Migrate any legacy per-workspace module settings into the global store so
+  // field values (Atlassian email, vault path, personas, instructions, etc.)
+  // follow the operator across workspaces and survive preset applies. Idempotent
+  // and fire-and-forget: reads use `readModuleSettings`, which merges the legacy
+  // fallback until this completes, so correctness never depends on its timing.
+  void migrateModuleSettingsToGlobal(context.globalState, context.workspaceState);
 
   const moduleState = new ModuleState(context.workspaceState);
   const loader = new ModuleLoader(moduleState, {
@@ -158,7 +169,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const coresPath = path.join(context.extensionPath, 'prompts', 'cores');
   const composer = new PromptComposer(loader, coresPath, logger);
 
-  const session = new SessionLauncher(loader, context.extensionPath, context.workspaceState, logger);
+  const session = new SessionLauncher(loader, context.extensionPath, context.globalState, context.workspaceState, logger);
   const configurationsStore = new ConfigurationsStore(context.workspaceState);
   const resolveModulesDir = resolveModulesDirFn(context);
   // Path used by the `tool.feedback-log` module: the host reads/writes this
@@ -199,10 +210,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // composer read it — so we resolve it from the flattened MODULE_SETTINGS
   // store rather than loader state, keeping the item's war flag in agreement.
   const readWarMode = (): boolean => {
-    const flat = context.workspaceState.get<Record<string, unknown>>(
-      WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-      {},
-    );
+    const flat = readModuleSettings(context.globalState, context.workspaceState);
     return flat['mode.war::enabled'] === true;
   };
   const modeStatusBar = new ModeStatusBarItem(loader, readWarMode);
@@ -220,15 +228,15 @@ export function activate(context: vscode.ExtensionContext): void {
   modeStatusBar.refresh();
 
   /**
-   * Read a single Atlassian-module setting from the flattened
-   * `ghola.moduleSettings` workspace-state entry. Falls back to the
+   * Read a single Atlassian-module setting from the flattened GLOBAL
+   * `ghola.moduleSettings` map (via `readModuleSettings`). Falls back to the
    * manifest's declared default (if any) when the user has not yet saved the
    * field — this mirrors the webview's own `state.settingsValues[key] ??
    * field.default` logic so that pre-populated default values are visible to
    * validate() even before the user has explicitly clicked Save.
    */
   const readAtlassianSetting = (fieldKey: string): string => {
-    const flat = context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
+    const flat = readModuleSettings(context.globalState, context.workspaceState);
     const v = flat[`${ATLASSIAN_MODULE_ID}::${fieldKey}`];
     if (typeof v === 'string') return v;
     // No saved value — fall back to the manifest default so that fields shown
@@ -459,7 +467,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // readModeSetting closure for mode.ticket-work — mirrors readAtlassianSetting pattern
   const readTicketWorkSetting = (key: string): unknown => {
-    const flat = context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
+    const flat = readModuleSettings(context.globalState, context.workspaceState);
     const flatKey = `mode.ticket-work::${key}`;
     if (flatKey in flat) {
       return flat[flatKey];
@@ -537,10 +545,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // the composed prompt stays coherent. Runs after applyDefaultOnStartup so it
     // reflects the final resolved settings/enabled state. No-op when ghola is off
     // or the ledger is already enabled/undiscovered.
-    const gholaFlat = context.workspaceState.get<Record<string, unknown>>(
-      WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-      {},
-    );
+    const gholaFlat = readModuleSettings(context.globalState, context.workspaceState);
     const gholaEnabled = gholaFlat['mode.war::enabled'] === true;
     const ledgerHandle = loader.find('tool.ghola-ledger');
     if (gholaEnabled && ledgerHandle && !ledgerHandle.isEnabled) {
@@ -562,10 +567,7 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         const notesEnabled = loader.find('tool.obsidian-notes')?.isEnabled === true;
         if (!notesEnabled) return;
-        const flat = context.workspaceState.get<Record<string, unknown>>(
-          WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-          {},
-        );
+        const flat = readModuleSettings(context.globalState, context.workspaceState);
         const current = flat['tool.obsidian-notes::vaultPath'];
         // Empty-only guard: never overwrite a user-set (non-whitespace) path.
         if (typeof current === 'string' && current.trim() !== '') return;
@@ -573,14 +575,11 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!result.vaultPath) return;
         // Re-read immediately before writing so a concurrent panel write (e.g. a
         // user clicking Detect Vault mid-scan) is not clobbered by a stale copy.
-        const latest = context.workspaceState.get<Record<string, unknown>>(
-          WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-          {},
-        );
+        const latest = readModuleSettings(context.globalState, context.workspaceState);
         const latestCurrent = latest['tool.obsidian-notes::vaultPath'];
         if (typeof latestCurrent === 'string' && latestCurrent.trim() !== '') return;
         const next = { ...latest, ['tool.obsidian-notes::vaultPath']: result.vaultPath };
-        await context.workspaceState.update(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, next);
+        await writeModuleSettings(context.globalState, next);
         // Mirror the panel's Detect-Vault refresh side effects so the panel and
         // composed prompts pick up the newly written path.
         panel.broadcastComposedPrompts();

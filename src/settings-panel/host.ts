@@ -11,7 +11,7 @@ import type { ModuleLoader } from '../modules/loader';
 import type { PromptComposer } from '../prompts/composer';
 import { syncAliasFile, validateAlias, type CliAlias } from '../session/alias-sync';
 import { resolveAgentPromptFilePath } from '../session/prompt-file';
-import { WORKSPACE_STATE_KEYS } from '../state/keys';
+import { readModuleSettings, writeModuleSettings } from '../state/module-settings';
 import type { ConfigurationsStore } from './configurations-store';
 import {
   readLinqpadConnections,
@@ -793,7 +793,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   private postSettings(): void {
     if (!this.panel) return;
-    const values = this.context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
+    const values = readModuleSettings(this.context.globalState, this.context.workspaceState);
     const cfg = vscode.workspace.getConfiguration('ghola');
     const cliCommand = cfg.get<string>('cliCommand', 'claude');
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate');
@@ -825,7 +825,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   private async saveSettings(values: Record<string, unknown>): Promise<void> {
     try {
-      await this.context.workspaceState.update(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, values);
+      await writeModuleSettings(this.context.globalState, values);
       this.post({ type: 'settingsSaved', ok: true });
       // Module settings changed — the modified flag may have flipped.
       this.recomputeModified();
@@ -852,10 +852,7 @@ export class SettingsPanel implements vscode.Disposable {
    */
   private async discoverSupportPaths(): Promise<void> {
     try {
-      const flat = this.context.workspaceState.get<Record<string, unknown>>(
-        WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-        {},
-      );
+      const flat = readModuleSettings(this.context.globalState, this.context.workspaceState);
       const appMap = (flat['mode.support::appMap'] as Record<string, string>) ?? {};
       // Derive keys from the current appMap; if empty, fall back to the module
       // defaults so a pristine session can still discover the known apps.
@@ -876,7 +873,7 @@ export class SettingsPanel implements vscode.Disposable {
         if (!nextMap[k] || !String(nextMap[k]).trim()) nextMap[k] = v;
       }
       const next = { ...flat, ['mode.support::appMap']: nextMap };
-      await this.context.workspaceState.update(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, next);
+      await writeModuleSettings(this.context.globalState, next);
 
       // Mirror the saveSettings refresh side effects so the panel + prompts
       // reflect the newly written paths.
@@ -920,10 +917,7 @@ export class SettingsPanel implements vscode.Disposable {
    */
   private async detectObsidianVault(): Promise<void> {
     try {
-      const flat = this.context.workspaceState.get<Record<string, unknown>>(
-        WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-        {},
-      );
+      const flat = readModuleSettings(this.context.globalState, this.context.workspaceState);
 
       const result = await discoverObsidianVault();
 
@@ -931,7 +925,7 @@ export class SettingsPanel implements vscode.Disposable {
       // otherwise (do not clobber a user value with an empty result).
       if (result.vaultPath) {
         const next = { ...flat, ['tool.obsidian-notes::vaultPath']: result.vaultPath };
-        await this.context.workspaceState.update(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, next);
+        await writeModuleSettings(this.context.globalState, next);
 
         // Mirror the saveSettings refresh side effects so the panel + prompts
         // reflect the newly written path.
@@ -1021,7 +1015,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   /** Returns the current module settings dict, keyed by `moduleId::fieldKey`. */
   private getCurrentSettings(): Record<string, Record<string, unknown>> {
-    const flat = this.context.workspaceState.get<Record<string, unknown>>(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, {});
+    const flat = readModuleSettings(this.context.globalState, this.context.workspaceState);
     // Unpack `moduleId::fieldKey` → nested { moduleId: { fieldKey: value } }.
     const out: Record<string, Record<string, unknown>> = {};
     for (const [scopedKey, value] of Object.entries(flat)) {
@@ -1070,10 +1064,7 @@ export class SettingsPanel implements vscode.Disposable {
    * not toggled as a module, so no ghola gate keys off loader state.
    */
   private isGholaEnabled(): boolean {
-    const flat = this.context.workspaceState.get<Record<string, unknown>>(
-      WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-      {},
-    );
+    const flat = readModuleSettings(this.context.globalState, this.context.workspaceState);
     return flat[`${GHOLA_MODE_ID}::enabled`] === true;
   }
 
@@ -1226,10 +1217,7 @@ export class SettingsPanel implements vscode.Disposable {
     if (typeof envRoot === 'string' && envRoot.trim() !== '') {
       return envRoot.trim();
     }
-    const flat = this.context.workspaceState.get<Record<string, unknown>>(
-      WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-      {},
-    );
+    const flat = readModuleSettings(this.context.globalState, this.context.workspaceState);
     const vaultSetting = flat['tool.obsidian-notes::vaultPath'];
     if (typeof vaultSetting === 'string' && vaultSetting.trim() !== '') {
       return path.join(vaultSetting.trim(), '_Gholas');
@@ -2019,7 +2007,34 @@ export class SettingsPanel implements vscode.Disposable {
     // (no stored path) and an older user config (path saved through the prior
     // injection) both compare equal to the current runtime state when pristine.
     const currentSettings = withoutInjectedFeedbackPath(this.getCurrentSettings());
-    return !deepEquals(currentSettings, withoutInjectedFeedbackPath(active.settings));
+    const expected = withoutInjectedFeedbackPath(active.settings);
+    // Settings are global and merge-on-apply, so `current` legitimately carries
+    // extra field values the preset never declared — credentials/identity, plus
+    // leftover settings from other presets. A config counts as MODIFIED only
+    // when a key the preset DOES declare differs; extras are ignored, so a
+    // freshly-applied preset does not read as modified just because global
+    // identity fields are present.
+    return !this.presetSettingsSatisfied(expected, currentSettings);
+  }
+
+  /**
+   * True when every module/field the preset declares in `expected` matches the
+   * corresponding value in `current`. Keys present in `current` but absent from
+   * `expected` are ignored (they are global field values that must not flip the
+   * modified flag). A one-directional (subset) comparison, unlike the former
+   * bidirectional `deepEquals`.
+   */
+  private presetSettingsSatisfied(
+    expected: Record<string, Record<string, unknown>>,
+    current: Record<string, Record<string, unknown>>,
+  ): boolean {
+    for (const [moduleId, fields] of Object.entries(expected)) {
+      const cur = current[moduleId] ?? {};
+      for (const [fieldKey, value] of Object.entries(fields)) {
+        if (!deepEquals(cur[fieldKey], value)) return false;
+      }
+    }
+    return true;
   }
 
   /** Recompute & cache the modified flag. */
@@ -2172,15 +2187,25 @@ export class SettingsPanel implements vscode.Disposable {
     }
 
     // Flatten target.settings (nested { moduleId: { fieldKey: value } }) into
-    // the `moduleId::fieldKey` shape stored in workspaceState under
-    // WORKSPACE_STATE_KEYS.MODULE_SETTINGS.
+    // the `moduleId::fieldKey` shape stored in the (now GLOBAL) settings map.
     const flatSettings: Record<string, unknown> = {};
     for (const [moduleId, fields] of Object.entries(target.settings)) {
       for (const [fieldKey, value] of Object.entries(fields)) {
         flatSettings[`${moduleId}::${fieldKey}`] = value;
       }
     }
-    await this.context.workspaceState.update(WORKSPACE_STATE_KEYS.MODULE_SETTINGS, flatSettings);
+    // MERGE the preset's declared settings over the existing global map rather
+    // than REPLACING it. Settings are global now, so a full replace would wipe
+    // every field the preset does not declare — including credentials/identity
+    // (Atlassian email, vault path, personas) that must persist across preset
+    // applies and workspaces. The preset still authoritatively sets the keys it
+    // declares; everything else is preserved. `computeIsModified` compares only
+    // the preset-declared keys, so the preserved extras never read as "modified".
+    const merged = {
+      ...readModuleSettings(this.context.globalState, this.context.workspaceState),
+      ...flatSettings,
+    };
+    await writeModuleSettings(this.context.globalState, merged);
 
     await this.configurations.setActiveId(id);
     this.recomputeModified();
@@ -2439,17 +2464,30 @@ export class SettingsPanel implements vscode.Disposable {
   // ─── Atlassian Suite token status ─────────────────────────────────────
 
   /**
-   * Query both `isJiraTokenSet()` and `isBitbucketTokenSet()` in parallel and
-   * post the combined result to the webview. Token values are never read —
-   * only existence is communicated as booleans.
+   * Read both tokens on the host and post existence + a LAST-4 fingerprint to
+   * the webview. The full token value is read here (host-side is allowed) purely
+   * to derive its last 4 characters; ONLY that 4-char fragment is forwarded — the
+   * full value never crosses the webview boundary and is never logged. The
+   * fragment lets the operator confirm a token was actually replaced (its last 4
+   * change) without exposing the secret.
    */
   private async broadcastAtlassianTokenStatus(): Promise<void> {
     if (!this.panel) return;
-    const [jiraSet, bitbucketSet] = await Promise.all([
-      this.atlassianBridge.isJiraTokenSet(),
-      this.atlassianBridge.isBitbucketTokenSet(),
+    const [jiraToken, bitbucketToken] = await Promise.all([
+      this.atlassianBridge.getJiraToken(),
+      this.atlassianBridge.getBitbucketToken(),
     ]);
-    this.post({ type: 'atlassianTokenStatus', jiraSet, bitbucketSet });
+    // Last 4 chars only, and only when the token is long enough that revealing
+    // them leaks nothing meaningful; undefined otherwise.
+    const last4 = (t?: string): string | undefined =>
+      typeof t === 'string' && t.length >= 4 ? t.slice(-4) : undefined;
+    this.post({
+      type: 'atlassianTokenStatus',
+      jiraSet: typeof jiraToken === 'string' && jiraToken !== '',
+      bitbucketSet: typeof bitbucketToken === 'string' && bitbucketToken !== '',
+      jiraLast4: last4(jiraToken),
+      bitbucketLast4: last4(bitbucketToken),
+    });
   }
 
   // ─── Feedback log ─────────────────────────────────────────────────────

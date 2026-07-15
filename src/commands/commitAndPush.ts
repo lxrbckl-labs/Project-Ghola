@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { WORKSPACE_STATE_KEYS } from '../state/keys';
+import { readModuleSettings } from '../state/module-settings';
 import type { CommandDeps } from './index';
 
 /** Module id whose enablement gates the Commit-and-Push button. */
@@ -40,10 +40,7 @@ export function registerCommitAndPushCommand(
 
       // Read the format template from the flat module-settings dictionary,
       // falling back to the shipped default when unset or non-string.
-      const flat = context.workspaceState.get<Record<string, unknown>>(
-        WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
-        {},
-      );
+      const flat = readModuleSettings(context.globalState, context.workspaceState);
       const fmt =
         (typeof flat[COMMIT_MESSAGE_FORMAT_KEY] === 'string'
           ? (flat[COMMIT_MESSAGE_FORMAT_KEY] as string)
