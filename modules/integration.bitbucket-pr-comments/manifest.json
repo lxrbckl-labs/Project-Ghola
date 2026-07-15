@@ -26,17 +26,15 @@
         "type": "string",
         "label": "CodeRabbit Reply Persona",
         "default": "",
-        "inlineGroup": "coderabbit-reply",
         "description": "Optional persona or voice instruction layered on top of the Reply Instruction when the parent comment author is CodeRabbit. Leave blank to use the Reply Instruction unchanged for CodeRabbit replies."
       },
       "coderabbitReplyPersonaIntensity": {
         "type": "number",
-        "label": "Intensity (1-10)",
+        "label": "Persona Level (1-10)",
         "default": 5,
         "min": 1,
         "max": 10,
-        "inlineGroup": "coderabbit-reply",
-        "description": "How strongly the CodeRabbit Reply Persona colors the reply voice: 1 = barely a whisper of the persona, 5 (default) = clearly the persona but balanced, 10 = full-on. Only matters when a persona is set. Affects VOICE only — never the no-severity/no-rating/no-attribution rule or the approval gate. Self-contained to this module (does not depend on tool.operator-profile)."
+        "description": "How much the reply ACTS LIKE the persona — its character and mannerisms — while STILL fully conveying the actual message. This is not a measure of any single trait (e.g. how sarcastic); it is how strongly the reply stays in-character. The substance is always delivered at every level; the level only changes how much persona flavor rides on top. 1 = mostly plain, just a light touch of the persona; 5 (default) = clearly in-character but balanced; 10 = fully in-character. Only matters when a persona is set. Affects VOICE only — never the no-severity/no-rating/no-attribution rule or the approval gate. Self-contained to this module (does not depend on tool.operator-profile)."
       },
       "flagFalselyResolved": {
         "type": "boolean",

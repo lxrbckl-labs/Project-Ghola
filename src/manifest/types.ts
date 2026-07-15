@@ -102,13 +102,6 @@ export interface SettingsField {
   /** For `type === 'number'`: optional inclusive maximum, applied as the input's `max` attribute (spinner ceiling + browser validation). */
   max?: number;
   /**
-   * Optional layout hint: fields sharing the same non-empty `inlineGroup` string
-   * AND appearing consecutively in the manifest render side-by-side on ONE row
-   * (a flex row) instead of stacking. Used to co-locate a control with its
-   * modifier — e.g. a persona text field next to its intensity number box.
-   */
-  inlineGroup?: string;
-  /**
    * For `type === 'keyValue'`: identifies a host-known source of candidate
    * values shown in the value-cell dropdown. Free-form text override is
    * always permitted regardless of this setting.

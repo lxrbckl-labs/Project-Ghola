@@ -113,7 +113,6 @@
               "multiline": { "type": "boolean" },
               "min": { "type": "number" },
               "max": { "type": "number" },
-              "inlineGroup": { "type": "string" },
               "valueSource": {
                 "type": "string",
                 "enum": ["linqpad-connections"]

@@ -2130,33 +2130,11 @@ function renderModuleDetailView(wrapper: HTMLElement, m: ModuleSummary): void {
   if (fieldEntries.length > 0) {
     container.appendChild(textEl('div', 'Settings', 'details-header'));
     const settingsWrap = el('div', { class: 'module-settings' });
-    // Walk the fields in declared order, batching any RUN of consecutive fields
-    // that share the same non-empty `inlineGroup` into one flex row so a control
-    // and its modifier (e.g. a persona and its intensity) sit side-by-side.
-    for (let i = 0; i < fieldEntries.length; ) {
-      const [key, field] = fieldEntries[i]!;
-      const group = field.inlineGroup;
-      if (group) {
-        const rowFields: Array<[string, SettingsField]> = [];
-        while (i < fieldEntries.length && fieldEntries[i]![1].inlineGroup === group) {
-          rowFields.push(fieldEntries[i]!);
-          i++;
-        }
-        if (rowFields.length > 1) {
-          const groupRow = el('div', { class: 'module-inline-group' });
-          rowFields.forEach(([k, f]) =>
-            groupRow.appendChild(renderModuleSettingField(m.id, k, f)),
-          );
-          settingsWrap.appendChild(groupRow);
-        } else {
-          // A lone grouped field just renders normally — no row wrapper needed.
-          settingsWrap.appendChild(renderModuleSettingField(m.id, rowFields[0]![0], rowFields[0]![1]));
-        }
-      } else {
-        settingsWrap.appendChild(renderModuleSettingField(m.id, key, field));
-        i++;
-      }
-    }
+    fieldEntries.forEach(([key, field]) => {
+      settingsWrap.appendChild(
+        renderModuleSettingField(m.id, key, field),
+      );
+    });
     container.appendChild(settingsWrap);
   }
 
