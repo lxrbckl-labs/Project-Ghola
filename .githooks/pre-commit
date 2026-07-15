@@ -24,19 +24,33 @@ ver="$(tr -d ' \t\r\n' < VERSION 2>/dev/null)"
 [ -z "$ver" ] && exit 0
 
 cur="$(node -e 'try{process.stdout.write(String(require("./package.json").version||""))}catch(e){}' 2>/dev/null)"
-[ "$cur" = "$ver" ] && exit 0   # already in sync — nothing to do
+lockcur=""
+[ -f package-lock.json ] && lockcur="$(node -e 'try{process.stdout.write(String(require("./package-lock.json").version||""))}catch(e){}' 2>/dev/null)"
+# Skip the WHOLE hook only when BOTH package.json AND package-lock.json already
+# match $ver. Gating on package.json alone let the lockfile drift a version
+# behind, since VERSION and package.json are bumped together (in sync) before
+# each commit — the early exit fired and the lock sync block never ran.
+if [ "$cur" = "$ver" ] && { [ ! -f package-lock.json ] || [ "$lockcur" = "$ver" ]; }; then
+  exit 0
+fi
 
-# Rewrite ONLY the first (top-level) "version": "..." string; preserve all other formatting.
-if node -e '
+# Rewrite ONLY the first (top-level) "version": "..." string; preserve all other
+# formatting. Node exit 2 == already in sync / no top-level version match (clean
+# no-op); handled like the lock block below so a lock-only bump stays silent.
+node -e '
   const fs = require("fs");
   const ver = process.argv[1];
   const p = fs.readFileSync("package.json", "utf8");
   const out = p.replace(/("version"\s*:\s*")[^"]*(")/, (m, a, b) => a + ver + b);
-  if (out === p) process.exit(2);   // no top-level version found — do not write
+  if (out === p) process.exit(2);   // already in sync or no top-level version — do not write
   fs.writeFileSync("package.json", out);
-' "$ver" 2>/dev/null; then
+' "$ver" 2>/dev/null
+rc=$?
+if [ "$rc" -eq 0 ]; then
   git add package.json 2>/dev/null || true
   echo "[ghola-hook] pre-commit: synced package.json version -> $ver"
+elif [ "$rc" -eq 2 ]; then
+  :   # already in sync — silent no-op
 else
   echo "[ghola-hook] pre-commit: could not sync package.json version (left unchanged)."
 fi

@@ -34,12 +34,20 @@ now="$(date +'%Y-%m-%d %H:%M %Z (%A)' 2>/dev/null)"
 
 # 1c. session mode (exported by the launcher; empty => unconstrained). Used to
 # gate the ticket-key Jira pull and the ticket-notes lookup: a non-ticket mode
-# (support, cd) owns its own work surface, so the probe suppresses that work.
+# (support, cd, self-upgrade) owns its own work surface, so the probe suppresses
+# that work. self-upgrade only ever operates on the Project-Ghola repo itself.
 mode_session="${GHOLA_MODE:-}"
+# Exact-token match (not substring) so a future mode whose name merely CONTAINS
+# `cd`/`support`/`self-upgrade` (e.g. `mode.abcd`, `mode.customer-support`) does
+# not wrongly gate as non-ticket and desync from the banner's exact matching.
+# GHOLA_MODE is normally a single token but can be a `, `-joined list; tokenize
+# on comma/space. Empty/unset leaves the loop a no-op (non_ticket_mode stays no).
 non_ticket_mode="no"
-case "$mode_session" in
-  *support*|*cd*) non_ticket_mode="yes" ;;
-esac
+_oldifs="$IFS"; IFS=', '
+for _tok in $mode_session; do
+  case "$_tok" in support|cd|self-upgrade) non_ticket_mode="yes" ;; esac
+done
+IFS="$_oldifs"
 
 # 2. environment
 env_state="ok"; missing=""
@@ -69,6 +77,28 @@ if [ -z "$repo" ] && [ -n "$GHOLA_BRANCH" ]; then
 fi
 [ -n "$repo" ] && branch="$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null)"
 [ -z "$branch" ] && branch="${GHOLA_BRANCH:-}"
+
+# 5b. self-upgrade repo guard (only when the session IS self-upgrade). Self
+# Upgrade operates ONLY on the Project-Ghola repo itself. Confirm the resolved
+# work repo is Project-Ghola by parsing its package.json "name" (== "ghola");
+# the package.json name is the robust signal (survives clone renames). Guarded
+# node parse, like the ticket/get-ticket parsing; never fails.
+self_upgrade_repo=""
+# Exact-token match (mirrors the non_ticket_mode gate above): only an EXACT
+# `self-upgrade` token triggers the repo guard, not a substring.
+_is_self_upgrade="no"
+_oldifs="$IFS"; IFS=', '
+for _tok in $mode_session; do
+  [ "$_tok" = "self-upgrade" ] && _is_self_upgrade="yes"
+done
+IFS="$_oldifs"
+if [ "$_is_self_upgrade" = "yes" ]; then
+  self_upgrade_repo="wrong"
+  if [ -n "$repo" ] && [ -f "$repo/package.json" ]; then
+    pkgname="$(node -e 'try{const p=require(process.argv[1]);process.stdout.write(String((p&&p.name)||""))}catch(e){}' "$repo/package.json" 2>/dev/null)"
+    [ "$pkgname" = "ghola" ] && self_upgrade_repo="ok"
+  fi
+fi
 
 # 6. mode detection
 mode="author"; base=""; ahead=""
@@ -148,6 +178,7 @@ emit env_state "$env_state"; [ -n "$missing" ] && emit env_missing "$missing"
 emit team "${perf}p/${eff}e/${qa}qa"
 emit team_models "perf=${pm},eff=${em},qa=${qm}"
 emit work_repo "${repo:-none}"
+[ -n "$self_upgrade_repo" ] && emit self_upgrade_repo "$self_upgrade_repo"
 emit branch "${branch:-none}"
 emit mode "$mode"; [ -n "$base" ] && emit base "$base"; [ -n "$ahead" ] && emit ahead "$ahead"
 emit ticket_key "${key:-none}"

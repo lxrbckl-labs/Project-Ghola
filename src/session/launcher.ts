@@ -21,6 +21,14 @@ const CLI_BOOT_DELAY_MS = 3000;
 const FASTPATH_MODULE_ID = 'tool.fastpath-check';
 
 /**
+ * `tool.self-upgrade`. When it is enabled and NO `mode.*` module is, the session
+ * is a Self Upgrade session — its own non-ticket-scoped modality. The launcher
+ * labels `GHOLA_MODE` as `self-upgrade` (not `unconstrained`) so the probe
+ * suppresses ticket/Jira/notes probing and the banner's Mode row agrees.
+ */
+const SELF_UPGRADE_MODULE_ID = 'tool.self-upgrade';
+
+/**
  * `mode.war` (War Mode). Not loader-toggleable — enablement is the
  * `mode.war::enabled` setting in the module-settings store, mirroring the
  * composer's gate (see `src/prompts/composer.ts` renderGholaEntry).
@@ -117,13 +125,34 @@ export class SessionLauncher {
 
     // Session modality string, mirroring banner.ts's formatMode: the enabled
     // `mode.*` module ids with the `mode.` prefix stripped, joined by ', '
-    // (e.g. 'ticket-work', 'support', 'cd'); 'unconstrained' when no mode module
-    // is enabled. Kept identical to the banner's derivation so the env var and
-    // the banner's Mode row never disagree.
+    // (e.g. 'ticket-work', 'support', 'cd'). Precedence: `mode.*` modules win if
+    // present; else `self-upgrade` when `tool.self-upgrade` is enabled (a Self
+    // Upgrade session is its own non-ticket-scoped modality); else
+    // 'unconstrained'. Kept identical to the banner's derivation so the env var
+    // and the banner's Mode row never disagree.
     const modes = enabled
       .filter((h) => h.manifest.id.startsWith('mode.'))
       .map((h) => h.manifest.id.slice('mode.'.length));
-    const sessionMode = modes.length > 0 ? modes.join(', ') : 'unconstrained';
+    const selfUpgradeEnabled = enabled.some((h) => h.manifest.id === SELF_UPGRADE_MODULE_ID);
+    const sessionMode =
+      modes.length > 0 ? modes.join(', ') : selfUpgradeEnabled ? 'self-upgrade' : 'unconstrained';
+
+    // Launcher-side hard block: a Self Upgrade session edits the Ghola sources
+    // themselves, so it may ONLY run when the open work repo IS Project-Ghola.
+    // If the session resolves to `self-upgrade` while some other repo is open,
+    // refuse to launch outright — no terminal, no command. This is stronger than
+    // the agent-side warn-and-refuse (which stays as a backstop for CLI-launched
+    // sessions). The `!oneShot` guard explicitly excludes one-shot dispatch
+    // (e.g. Commit-and-Push), which carries a `promptOverride` but does not
+    // change modules and so can incidentally resolve `sessionMode` to
+    // `self-upgrade`; only full TPM sessions are gated here.
+    if (sessionMode === 'self-upgrade' && !oneShot && !this.isProjectGholaRepo(effectiveDir)) {
+      const where = effectiveDir ?? '<no workspace open>';
+      const message = `Self Upgrade can only run in the Project-Ghola repository. Open Project-Ghola as your workspace and relaunch (current: ${where}).`;
+      this.logger?.appendLine(`[session] refusing Self Upgrade launch: not Project-Ghola (${where})`);
+      void vscode.window.showErrorMessage(message);
+      return;
+    }
 
     // War Mode (`mode.war`) is NOT a loader-toggleable module — its enablement
     // is the `mode.war::enabled` setting (an Agents configuration). Read it from
@@ -399,6 +428,31 @@ export class SessionLauncher {
         { encoding: 'utf8' },
       );
       return result.status === 0 && typeof result.stdout === 'string' && result.stdout.trim() === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * True only when `dir` lives inside the Project-Ghola repository — i.e. the
+   * git toplevel of `dir` has a `package.json` whose `name` is `"ghola"`.
+   * Resolves the git root via `git rev-parse --show-toplevel` (the same spawnSync
+   * approach used elsewhere in this file), then guarded reads/parses the root
+   * `package.json`. Returns `false` on any failure (no dir, no git root, missing
+   * or unparseable package.json, wrong name) — never throws.
+   */
+  private isProjectGholaRepo(dir: string | undefined): boolean {
+    if (!dir) return false;
+    try {
+      const result = childProcess.spawnSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], {
+        encoding: 'utf8',
+      });
+      if (result.status !== 0 || typeof result.stdout !== 'string') return false;
+      const toplevel = result.stdout.trim();
+      if (toplevel === '') return false;
+      const pkgPath = path.join(toplevel, 'package.json');
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { name?: string };
+      return pkg.name === 'ghola';
     } catch {
       return false;
     }

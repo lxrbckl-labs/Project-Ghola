@@ -42,8 +42,39 @@ export function formatBanner(input: BannerInput): string {
   const title = `GHOLA v${input.version}`;
   const warMode = input.warMode;
 
+  // Three session modalities are NON-ticket-scoped and must not render a Ticket
+  // row from the launch branch: `support` (`mode.support`), `cd` (`mode.cd`), and
+  // `self-upgrade` (no `mode.*`, `tool.self-upgrade` enabled). Each owns its own
+  // work surface (support's app map, cd's project notes, self-upgrade's
+  // Project-Ghola repo) and their own boot trace already reports `Ticket: n/a`,
+  // so a Ticket row here would contradict it. Branch stays for all three (it
+  // reads meaningfully, e.g. `main` on the Ghola repo). Precedence matches
+  // formatMode/the launcher. Derive each flag from enabledModules directly rather
+  // than parsing the formatMode string. Computed up front because the Branch
+  // value and the work-repo label both depend on these flags.
+  const hasSessionMode = input.enabledModules.some((h) => h.manifest.id.startsWith('mode.'));
+  const isSelfUpgrade =
+    !hasSessionMode && input.enabledModules.some((h) => h.manifest.id === 'tool.self-upgrade');
+  const isSupport = input.enabledModules.some((h) => h.manifest.id === 'mode.support');
+  const isCd = input.enabledModules.some((h) => h.manifest.id === 'mode.cd');
+  const isNonTicketScoped = isSupport || isCd || isSelfUpgrade;
+
   const workRepoValue = formatWorkRepo(input.cwd);
-  const branchValueRaw = input.branch !== '' ? stripBranchToTicket(input.branch) : '(not a git repo)';
+  // Support routes work via the app map, not the launch cwd, so "Work repo" would
+  // mislead — label its row "Launch dir" instead. cd and self-upgrade ARE genuinely
+  // cwd/Ghola-bound, so they keep "Work repo".
+  const workRepoLabel = isSupport ? 'Launch dir' : 'Work repo';
+  // Strip the branch to its ticket key ONLY when the session is ticket-scoped —
+  // that stripped display is a deliberate feature for ticket-work/unconstrained/war.
+  // In the non-ticket modes, stripping would re-surface the very ticket key the
+  // suppressed Ticket row just hid and disagree with the boot trace's full branch,
+  // so show the FULL branch there.
+  const branchValueRaw =
+    input.branch === ''
+      ? '(not a git repo)'
+      : isNonTicketScoped
+        ? input.branch
+        : stripBranchToTicket(input.branch);
   const ticketValue = formatTicket(input.branch);
   const modeValue = formatModeWithWar(input.enabledModules, warMode);
   const crewLabel = warMode ? 'Gholas' : 'Team';
@@ -54,14 +85,14 @@ export function formatBanner(input: BannerInput): string {
   // All rows are single-line now — the Modules row was the only one that ever
   // wrapped, and it is now just a count, so every row fits the same simple path.
   const singleLineRows: Array<{ label: string; value: string }> = [
-    { label: 'Work repo', value: workRepoValue },
+    { label: workRepoLabel, value: workRepoValue },
     { label: 'Branch', value: branchValueRaw },
     { label: 'Ticket', value: ticketValue },
     { label: 'Mode', value: modeValue },
     { label: crewLabel, value: crewValue },
     { label: 'Modules', value: modulesValue },
     { label: 'Trigger', value: triggerValue },
-  ];
+  ].filter((r) => !(isNonTicketScoped && r.label === 'Ticket'));
 
   // Natural (untruncated) content width across every row — this is what decides
   // how wide the box "wants" to be before the cap is applied.
@@ -132,11 +163,20 @@ function formatTicket(branch: string): string {
   return match ? `${match[1]}  (from branch)` : '(none detected)';
 }
 
+/**
+ * Session modality label. Precedence mirrors the launcher's GHOLA_MODE
+ * derivation exactly so the banner's Mode row and the env var never disagree:
+ * enabled `mode.*` module ids (prefix stripped, joined) win if present; else
+ * `self-upgrade` when `tool.self-upgrade` is enabled (a Self Upgrade session is
+ * its own non-ticket-scoped modality); else `unconstrained`.
+ */
 function formatMode(enabled: ModuleHandle[]): string {
   const modes = enabled
     .filter((h) => h.manifest.id.startsWith('mode.'))
     .map((h) => h.manifest.id.slice('mode.'.length));
-  return modes.length > 0 ? modes.join(', ') : 'unconstrained';
+  if (modes.length > 0) return modes.join(', ');
+  const selfUpgrade = enabled.some((h) => h.manifest.id === 'tool.self-upgrade');
+  return selfUpgrade ? 'self-upgrade' : 'unconstrained';
 }
 
 /**
