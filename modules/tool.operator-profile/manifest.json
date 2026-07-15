@@ -30,7 +30,7 @@
         "type": "number",
         "label": "Persona Intensity (0-10)",
         "default": 5,
-        "description": "Master strength dial (0-10) for how strongly ANY configured persona colors the TPM's user-facing voice. 0 = persona effectively off (default TPM voice even if a persona is set); 5 (default) = moderate, clearly the persona but balanced with clarity; 10 = persona at maximum. Higher = the persona's voice/tone/mannerisms come through more strongly. Applies to the operator-profile persona AND other modules' persona overlays (e.g. integration.bitbucket-pr-comments's coderabbitReplyPersona). Only matters when a persona is actually set — an empty persona means the dial does nothing. It changes only HOW strongly the persona colors the voice, never what the TPM does, is allowed to do, or the safety floor."
+        "description": "Master strength dial (0-10) for how strongly ANY configured persona colors the TPM's user-facing voice. 0 = persona effectively off (default TPM voice even if a persona is set); 5 (default) = moderate, clearly the persona but balanced with clarity; 10 = persona at maximum. Higher = the persona's voice/tone/mannerisms come through more strongly. Applies to the operator-profile persona (the TPM's own voice). Only matters when a persona is actually set — an empty persona means the dial does nothing. Note: integration.bitbucket-pr-comments has its OWN intensity dial (coderabbitReplyPersonaIntensity) for CodeRabbit PR replies, independent of this one. It changes only HOW strongly the persona colors the voice, never what the TPM does, is allowed to do, or the safety floor."
       }
     }
   }

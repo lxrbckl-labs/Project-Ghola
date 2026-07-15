@@ -111,6 +111,9 @@
               "keywordsPath": { "type": "string", "minLength": 1 },
               "multiSelect": { "type": "boolean" },
               "multiline": { "type": "boolean" },
+              "min": { "type": "number" },
+              "max": { "type": "number" },
+              "inlineGroup": { "type": "string" },
               "valueSource": {
                 "type": "string",
                 "enum": ["linqpad-connections"]

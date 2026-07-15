@@ -858,6 +858,26 @@ button.module-row-chevron:focus-visible {
   flex: 1 1 auto;
 }
 
+/* Inline group: consecutive fields sharing an `inlineGroup` render side-by-side
+   on one row. The first field (the primary control, e.g. a persona text input)
+   grows to fill; each following field (its modifier, e.g. an intensity number
+   box) stays narrow and fixed. Aligns to the top so labels line up. */
+.module-detail .module-inline-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.module-detail .module-inline-group > .setting:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.module-detail .module-inline-group > .setting:not(:first-child) {
+  flex: 0 0 auto;
+  width: 96px;
+}
+
 /* Multi-line string field: textarea variant of .setting-input. Inherits the
    width / background / border / padding chrome from .setting-input, then
    overrides the fixed 28px height with a sensible min-height for ~4 rows and
