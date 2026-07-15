@@ -378,7 +378,7 @@ export class BitbucketPrClient {
    * of `markPrReady`: `GET` the PR to echo its current `title` back (Bitbucket's
    * PUT-pullrequest endpoint treats the body as a full update and 400s when
    * `title` is omitted), then `PUT` `{ title, draft: true }`. Only the status is
-   * surfaced. Like the ready flip, this is a `Pull requests: Write` action.
+   * surfaced. Like the ready flip, this needs the `write:pullrequest:bitbucket` scope.
    */
   async markPrDraft(args: { repoSlug: string; prId: number }): Promise<PrDraftResult> {
     if (!args.repoSlug || !Number.isFinite(args.prId)) {
