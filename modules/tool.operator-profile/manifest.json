@@ -1,0 +1,31 @@
+{
+  "id": "tool.operator-profile",
+  "name": "Operator Profile",
+  "version": "0.1.0",
+  "description": "Personalizes the TPM: your name for the greeting, and an optional persona (voice/tone). An empty persona means default behavior.",
+  "proactive": true,
+  "category": "utility",
+  "kind": "capability",
+  "trigger": "session-start",
+  "tier": "optional",
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "operator-profile.md" }
+    ],
+    "settings": {
+      "userName": {
+        "type": "string",
+        "label": "Your Name",
+        "default": "",
+        "description": "Your name, used to personalize the greeting (e.g. 'Good evening, Alex'). The bootstrap composes it with the time-derived salutation to address you by name at session start and where it reads naturally. Leave empty to use no name — the salutation is then time-only with no name."
+      },
+      "persona": {
+        "type": "string",
+        "multiline": true,
+        "label": "TPM Persona",
+        "default": "",
+        "description": "An optional voice/tone/personality overlay for the TPM's user-facing communication (greeting, discussion, phrasing). A non-empty value flavors HOW the TPM talks to you throughout the session; it rides on top of the immutable cores and hard rules and can never relax the safety floor, change engineering discipline, or authorize anything the default TPM couldn't do. An EMPTY value means no persona — the TPM behaves with its default voice, identical to this module being off."
+      }
+    }
+  }
+}

@@ -251,6 +251,15 @@ async function dispatch(
         repoSlug: str(args.repoSlug),
         prId: num(args.prId),
       });
+    case '/create-pr':
+      return client.createPullRequest({
+        repoSlug: str(args.repoSlug),
+        title: str(args.title),
+        sourceBranch: str(args.sourceBranch),
+        targetBranch: str(args.targetBranch),
+        description: str(args.description),
+        draft: bool(args.draft),
+      });
     default:
       return undefined;
   }
@@ -266,6 +275,12 @@ function str(v: unknown): string {
  *  own `Number.isFinite` validation fires. */
 function num(v: unknown): number {
   return typeof v === 'number' ? v : NaN;
+}
+
+/** Coerce an unknown JSON value to a boolean, defaulting to false so an absent
+ *  or non-boolean `draft` flag lands as a non-draft create. */
+function bool(v: unknown): boolean {
+  return v === true;
 }
 
 /** Parse the optional inline anchor for a reply. Returns undefined unless a

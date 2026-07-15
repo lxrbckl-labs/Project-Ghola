@@ -38,6 +38,7 @@ const BASELINE_IDS: string[] = [
   'tool.pr-prep',
   'tool.time',
   'tool.ghola-ledger',
+  'tool.operator-profile',
 ];
 
 /**

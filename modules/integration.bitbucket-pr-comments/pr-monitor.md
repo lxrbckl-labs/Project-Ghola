@@ -32,6 +32,8 @@ Five subcommands are available:
 
 Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). PR id comes from `find-pr`.
 
+> PR *creation* is owned by `integration.atlassian-suite` (the `create pr` verb, which uses the same bridge via `bb-bridge.mjs create-pr`). This module handles the post-creation lifecycle only — read/reply/resolve comments and mark a draft PR ready.
+
 ### Posting a reply (stdin body)
 
 Reply bodies are multi-line, so they are piped into the wrapper via a heredoc rather than passed as a flag:

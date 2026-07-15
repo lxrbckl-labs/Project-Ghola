@@ -20,7 +20,7 @@ Each product has its own independent token slot, managed from the Modules tab de
 Ghola touches Atlassian in exactly two ways, and the required permissions follow directly from that:
 
 - **Jira — read only.** Ghola validates the token, then reads ticket summary, status, and description (ADF). It **never** creates, edits, transitions, or comments on a Jira issue.
-- **Bitbucket — read plus a narrow set of writes.** Ghola reads the workspace (validation), open PRs for a branch, and PR comments/threads. It **writes** only three things, all against pull requests: reply to a comment, resolve a comment thread, and mark a draft PR ready-for-review (the "bridge" flip). It does **not** touch repository contents, pipelines, or any non-PR resource.
+- **Bitbucket — read plus a narrow set of writes.** Ghola reads the workspace (validation), open PRs for a branch, and PR comments/threads. It **writes** only against pull requests: reply to a comment, resolve a comment thread, mark a draft PR ready-for-review (the "bridge" flip), and create a pull request. It does **not** touch repository contents, pipelines, or any non-PR resource.
 
 Every distinct REST call the extension makes:
 
@@ -36,6 +36,7 @@ Every distinct REST call the extension makes:
 | 8 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments/{cid}/resolve` | Resolve a comment thread | WRITE | Bitbucket: Pull requests: Write |
 | 9 | `GET /2.0/repositories/{ws}/{repo}/pullrequests/{id}` | Read current title before the ready flip | READ | Bitbucket: Pull requests: Write |
 | 10 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}` with `{ title, draft: false }` | Mark a draft PR ready-for-review | WRITE | Bitbucket: Pull requests: Write |
+| 11 | `POST /2.0/repositories/{ws}/{repo}/pullrequests` with `{ title, source, destination, description, draft }` | Create a pull request | WRITE | Bitbucket: Pull requests: Write |
 
 (All Bitbucket paths are rooted at `https://api.bitbucket.org/2.0`.) There are **no pipeline calls** anywhere in the extension today. `Pipelines: Read` is not required by any current code path — it is only worth granting as forward-looking prep for a planned pipeline-status/feedback capability (see below).
 
@@ -173,3 +174,59 @@ These are templates. Adapt field and status names to the project's actual workfl
 - READ ONLY: never create, transition, comment on, or otherwise modify a ticket. Jira stays read only, per the base rules.
 - If the board or sprint cannot be resolved (no `boardId`, no open sprint, or the MCP is unavailable), say so plainly and offer to run a plain project JQL instead.
 - Sprint and board discussion is session context. Do not persist it to ticket notes.
+
+## Create PR
+
+This suite owns Bitbucket pull-request **creation**. It is the outbound bookend of the PR lifecycle: `tool.pr-prep` builds the checklist + description BEFORE, this verb opens the PR, and `integration.bitbucket-pr-comments` handles everything AFTER (address comments, resolve threads, mark ready). Creating a PR is a Bitbucket API write — it goes through the same loopback bridge + `bb-bridge.mjs` wrapper the comment writes use, so the Bitbucket token never crosses the agent boundary. It is **not** a local git write, so it is allowed behind the confirmation gate below, exactly like `mark ready`.
+
+### Triggers
+
+Invoke this flow when the user types one of: `create pr`, `create a pull request`, `open a pr`.
+
+### Flow
+
+1. **Resolve repo slug.** `git remote get-url origin`, strip a trailing `.git`, take the last path segment. If parsing fails, ask the user.
+2. **Resolve source branch.** The current branch (`git rev-parse --abbrev-ref HEAD`). This is the PR's source.
+3. **Resolve target branch.** Read `parameters.defaultTargetBranch`. If it is empty, ASK the user which branch the PR should target — do not guess.
+4. **Resolve title.** Default from the ticket key + summary when one is available this session (e.g. `CMMS-2650: Fix null deref in ImportJob`); otherwise ask the user for a title.
+5. **Resolve description.** Prefer a `tool.pr-prep`-generated description if one exists this session. Otherwise ask the user to provide one (or generate a draft for their review). The description is piped via stdin, so multi-line markdown is fine.
+6. **Resolve draft state.** Read `parameters.createAsDraft` — when true the PR is created as a draft (the usual path; pairs with the later `mark ready` flip once review prep is done).
+
+### Confirmation gate
+
+Creating a PR is a Bitbucket write, so it carries the same discipline as `mark ready`. Before doing anything, show intent plainly:
+
+- repo slug
+- `source -> target` (the two branches)
+- title
+- draft: yes/no
+- the full description that will be posted
+
+Then require the user to type `ok` (or explicitly cancel). **Never auto-create** — there is no bypass for this gate.
+
+### Execute
+
+On `ok`, invoke the wrapper with the description piped via stdin:
+
+```bash
+node "$GHOLA_ROOT/scripts/bb-bridge.mjs" create-pr \
+  --repo <slug> --source <branch> --target <branch> --title <title> [--draft] <<'EOF'
+<the PR description, multi-line markdown>
+EOF
+```
+
+Add `--draft` only when the resolved draft state is true; omit it for a non-draft PR. The description is NOT a flag — pipe it via the heredoc, mirroring the `reply` subcommand.
+
+### Report
+
+On success the wrapper's JSON result carries the created PR's `prId` and `url` — report both so the user can open it. Surface any failure loudly per the Failure Handling taxonomy in `integration.bitbucket-pr-comments` (reference it; do not duplicate it here): a `Missing: ...` `unauthorized` from an empty repo/title/branch pre-check or an unset email/workspace/token, `network-error` on timeout, `not-found` (404), `forbidden` (403), or `unknown-error` (`"<code> <statusText>"`, e.g. a `400` when the source branch has no commits ahead of target, or a `409` when a PR already exists). Do not treat anything other than a clean `status: 'ok'` as success.
+
+### Lifecycle
+
+`create pr` pairs with `tool.pr-prep` (checklist + description generation) BEFORE and `integration.bitbucket-pr-comments` (address comments / resolve / mark ready) AFTER — together they cover the full PR lifecycle. PR *creation* lives here in the suite; the post-creation lifecycle lives in `integration.bitbucket-pr-comments`.
+
+### Hard rules
+
+- **No token echo.** The Bitbucket token stays behind the AtlassianBridge; the bridge's own bearer token is read from the environment by the wrapper. Never echo either, never pass a token as a flag.
+- **Confirmation required.** Always show intent and wait for `ok`. Never auto-create; the gate is not configurable off.
+- **Read-only git still applies.** Creating a PR is a Bitbucket API write, not a git write — allowed behind the gate, like `mark ready`. This does not loosen the no-destructive-git rule for local git in any way.

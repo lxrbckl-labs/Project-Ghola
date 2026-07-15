@@ -56,6 +56,18 @@
         "label": "Include Done In Sprint View",
         "default": false,
         "description": "Whether a general what is in the sprint answer includes Done items or focuses on active work."
+      },
+      "defaultTargetBranch": {
+        "type": "string",
+        "label": "Default PR Target Branch",
+        "default": "",
+        "description": "The branch new pull requests target when you run the create pr verb, e.g. dev. Leave empty to be asked for the target branch each time."
+      },
+      "createAsDraft": {
+        "type": "boolean",
+        "label": "Create PRs as Draft",
+        "default": true,
+        "description": "When on, new pull requests are created as drafts so you can mark them ready for review after prep. Turn off to create ready-for-review PRs directly."
       }
     }
   }

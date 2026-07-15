@@ -97,6 +97,15 @@ export interface PrReadyResult {
   message?: string;
 }
 
+export interface PrCreateResult {
+  status: BitbucketPrStatus;
+  /** Numeric id Bitbucket assigns to the newly created PR. */
+  prId?: number;
+  /** Web (`links.html.href`) URL of the created PR, for the user to open. */
+  url?: string;
+  message?: string;
+}
+
 // ─── Minimal slices of the Bitbucket response shapes we read ──────────────
 
 interface BitbucketUser {
@@ -141,6 +150,14 @@ interface BitbucketCommentListResponse {
  *  back to avoid a spurious 400 when we clear the draft flag. */
 interface BitbucketPullRequest {
   title?: string;
+}
+
+/** Minimal slice of the `POST /pullrequests` create response we read: the new
+ *  PR's numeric `id` and the `links.html.href` web URL we hand back so the
+ *  user can open the PR. */
+interface BitbucketCreatedPullRequest {
+  id?: number;
+  links?: { html?: { href?: string } };
 }
 
 /**
@@ -349,6 +366,64 @@ export class BitbucketPrClient {
     const putRes = await this.request(url, 'PUT', auth, { title, draft: false });
     if (!putRes.ok) return { status: putRes.status, message: putRes.message };
     return { status: 'ok' };
+  }
+
+  /**
+   * `POST /2.0/repositories/{workspace}/{repo_slug}/pullrequests` with
+   * `{ title, source: { branch: { name } }, destination: { branch: { name } },
+   *    description, draft }`.
+   *
+   * Creates a new pull request from `sourceBranch` into `targetBranch`. On
+   * success returns the created PR's numeric `id` and its web URL
+   * (`links.html.href`) so the caller can report/open it. Required inputs
+   * (`repoSlug`, `title`, `sourceBranch`, `targetBranch`) are validated before
+   * any request is made, mirroring `replyToComment`; a missing workspace /
+   * token / credential is surfaced as `unauthorized` with a `Missing: ...`
+   * message. The token is never echoed.
+   */
+  async createPullRequest(args: {
+    repoSlug: string;
+    title: string;
+    sourceBranch: string;
+    targetBranch: string;
+    description?: string;
+    draft?: boolean;
+  }): Promise<PrCreateResult> {
+    if (!args.repoSlug || !args.title || !args.sourceBranch || !args.targetBranch) {
+      const missingInputs: string[] = [];
+      if (!args.repoSlug) missingInputs.push('repoSlug');
+      if (!args.title) missingInputs.push('title');
+      if (!args.sourceBranch) missingInputs.push('sourceBranch');
+      if (!args.targetBranch) missingInputs.push('targetBranch');
+      return { status: 'unauthorized', message: `Missing: ${missingInputs.join(', ')}` };
+    }
+    const { email, workspace, token, missing } = await this.readAuthContext();
+    if (missing) return { status: 'unauthorized', message: missing };
+
+    const auth = this.buildAuthHeader(email, token);
+    const url =
+      `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
+      `/${encodeURIComponent(args.repoSlug)}/pullrequests`;
+    const payload: {
+      title: string;
+      source: { branch: { name: string } };
+      destination: { branch: { name: string } };
+      description?: string;
+      draft?: boolean;
+    } = {
+      title: args.title,
+      source: { branch: { name: args.sourceBranch } },
+      destination: { branch: { name: args.targetBranch } },
+    };
+    if (args.description !== undefined) payload.description = args.description;
+    if (args.draft !== undefined) payload.draft = args.draft;
+
+    const res = await this.request(url, 'POST', auth, payload);
+    if (!res.ok) return { status: res.status, message: res.message };
+    const body = res.body as BitbucketCreatedPullRequest | undefined;
+    const prId = typeof body?.id === 'number' ? body.id : undefined;
+    const href = typeof body?.links?.html?.href === 'string' ? body.links.html.href : undefined;
+    return { status: 'ok', prId, url: href };
   }
 
   // ─── Internal: shape normalization ────────────────────────────────────

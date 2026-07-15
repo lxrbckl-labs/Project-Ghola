@@ -20,6 +20,8 @@
 //   node scripts/bb-bridge.mjs list-comments --repo <slug> --pr <id>
 //   node scripts/bb-bridge.mjs resolve       --repo <slug> --pr <id> --comment <id>
 //   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
+//   node scripts/bb-bridge.mjs create-pr     --repo <slug> --source <branch> --target <branch> \
+//       --title <title> [--draft]   (description piped via stdin)
 //   node scripts/bb-bridge.mjs reply         --repo <slug> --pr <id> --parent <id> \
 //       [--inline-path <p> --inline-to <n> [--inline-from <n>]]   (body piped via stdin)
 //   node scripts/bb-bridge.mjs get-ticket    --key <KEY>
@@ -277,6 +279,30 @@ async function cmdReply(flags) {
   await postToBridge('/reply', payload);
 }
 
+async function cmdCreatePr(flags) {
+  const usage = 'bb-bridge create-pr --repo <slug> --source <branch> --target <branch> '
+    + '--title <title> [--draft]  (description piped via stdin)';
+  const repoSlug = requireFlag(flags, 'repo', usage);
+  const sourceBranch = requireFlag(flags, 'source', usage);
+  const targetBranch = requireFlag(flags, 'target', usage);
+  const title = requireFlag(flags, 'title', usage);
+  // --draft is a bare boolean flag: present -> true (parseArgs sets it to the
+  // literal `true` when no value follows), absent -> false.
+  const draft = flags['draft'] === true;
+
+  // The description is multi-line, so it is piped via stdin (mirrors cmdReply)
+  // rather than passed as a flag to dodge shell-escaping pain.
+  const description = await readStdin();
+  await postToBridge('/create-pr', {
+    repoSlug,
+    title,
+    sourceBranch,
+    targetBranch,
+    description,
+    draft,
+  });
+}
+
 async function cmdGetTicket(flags) {
   const usage = 'bb-bridge get-ticket --key <KEY>';
   const key = requireFlag(flags, 'key', usage);
@@ -300,6 +326,8 @@ Usage:
   node scripts/bb-bridge.mjs list-comments --repo <slug> --pr <id>
   node scripts/bb-bridge.mjs resolve       --repo <slug> --pr <id> --comment <id>
   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
+  node scripts/bb-bridge.mjs create-pr     --repo <slug> --source <branch> --target <branch> \\
+      --title <title> [--draft]         (description is read from stdin)
   node scripts/bb-bridge.mjs reply         --repo <slug> --pr <id> --parent <id> \\
       [--inline-path <p> --inline-to <n> [--inline-from <n>]]
                                             (reply body is read from stdin)
@@ -321,6 +349,7 @@ async function main() {
     'list-comments': cmdListComments,
     resolve: cmdResolve,
     'mark-ready': cmdMarkReady,
+    'create-pr': cmdCreatePr,
     reply: cmdReply,
     'get-ticket': cmdGetTicket,
   };
