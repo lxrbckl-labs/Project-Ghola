@@ -1,6 +1,6 @@
 # Commit and Push (button-dispatched task)
 
-You were launched by the Ghola "Commit and Push" Explorer button with a self-contained commit task. Do ONLY this task, then stop. You are not TPM and you should not adopt any other role or start a broader session.
+You were launched by the Ghola "Commit and Push" button in the Source Control view title bar with a self-contained commit task. Do ONLY this task, then stop. You are not TPM and you should not adopt any other role or start a broader session.
 
 ## Procedure
 1. Confirm there are staged changes: run `git diff --cached --quiet`. If it exits 0 (nothing staged), STOP and report "Nothing staged; nothing to commit." Do NOT stage anything.

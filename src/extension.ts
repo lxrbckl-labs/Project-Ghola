@@ -4,7 +4,6 @@ import * as vscode from 'vscode';
 import { TicketWidgetProvider } from './ticket-widget/provider';
 import { TicketTodosStoreManager } from './ticket-widget/todos-store';
 import { registerCommands } from './commands';
-import { CommitPushViewProvider } from './commit-push/provider';
 import { AtlassianClient } from './integration/atlassian-client';
 import { adfToPlainText } from './integration/adf-to-text';
 import { BitbucketPrClient } from './integration/bitbucket-pr-client';
@@ -506,13 +505,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // Re-sync on module enable/disable toggle
   context.subscriptions.push(loader.onDidChange(syncTicketWorkWidgetContextKey));
 
-  // ───── Commit-and-Push view ─────────────────────────────────────────
-  // Empty tree view that exists only to host the title-bar Commit-and-Push
-  // button and welcome content; gated live on the tool.commit-push module.
-  context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('gholaCommitPush', new CommitPushViewProvider()),
-  );
-
+  // ───── Commit-and-Push button ───────────────────────────────────────
+  // The Commit-and-Push action lives in the Source Control view title bar
+  // (see the `scm/title` menu contribution), gated live on the
+  // tool.commit-push module via the `ghola.commitPush.enabled` context key.
   const syncCommitPushContextKey = (): void => {
     const enabled = loader.find('tool.commit-push')?.isEnabled === true;
     void vscode.commands.executeCommand('setContext', SET_CONTEXT_KEYS.COMMIT_PUSH_ENABLED, enabled);

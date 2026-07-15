@@ -2,7 +2,7 @@
   "id": "tool.commit-push",
   "name": "Commit and Push Button",
   "version": "0.1.0",
-  "description": "Adds an Explorer button that dispatches a Claude agent to commit the currently-staged changes with a templated message and push to the current branch.",
+  "description": "Adds a button to the Source Control view title bar that dispatches a Claude agent to commit the currently-staged changes with a templated message and push to the current branch.",
   "proactive": false,
   "category": "workflow",
   "kind": "capability",

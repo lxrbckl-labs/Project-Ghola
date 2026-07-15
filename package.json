@@ -2,7 +2,7 @@
   "name": "ghola",
   "displayName": "Ghola",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.17.27",
+  "version": "0.17.28",
   "icon": "resources/icon-source.png",
   "publisher": "local",
   "engines": {
@@ -14,8 +14,7 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished",
-    "onView:gholaTicketWidget",
-    "onView:gholaCommitPush"
+    "onView:gholaTicketWidget"
   ],
   "contributes": {
     "commands": [
@@ -203,32 +202,17 @@
           "icon": "$(tasklist)",
           "when": "ghola.ticketWork.widgetEnabled"
         }
-      ],
-      "explorer": [
-        {
-          "type": "tree",
-          "id": "gholaCommitPush",
-          "name": "Ghola Commit",
-          "icon": "$(git-commit)",
-          "when": "ghola.commitPush.enabled"
-        }
       ]
     },
     "menus": {
-      "view/title": [
+      "scm/title": [
         {
           "command": "ghola.commitAndPush",
-          "when": "view == gholaCommitPush",
+          "when": "ghola.commitPush.enabled",
           "group": "navigation"
         }
       ]
-    },
-    "viewsWelcome": [
-      {
-        "view": "gholaCommitPush",
-        "contents": "Commit the currently staged changes and push to the current branch. A Claude agent writes the message from your format template.\n[Commit and Push Staged](command:ghola.commitAndPush)"
-      }
-    ]
+    }
   },
   "scripts": {
     "build": "node esbuild.config.js",
