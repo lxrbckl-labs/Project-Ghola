@@ -25,9 +25,11 @@ Go to: Bitbucket -> **Personal settings** -> **App passwords** -> **Create app p
 This is a **Bitbucket App Password**, not an Atlassian API token - the two are different credential types issued from different places, and the Atlassian token will not authenticate against Bitbucket.
 
 Check these permissions:
-- **Pull requests: Write** (also covers reply, resolve, mark-ready, approve, merge, decline, and create)
+- **Pull requests: Write** - **required for resolve, mark-ready, to-draft, and create-pr.** This is the one people get wrong (see the trap below), so make sure it is checked, not just "Pull requests: Read".
 - **Repositories: Read**
 - **Pipelines: Read** (optional; forward-looking for a planned pipeline-status feature - no current code path uses it)
+
+> **The read-vs-write trap (confirmed by live testing):** Bitbucket puts *adding/replying to comments* under **Pull requests: Read**, but *resolving a comment thread*, *marking a PR ready*, *flipping a PR back to draft*, and *creating a PR* all require **Pull requests: Write**. So a token with only Read scope is misleading - replies post fine, then `resolve` / `mark ready` / `to draft` / `create pr` all come back **403 forbidden ("token lacks access")**. If you ever see that pattern - comments post but a resolve/ready/draft/create fails with 403 - the token is missing **Pull requests: Write**. Fix it by regenerating the app password with that box checked and re-setting it via **Set Bitbucket API Token** (Bitbucket app-password scopes are fixed at creation; you cannot add a scope to an existing one).
 
 - Basic auth is `email:app_password`. If authentication fails using your email, try your Bitbucket **username** instead - some accounts require it.
 - Use the **Set Bitbucket API Token** command below to paste it into the Bitbucket slot.

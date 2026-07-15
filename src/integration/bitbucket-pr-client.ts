@@ -97,6 +97,11 @@ export interface PrReadyResult {
   message?: string;
 }
 
+export interface PrDraftResult {
+  status: BitbucketPrStatus;
+  message?: string;
+}
+
 export interface PrCreateResult {
   status: BitbucketPrStatus;
   /** Numeric id Bitbucket assigns to the newly created PR. */
@@ -364,6 +369,35 @@ export class BitbucketPrClient {
     const title = typeof current?.title === 'string' ? current.title : '';
 
     const putRes = await this.request(url, 'PUT', auth, { title, draft: false });
+    if (!putRes.ok) return { status: putRes.status, message: putRes.message };
+    return { status: 'ok' };
+  }
+
+  /**
+   * Flip a ready PR back to draft by setting its `draft` flag. The exact mirror
+   * of `markPrReady`: `GET` the PR to echo its current `title` back (Bitbucket's
+   * PUT-pullrequest endpoint treats the body as a full update and 400s when
+   * `title` is omitted), then `PUT` `{ title, draft: true }`. Only the status is
+   * surfaced. Like the ready flip, this is a `Pull requests: Write` action.
+   */
+  async markPrDraft(args: { repoSlug: string; prId: number }): Promise<PrDraftResult> {
+    if (!args.repoSlug || !Number.isFinite(args.prId)) {
+      return { status: 'not-found', message: 'Missing repo or PR id' };
+    }
+    const { email, workspace, token, missing } = await this.readAuthContext();
+    if (missing) return { status: 'unauthorized', message: missing };
+
+    const auth = this.buildAuthHeader(email, token);
+    const url =
+      `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
+      `/${encodeURIComponent(args.repoSlug)}/pullrequests/${encodeURIComponent(String(args.prId))}`;
+
+    const getRes = await this.request(url, 'GET', auth);
+    if (!getRes.ok) return { status: getRes.status, message: getRes.message };
+    const current = getRes.body as BitbucketPullRequest | undefined;
+    const title = typeof current?.title === 'string' ? current.title : '';
+
+    const putRes = await this.request(url, 'PUT', auth, { title, draft: true });
     if (!putRes.ok) return { status: putRes.status, message: putRes.message };
     return { status: 'ok' };
   }

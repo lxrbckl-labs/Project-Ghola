@@ -67,7 +67,7 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
     ],
     settings: {
       'tool.lenses': { autoKickReviewOnColleagueBranch: true, autoKickPlanningOnFreshBranch: true },
-      'integration.bitbucket-pr-comments': { logCommentsEnabled: true, markReadyEnabled: true },
+      'integration.bitbucket-pr-comments': { logCommentsEnabled: true, markReadyEnabled: true, toDraftEnabled: true },
     },
     isDefault: false,
   },

@@ -29,10 +29,11 @@ Five subcommands are available:
 - `reply --repo <slug> --pr <id> --parent <commentId> [--inline-path <p> --inline-to <n> --inline-from <n>]` — posts a reply threaded under an existing comment. The reply body is NOT a flag — it is piped via STDIN (see the heredoc pattern below). Supply the `--inline-*` flags when replying to an inline comment so the reply lands on the same file/line thread; omit them for general comments.
 - `resolve --repo <slug> --pr <id> --comment <id>` — marks a comment thread resolved.
 - `mark-ready --repo <slug> --pr <id>` — marks a DRAFT PR ready for review. This is a Bitbucket write; see "Mark Ready Verb" below for the confirmation gate that guards it.
+- `to-draft --repo <slug> --pr <id>` — flips a READY PR back to draft (the reverse of `mark-ready`). This is a Bitbucket write; see "To Draft Verb" below for the confirmation gate that guards it.
 
 Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). PR id comes from `find-pr`.
 
-> PR *creation* is owned by `integration.atlassian-suite` (the `create pr` verb, which uses the same bridge via `bb-bridge.mjs create-pr`). This module handles the post-creation lifecycle only — read/reply/resolve comments and mark a draft PR ready.
+> PR *creation* is owned by `integration.atlassian-suite` (the `create pr` verb, which uses the same bridge via `bb-bridge.mjs create-pr`). This module handles the post-creation lifecycle only — read/reply/resolve comments and flip a PR between draft and ready.
 
 ### Posting a reply (stdin body)
 
@@ -68,6 +69,7 @@ The user invokes this flow by typing one of:
 - `address all` — every comment in the snapshot (TPM still asks per-action what to do).
 - `address all <author-substring>` — filter by comment author display name (case-insensitive substring match; e.g., `address all coderabbit`).
 - `mark ready` / `ready for review` — marks the current branch's draft PR ready for review via the `mark-ready` bridge subcommand. This is a Bitbucket write; see "Mark Ready Verb" below for the confirmation gate and the `markReadyEnabled` setting that gate it.
+- `to draft` / `back to draft` — flips the current branch's ready PR back to draft via the `to-draft` bridge subcommand (the reverse of `mark ready`). This is a Bitbucket write; see "To Draft Verb" below for the confirmation gate and the `toDraftEnabled` setting that gate it.
 - `resolve <ordinals>` — `resolve 1`, `resolve 1, 3`, `resolve 2-4`, `resolve all`. Resolves comment threads from the current snapshot (same ordinal grammar as `address`/`post`). This is a Bitbucket write; see "Resolve Ordinals Verb" below for the confirmation gate that guards it.
 
 Ambiguous gestures (`address that one`, `address the rest`) should be confirmed with the user, not guessed. When the user references an ordinal that isn't in the current snapshot, ask whether they meant to refresh the snapshot first.
@@ -132,8 +134,9 @@ Every bridge subcommand's result surfaces two things: the wrapper's process exit
 
 - **No auto-posting.** Every reply requires explicit `ok` confirmation. `address all` still gates on the generate + approve step.
 - **No token echo.** Neither secret ever appears in chat, logs, or error messages: the Bitbucket token stays behind the AtlassianBridge on the host side, and the bridge server's own bearer token (`GHOLA_BRIDGE_TOKEN`) is read from the environment by the `bb-bridge.mjs` wrapper and never surfaced to or handled by the agent. Never echo either token, and never pass a token as a flag.
-- **No git writes / no Jira writes.** Read-only git only (local git — `git commit`, `git push`, etc.). This module never touches Jira. This is a separate concern from `mark ready` below: marking a PR ready is a Bitbucket API write, not a local git write, and is allowed — but only behind the explicit confirmation gate and the `markReadyEnabled` setting.
+- **No git writes / no Jira writes.** Read-only git only (local git — `git commit`, `git push`, etc.). This module never touches Jira. This is a separate concern from `mark ready` / `to draft` below: flipping a PR's draft state is a Bitbucket API write, not a local git write, and is allowed — but only behind the explicit confirmation gate and the respective `markReadyEnabled` / `toDraftEnabled` setting.
 - **`mark ready` requires explicit confirmation.** Same discipline as reply posting: show intent (repo, PR id, branch), require the user to type `ok`, never auto-run. Refuse the verb outright if `parameters.markReadyEnabled` is false.
+- **`to draft` requires explicit confirmation.** Same discipline as `mark ready`: show intent (repo, PR id, branch), require the user to type `ok`, never auto-run. Refuse the verb outright if `parameters.toDraftEnabled` is false.
 - **`resolve <ordinals>` requires explicit confirmation.** Like reply and mark-ready, resolving a thread is a Bitbucket write: show intent (the selected threads), require the user to type `ok`, never auto-run. `resolve all` still gates on this confirmation. It never auto-resolves.
 - **No new code in the work repo outside what SWEs are dispatched to do.** TPM does not author code in this flow; SWEs do.
 - **Generated reply must not include severity, rating, attribution, or any Ghola-internal filter metadata.** It's a public Bitbucket comment.
@@ -270,6 +273,23 @@ When `parameters.pipelineStatusEnabled` is true, TPM can fetch and report the la
 - **Module enabled, `markReadyEnabled` off (default)**: `mark ready` refuses per the gate-check message above. `address`/`post` verbs are unaffected.
 - **Module enabled, `markReadyEnabled` on**: `mark ready` works, still gated per-invocation on the explicit `ok` confirmation in step 4.
 
+## To Draft Verb
+
+`to draft` / `back to draft` flips the current branch's ready-for-review Bitbucket PR back to draft — the exact reverse of `mark ready`. Like `mark ready`, it flips the PR's draft state via a bridge subcommand (`to-draft`), is a Bitbucket API write, and carries the same confirmation discipline plus its own feature gate.
+
+1. **Gate check.** If `parameters.toDraftEnabled` is false, refuse the trigger in one sentence: "To Draft is disabled in the Modules tab. Enable it to flip PRs back to draft." Do not proceed to PR resolution.
+2. **PR resolution.** Resolve the open PR for the current branch via `find-pr --repo <slug> --branch <name>` (same resolution as the `mark ready`/`address`/`post` flows). No matches -> ask the user.
+3. **Show intent.** Before doing anything, state plainly what is about to happen: the repo slug, the PR id, and the branch. This is a state change on Bitbucket (ready -> draft) — the user must see exactly what will be affected before confirming.
+4. **Confirm.** Require the user to type `ok` (or explicitly cancel). No auto-run, even under `to draft` invoked with no further discussion — always show intent and wait for confirmation first, mirroring the `mark ready` gate. There is no `requireUserApproval`-style bypass for this verb; the gate is not configurable off.
+5. **Execute.** On `ok`, invoke `node "$GHOLA_ROOT/scripts/bb-bridge.mjs" to-draft --repo <slug> --pr <id>`.
+6. **Report.** On success, tell the user the PR is now a draft (include the PR id/link if the bridge's JSON result carries one). On `not-found` (PR id stale — it may have merged/closed since resolution), `unauthorized` (credentials gap or token rejection, per the Failure Handling taxonomy), or a `400`-class `unknown-error` (e.g. the PR was already a draft), surface the exact status/message loudly rather than treating anything other than a clean success as done.
+
+### Module-Disabled Vs Feature-Disabled
+
+- **`integration.bitbucket-pr-comments` disabled**: `to draft` is unavailable (the whole module is off).
+- **Module enabled, `toDraftEnabled` off (default)**: `to draft` refuses per the gate-check message above. `address`/`post`/`mark ready` verbs are unaffected.
+- **Module enabled, `toDraftEnabled` on**: `to draft` works, still gated per-invocation on the explicit `ok` confirmation in step 4.
+
 ## Resolve Ordinals Verb
 
 `resolve <ordinals>` flips the resolved state of comment THREADS via the `resolve` bridge subcommand. It is distinct from replying: resolving does not post any text, and the user can resolve a thread with or without having replied to it first. Where `address` reads and triages and `reply`/`post` write text, `resolve` only changes a thread's resolved-state on Bitbucket. It is a Bitbucket API write, so it carries the same confirmation discipline as posting a reply.
@@ -303,6 +323,7 @@ This verb never AUTO-resolves, consistent with the "Flag falsely-resolved commen
 - Maintain a per-session audit of which comments have been addressed and how (code-fix, manual reply, dismiss). Surface the audit when the user asks for a status check, and include it in the closing summary of any batch.
 - For the `post <ordinals>` verb: parse the ordinals, source findings from the most recent Review Mode dispatch in session memory, polish each per `parameters.postPolishPrompt`, gate per `parameters.requireUserApproval`, place per `parameters.postCommentLocation`, and post via the `bb-bridge.mjs` wrapper's `reply` subcommand. Report posted comment ids back to the user as audit trail. If `parameters.postOrdinalsEnabled` is false, refuse per the module-disabled message above.
 - For the `mark ready` verb: gate on `parameters.markReadyEnabled`, resolve the PR, show intent, require explicit `ok`, then invoke the wrapper's `mark-ready` subcommand. Report success or surface the failure loudly per the Mark Ready Verb section above.
+- For the `to draft` verb: gate on `parameters.toDraftEnabled`, resolve the PR, show intent, require explicit `ok`, then invoke the wrapper's `to-draft` subcommand. Report success or surface the failure loudly per the To Draft Verb section above.
 - For the `resolve <ordinals>` verb: parse the ordinals against the current snapshot, show intent (selected threads by ordinal with `file:line`/author + resolved-state), require explicit `ok`, then invoke the wrapper's `resolve` subcommand once per selected comment id. Report each resolved thread id back as audit trail per the Resolve Ordinals Verb section above.
 - Settings (read from the module's parameters block in the Session Manifest):
   - `parameters.replyInstruction` — feed into the reply-generation step. If absent from the Session Manifest, the default applies: `"Write a 1-2 sentence professional PR reply confirming what was fixed and where. No double-dashes."`
@@ -314,6 +335,7 @@ This verb never AUTO-resolves, consistent with the "Flag falsely-resolved commen
   - `parameters.postCommentLocation` — where the comment lands (`inline-when-possible`, `inline-only`, `overview-only`). If absent from the Session Manifest, the default applies: `"inline-when-possible"`.
   - `parameters.requireUserApproval` — when true, present polished comments for approval before posting. If absent from the Session Manifest, the default applies: `true` (the safety gate is on).
   - `parameters.markReadyEnabled` — when false, refuse the `mark ready` verb outright. If absent from the Session Manifest, the default applies: `false` (the verb is disabled — off by default since it's a Bitbucket write).
+  - `parameters.toDraftEnabled` — when false, refuse the `to draft` verb outright. If absent from the Session Manifest, the default applies: `false` (the verb is disabled — off by default since it's a Bitbucket write).
 - When `parameters.logCommentsEnabled` is true, fetched comments are appended to `parameters.logFilePath` as JSON lines. Whether your own posted replies are logged too is gated by `parameters.logIncludeReplies`: on (default) logs inbound comments plus posted replies; off logs only inbound comments and skips the reply entries. You do not need to invoke logging explicitly; it happens passively during the address/post workflow.
 
 ### SWE

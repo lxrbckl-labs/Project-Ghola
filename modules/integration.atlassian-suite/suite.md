@@ -20,7 +20,7 @@ Each product has its own independent token slot, managed from the Modules tab de
 Ghola touches Atlassian in exactly two ways, and the required permissions follow directly from that:
 
 - **Jira — read only.** Ghola validates the token, then reads ticket summary, status, and description (ADF). It **never** creates, edits, transitions, or comments on a Jira issue.
-- **Bitbucket — read plus a narrow set of writes.** Ghola reads the workspace (validation), open PRs for a branch, and PR comments/threads. It **writes** only against pull requests: reply to a comment, resolve a comment thread, mark a draft PR ready-for-review (the "bridge" flip), and create a pull request. It does **not** touch repository contents, pipelines, or any non-PR resource.
+- **Bitbucket — read plus a narrow set of writes.** Ghola reads the workspace (validation), open PRs for a branch, and PR comments/threads. It **writes** only against pull requests: reply to a comment, resolve a comment thread, flip a PR between draft and ready-for-review (both directions), and create a pull request. It does **not** touch repository contents, pipelines, or any non-PR resource.
 
 Every distinct REST call the extension makes:
 
@@ -36,7 +36,8 @@ Every distinct REST call the extension makes:
 | 8 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments/{cid}/resolve` | Resolve a comment thread | WRITE | Bitbucket: Pull requests: Write |
 | 9 | `GET /2.0/repositories/{ws}/{repo}/pullrequests/{id}` | Read current title before the ready flip | READ | Bitbucket: Pull requests: Write |
 | 10 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}` with `{ title, draft: false }` | Mark a draft PR ready-for-review | WRITE | Bitbucket: Pull requests: Write |
-| 11 | `POST /2.0/repositories/{ws}/{repo}/pullrequests` with `{ title, source, destination, description, draft }` | Create a pull request | WRITE | Bitbucket: Pull requests: Write |
+| 11 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}` with `{ title, draft: true }` | Flip a ready PR back to draft | WRITE | Bitbucket: Pull requests: Write |
+| 12 | `POST /2.0/repositories/{ws}/{repo}/pullrequests` with `{ title, source, destination, description, draft }` | Create a pull request | WRITE | Bitbucket: Pull requests: Write |
 
 (All Bitbucket paths are rooted at `https://api.bitbucket.org/2.0`.) There are **no pipeline calls** anywhere in the extension today. `Pipelines: Read` is not required by any current code path — it is only worth granting as forward-looking prep for a planned pipeline-status/feedback capability (see below).
 
@@ -52,7 +53,7 @@ Created at Bitbucket → **Personal settings** → **App passwords** → **Creat
 
 Permissions to grant:
 
-- **Pull requests: Write** — required. Not limited to reply/resolve/mark-ready; it is Bitbucket's single permission for all pull-request writes, including approving, requesting changes, declining, merging, and creating PRs. Any future PR-workflow feature (auto-approve, auto-merge, PR creation) needs **no additional permission** beyond what Ghola already requests.
+- **Pull requests: Write** — required. Not limited to reply/resolve/mark-ready/to-draft; it is Bitbucket's single permission for all pull-request writes, including approving, requesting changes, declining, merging, and creating PRs. Any future PR-workflow feature (auto-approve, auto-merge, PR creation) needs **no additional permission** beyond what Ghola already requests. **Watch the read-vs-write trap:** Bitbucket permits *adding/replying to comments* under Pull requests: **Read**, but *resolving a thread* (endpoint 8), *the ready/draft flips* (10, 11), and *create-pr* (12) all require **Write**. A Read-only token therefore posts replies fine but 403s on resolve/mark-ready/to-draft/create-pr — if you see that pattern, the token is missing Write (see setup.md).
 - **Repositories: Read** — required for the workspace-validation probe.
 - **Pipelines: Read** — optional, forward-looking. No current code path calls it, but granting it now avoids re-issuing the app password when a planned pipeline-status/feedback capability lands.
 

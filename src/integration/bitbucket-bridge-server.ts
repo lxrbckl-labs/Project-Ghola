@@ -265,6 +265,11 @@ async function dispatch(
         repoSlug: str(args.repoSlug),
         prId: num(args.prId),
       });
+    case '/to-draft':
+      return client.markPrDraft({
+        repoSlug: str(args.repoSlug),
+        prId: num(args.prId),
+      });
     case '/create-pr':
       return client.createPullRequest({
         repoSlug: str(args.repoSlug),

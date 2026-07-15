@@ -20,6 +20,7 @@
 //   node scripts/bb-bridge.mjs list-comments --repo <slug> --pr <id>
 //   node scripts/bb-bridge.mjs resolve       --repo <slug> --pr <id> --comment <id>
 //   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
+//   node scripts/bb-bridge.mjs to-draft      --repo <slug> --pr <id>
 //   node scripts/bb-bridge.mjs create-pr     --repo <slug> --source <branch> --target <branch> \
 //       --title <title> [--draft]   (description piped via stdin)
 //   node scripts/bb-bridge.mjs reply         --repo <slug> --pr <id> --parent <id> \
@@ -256,6 +257,13 @@ async function cmdMarkReady(flags) {
   await postToBridge('/mark-ready', { repoSlug, prId });
 }
 
+async function cmdToDraft(flags) {
+  const usage = 'bb-bridge to-draft --repo <slug> --pr <id>';
+  const repoSlug = requireFlag(flags, 'repo', usage);
+  const prId = requireNumberFlag(flags, 'pr', usage);
+  await postToBridge('/to-draft', { repoSlug, prId });
+}
+
 async function cmdReply(flags) {
   const usage = 'bb-bridge reply --repo <slug> --pr <id> --parent <id> '
     + '[--inline-path <p> --inline-to <n> [--inline-from <n>]]  (body piped via stdin)';
@@ -326,6 +334,7 @@ Usage:
   node scripts/bb-bridge.mjs list-comments --repo <slug> --pr <id>
   node scripts/bb-bridge.mjs resolve       --repo <slug> --pr <id> --comment <id>
   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
+  node scripts/bb-bridge.mjs to-draft      --repo <slug> --pr <id>
   node scripts/bb-bridge.mjs create-pr     --repo <slug> --source <branch> --target <branch> \\
       --title <title> [--draft]         (description is read from stdin)
   node scripts/bb-bridge.mjs reply         --repo <slug> --pr <id> --parent <id> \\
@@ -349,6 +358,7 @@ async function main() {
     'list-comments': cmdListComments,
     resolve: cmdResolve,
     'mark-ready': cmdMarkReady,
+    'to-draft': cmdToDraft,
     'create-pr': cmdCreatePr,
     reply: cmdReply,
     'get-ticket': cmdGetTicket,

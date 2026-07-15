@@ -100,6 +100,12 @@
         "label": "Mark Ready Enabled",
         "default": false,
         "description": "Enables the mark ready / ready for review verb, which marks the current branch's draft Bitbucket PR ready for review via the bb-bridge.mjs wrapper's mark-ready subcommand. This is a Bitbucket draft-to-ready write, always behind an explicit user confirmation gate before it runs. Off by default so first-run installs cannot flip a PR's state without opting in."
+      },
+      "toDraftEnabled": {
+        "type": "boolean",
+        "label": "To Draft Enabled",
+        "default": false,
+        "description": "Enables the to draft / back to draft verb, which flips the current branch's ready-for-review Bitbucket PR back to draft via the bb-bridge.mjs wrapper's to-draft subcommand. The exact reverse of mark ready and, like it, a Bitbucket write always behind an explicit user confirmation gate. Off by default so first-run installs cannot flip a PR's state without opting in."
       }
     }
   }
