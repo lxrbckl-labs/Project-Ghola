@@ -170,7 +170,7 @@ function formatTicket(branch: string): string {
  * `self-upgrade` when `tool.self-upgrade` is enabled (a Self Upgrade session is
  * its own non-ticket-scoped modality); else `unconstrained`.
  */
-function formatMode(enabled: ModuleHandle[]): string {
+export function formatMode(enabled: ModuleHandle[]): string {
   const modes = enabled
     .filter((h) => h.manifest.id.startsWith('mode.'))
     .map((h) => h.manifest.id.slice('mode.'.length));
@@ -187,7 +187,7 @@ function formatMode(enabled: ModuleHandle[]): string {
  * `unconstrained + war`. Non-war sessions are unaffected — `formatMode` itself
  * is untouched and the marker is gated on `warMode`.
  */
-function formatModeWithWar(enabled: ModuleHandle[], warMode: boolean): string {
+export function formatModeWithWar(enabled: ModuleHandle[], warMode: boolean): string {
   const base = formatMode(enabled);
   if (!warMode) return base;
   return base === 'unconstrained' ? 'war' : `${base} + war`;

@@ -18,6 +18,7 @@ import { BUILT_IN_CONFIGURATIONS, DEFAULT_ENABLED_IDS } from './settings-panel/b
 import { ConfigurationsStore } from './settings-panel/configurations-store';
 import { SettingsPanel } from './settings-panel/host';
 import { SET_CONTEXT_KEYS, WORKSPACE_STATE_KEYS } from './state/keys';
+import { ModeStatusBarItem, MODE_STATUS_BAR_CONFIG_SECTION } from './status-bar/mode-status-bar';
 
 /** Module id for the atlassian-suite integration. */
 const ATLASSIAN_MODULE_ID = 'integration.atlassian-suite';
@@ -164,6 +165,34 @@ export function activate(context: vscode.ExtensionContext): void {
   // locally to re-sync the widget context key.
   const moduleSettingsEmitter = new vscode.EventEmitter<void>();
   context.subscriptions.push(moduleSettingsEmitter);
+
+  // ───── Ghola mode / War Mode status-bar item ─────────────────────────
+  // A native status-bar indicator showing the current session modality and
+  // War-Mode flag (e.g. `Ghola: ticket-work + war`). War Mode is NOT a
+  // loader-toggleable module — its source of truth is the `mode.war::enabled`
+  // module-setting (an Agents configuration), exactly as the launcher/banner/
+  // composer read it — so we resolve it from the flattened MODULE_SETTINGS
+  // store rather than loader state, keeping the item's war flag in agreement.
+  const readWarMode = (): boolean => {
+    const flat = context.workspaceState.get<Record<string, unknown>>(
+      WORKSPACE_STATE_KEYS.MODULE_SETTINGS,
+      {},
+    );
+    return flat['mode.war::enabled'] === true;
+  };
+  const modeStatusBar = new ModeStatusBarItem(loader, readWarMode);
+  context.subscriptions.push(modeStatusBar);
+  // Refresh on: module enable/disable (loader), module-settings save (covers
+  // the mode.war::enabled War-Mode toggle), and the statusBar.enabled config
+  // toggle (show/hide). Initial paint below reflects the boot state.
+  context.subscriptions.push(loader.onDidChange(() => modeStatusBar.refresh()));
+  context.subscriptions.push(moduleSettingsEmitter.event(() => modeStatusBar.refresh()));
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration(MODE_STATUS_BAR_CONFIG_SECTION)) modeStatusBar.refresh();
+    }),
+  );
+  modeStatusBar.refresh();
 
   /**
    * Read a single Atlassian-module setting from the flattened

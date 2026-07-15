@@ -2,7 +2,7 @@
   "name": "ghola",
   "displayName": "Ghola",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.17.21",
+  "version": "0.17.22",
   "icon": "resources/icon-source.png",
   "publisher": "local",
   "engines": {
@@ -186,6 +186,11 @@
           "editPresentation": "multilineText",
           "description": "Instruction text copied to clipboard when the 'Copy install instructions' button is clicked on the LINQPad-not-installed banner in the Modules tab. Edit this to customize the instructions given to an AI assistant for walking a user through installing LINQPad and exporting their connection metadata so Ghola's Database Access module can populate its connection allowlist.",
           "default": "I need to install LINQPad on Windows and create at least one named connection so the Ghola VS Code extension can detect it.\n\nWalk me through:\n\n1. Where to download LINQPad for my Windows version (free edition is fine).\n2. How to install it without admin rights if my machine is locked down.\n3. After install, how to add a new connection — specifically a SQL Server connection. I need to enter:\n   - Server name (instance form: hostname or hostname\\instance)\n   - Authentication (Windows Integrated vs SQL Login)\n   - Database name (optional — a server-only connection is allowed)\n4. Where LINQPad stores the resulting connection metadata. Confirm it is at %APPDATA%\\LINQPad\\ConnectionsV2.xml and explain how to verify that file exists.\n5. If I am running VS Code under WSL, how to make sure the WSL side can read the Windows-side ConnectionsV2.xml (the default /mnt/c/Users/<me>/AppData/Roaming/LINQPad/ path).\n\nKeep the steps short and actionable. I will paste your reply into a notes app and follow it linearly."
+        },
+        "ghola.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Ghola mode / War Mode indicator in the VS Code status bar."
         }
       }
     },
