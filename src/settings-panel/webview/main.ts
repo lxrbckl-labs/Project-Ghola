@@ -319,6 +319,18 @@ interface UIState {
    * back to the payload's `subject`.
    */
   warRoomSelectedSubject: string | null;
+  /**
+   * When true, the War Room re-requests a fresh payload on a fixed interval
+   * (`warRoomAutoRefreshSeconds`) while the tab is on screen. Off by default —
+   * the operator opts in via the refresh-row toggle. Held in module state (not
+   * persisted), mirroring `warRoomSelectedSubject`.
+   */
+  warRoomAutoRefresh: boolean;
+  /**
+   * Auto-refresh cadence in seconds when `warRoomAutoRefresh` is on. Defaults to
+   * 30. Adjustable via the refresh-row rate picker.
+   */
+  warRoomAutoRefreshSeconds: number;
 }
 
 const state: UIState = {
@@ -366,7 +378,39 @@ const state: UIState = {
   gholaDetails: {},
   warRoomDirectiveDraft: '',
   warRoomSelectedSubject: null,
+  warRoomAutoRefresh: false,
+  warRoomAutoRefreshSeconds: 30,
 };
+
+/**
+ * Handle for the War Room auto-refresh interval. Held at module scope (not in
+ * the typed `state`) since it is a runtime timer, not serializable UI state.
+ * `null` when auto-refresh is off or the War Room tab is not active.
+ */
+let warRoomAutoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * (Re)apply the War Room auto-refresh timer to match current state. Always
+ * clears any existing timer first (so this is safe to call on every toggle,
+ * rate change, and tab transition), then starts a fresh interval ONLY when
+ * auto-refresh is on AND the War Room tab is active. Each tick posts a
+ * `requestWarRoom` unless the operator is drilled into a single-ghola detail,
+ * where a background list refresh would be wasted.
+ */
+function applyWarRoomAutoRefresh(): void {
+  if (warRoomAutoRefreshTimer !== null) {
+    clearInterval(warRoomAutoRefreshTimer);
+    warRoomAutoRefreshTimer = null;
+  }
+  if (state.warRoomAutoRefresh && state.activeSection === 'warroom') {
+    const ms = Math.max(5, state.warRoomAutoRefreshSeconds) * 1000;
+    warRoomAutoRefreshTimer = setInterval(() => {
+      if (state.activeSection === 'warroom' && !state.warRoomGhola) {
+        postRequestWarRoom();
+      }
+    }, ms);
+  }
+}
 
 const root = document.getElementById('app')!;
 
@@ -846,6 +890,9 @@ function setSection(id: SectionId): void {
     state.configManageOpen = false;
   }
   state.activeSection = id;
+  // Start the War Room auto-refresh timer on entry (if opted in) and stop it on
+  // leave — applyWarRoomAutoRefresh reads the now-updated activeSection.
+  applyWarRoomAutoRefresh();
   render();
 }
 
@@ -4478,6 +4525,67 @@ function renderWarRoomSubjectSwitcher(data: WarRoomData): HTMLElement | null {
   return wrap;
 }
 
+/**
+ * Refresh controls for the War Room, rendered as a single row at the top of the
+ * main view: a manual "Refresh" button, an "Auto-refresh" toggle, and a rate
+ * picker (default 30s). Manual refresh posts a `requestWarRoom` immediately; the
+ * toggle/rate drive `applyWarRoomAutoRefresh`. The rate picker is disabled while
+ * auto-refresh is off so the control reads as a single unit.
+ */
+function renderWarRoomRefreshRow(): HTMLElement {
+  const row = el('div', { class: 'warroom-refresh-row' });
+
+  const refreshBtn = el('button', {
+    class: 'warroom-refresh-btn',
+    title: 'Refresh the War Room now',
+  });
+  refreshBtn.textContent = 'Refresh';
+  refreshBtn.addEventListener('click', () => postRequestWarRoom());
+  row.appendChild(refreshBtn);
+
+  const autoWrap = el('label', { class: 'warroom-autorefresh' });
+  const check = el('input', {
+    type: 'checkbox',
+    class: 'warroom-autorefresh-check',
+  }) as HTMLInputElement;
+  check.checked = state.warRoomAutoRefresh;
+  check.addEventListener('change', () => {
+    state.warRoomAutoRefresh = check.checked;
+    applyWarRoomAutoRefresh();
+    render();
+  });
+  autoWrap.appendChild(check);
+  autoWrap.appendChild(textEl('span', 'Auto-refresh', 'warroom-autorefresh-label'));
+  row.appendChild(autoWrap);
+
+  const rate = el('select', {
+    class: 'warroom-autorefresh-rate',
+    'aria-label': 'Auto-refresh interval',
+  }) as HTMLSelectElement;
+  const rateOptions: Array<[number, string]> = [
+    [15, 'every 15s'],
+    [30, 'every 30s'],
+    [60, 'every 1m'],
+    [120, 'every 2m'],
+    [300, 'every 5m'],
+  ];
+  rateOptions.forEach(([secs, label]) => {
+    const opt = el('option') as HTMLOptionElement;
+    opt.value = String(secs);
+    opt.textContent = label;
+    rate.appendChild(opt);
+  });
+  rate.value = String(state.warRoomAutoRefreshSeconds);
+  rate.disabled = !state.warRoomAutoRefresh;
+  rate.addEventListener('change', () => {
+    state.warRoomAutoRefreshSeconds = Number(rate.value) || 30;
+    applyWarRoomAutoRefresh();
+  });
+  row.appendChild(rate);
+
+  return row;
+}
+
 function renderWarRoom(wrapper: HTMLElement): void {
   // Hero banner: pixel-art War Room image injected by the host as
   // `data-warroom-banner-uri` on the `#app` root (mirrors the Session page's
@@ -4511,6 +4619,11 @@ function renderWarRoom(wrapper: HTMLElement): void {
     renderWarRoomGholaDetail(wrapper, state.warRoomGhola);
     return;
   }
+
+  // Refresh controls (manual + auto) sit at the top of the main War Room view,
+  // above both the loading state and the loaded dashboard, so they are always
+  // reachable regardless of ledger state.
+  wrapper.appendChild(renderWarRoomRefreshRow());
 
   if (!state.warRoomData) {
     // Ask the host for a fresh payload exactly once per empty-data window —
