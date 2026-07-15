@@ -10,6 +10,48 @@ const STATUS_BAR_CONFIG_SECTION = 'ghola.statusBar';
 const STATUS_BAR_ENABLED_KEY = 'ghola.statusBar.enabled';
 
 /**
+ * Friendly display names for each raw mode token produced by
+ * `formatModeWithWar`. Status-bar-only cosmetics: the banner/boot trace keep the
+ * lowercase-hyphenated tokens, so this map lives here rather than in `banner.ts`.
+ */
+const MODE_DISPLAY_NAMES: Record<string, string> = {
+  'ticket-work': 'Ticket Work',
+  support: 'Support',
+  cd: 'Project',
+  'self-upgrade': 'Self Upgrade',
+  sardaukar: 'Sardaukar',
+  unconstrained: 'Unconstrained',
+  war: 'War',
+};
+
+/**
+ * Title-case an unknown hyphenated token defensively (e.g. a future mode):
+ * `foo-bar` -> `Foo Bar`. Keeps the status bar from ever showing a raw
+ * lowercase-hyphenated token.
+ */
+function titleCaseToken(token: string): string {
+  return token
+    .split('-')
+    .map((word) => (word.length === 0 ? word : word[0].toUpperCase() + word.slice(1)))
+    .join(' ');
+}
+
+/**
+ * Map a raw `formatModeWithWar` string to a capitalized, human-friendly form for
+ * the status bar ONLY. Splits on ` + ` so a trailing ` + war` marker is mapped
+ * independently, maps each token via `MODE_DISPLAY_NAMES` (falling back to
+ * `titleCaseToken` for unknown tokens), then rejoins with ` + `. Examples:
+ * `ticket-work` -> `Ticket Work`, `ticket-work + war` -> `Ticket Work + War`,
+ * `cd` -> `Project`, `foo-bar` -> `Foo Bar`.
+ */
+function prettyMode(raw: string): string {
+  return raw
+    .split(' + ')
+    .map((token) => MODE_DISPLAY_NAMES[token] ?? titleCaseToken(token))
+    .join(' + ');
+}
+
+/**
  * A native VS Code status-bar item showing the current Ghola session modality
  * (mode) and whether War Mode is active — e.g. `Ghola: ticket-work + war`. It
  * reuses the banner's `formatModeWithWar` so the label matches the launch
@@ -61,7 +103,7 @@ export class ModeStatusBarItem implements vscode.Disposable {
     // War Mode gets a distinct flame icon so it stands out at a glance; other
     // sessions use the org icon. The `+ war` suffix is already in `modeLabel`.
     const icon = warMode ? '$(flame)' : '$(organization)';
-    this.item.text = `${icon} Ghola: ${modeLabel}`;
+    this.item.text = `${icon} Ghola: ${prettyMode(modeLabel)}`;
     this.item.tooltip = `Ghola mode: ${formatMode(enabledModules)}. War Mode: ${
       warMode ? 'on' : 'off'
     }. Click to open Ghola settings.`;
