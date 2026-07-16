@@ -1,0 +1,31 @@
+{
+  "id": "tool.auto-provision",
+  "name": "Auto Provision",
+  "version": "0.1.0",
+  "description": "Lets agents install a missing CLI tool or package needed to complete the task via the platform's package manager, instead of silently working around its absence. Additive-only, check-first, task-scoped, and configurable between autonomous, propose, and allowlist postures.",
+  "proactive": false,
+  "category": "utility",
+  "kind": "capability",
+  "trigger": "always-applied",
+  "tier": "optional",
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "auto-provision.md" }
+    ],
+    "settings": {
+      "autonomy": {
+        "type": "enum",
+        "label": "Autonomy",
+        "default": "autonomous",
+        "options": ["autonomous", "propose", "allowlist"],
+        "description": "Posture for installing a missing tool. autonomous (default): when a task is blocked by a missing tool the agent installs it and continues, then reports what and why. propose: the agent names the tool and the exact install command and waits for approval before running it. allowlist: tools named in the Allowlist setting install freely (autonomous), and anything not listed falls back to propose. The harness's own permission prompt on the install command is always the real execution gate regardless of this setting."
+      },
+      "allowlist": {
+        "type": "string",
+        "label": "Allowlist",
+        "default": "",
+        "description": "Comma-separated list of tool/package names (e.g. jq, ripgrep, shellcheck) that may be installed freely. Authoritative ONLY when Autonomy is allowlist: per the preamble's parameter-allowlist rule, the listed tools are the only ones installable without a proposal, and any tool not present here falls back to the propose posture. Ignored when Autonomy is autonomous or propose."
+      }
+    }
+  }
+}

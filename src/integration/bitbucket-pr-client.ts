@@ -309,11 +309,16 @@ export class BitbucketPrClient {
   }
 
   /**
-   * `PUT /2.0/repositories/{workspace}/{repo_slug}/pullrequests/{pr_id}/comments/{comment_id}/resolve`.
+   * `POST /2.0/repositories/{workspace}/{repo_slug}/pullrequests/{pr_id}/comments/{comment_id}/resolve`.
    *
-   * Marks the comment thread resolved. Bitbucket returns the updated comment
-   * shape on success; we only surface the status to the caller because the
-   * agent-side flow does not need the post-resolve body.
+   * Marks the comment thread resolved. Bitbucket Cloud resolves a comment
+   * thread with `POST` to the `/resolve` endpoint (and reopens/unresolves it
+   * with `DELETE` to the same endpoint — not implemented here). Bitbucket
+   * returns the updated comment shape on success; we only surface the status to
+   * the caller because the agent-side flow does not need the post-resolve body.
+   * The write requires the token to carry PR write permission
+   * (`write:pullrequest:bitbucket`, or an App Password with "Pull requests:
+   * Write") — a 403 here means that scope is missing.
    */
   async resolveComment(args: {
     repoSlug: string;
@@ -336,7 +341,7 @@ export class BitbucketPrClient {
       `/${encodeURIComponent(args.repoSlug)}/pullrequests/${encodeURIComponent(String(args.prId))}` +
       `/comments/${encodeURIComponent(String(args.commentId))}/resolve`;
 
-    const res = await this.request(url, 'PUT', auth);
+    const res = await this.request(url, 'POST', auth);
     if (!res.ok) return { status: res.status, message: res.message };
     return { status: 'ok' };
   }
@@ -591,7 +596,7 @@ export class BitbucketPrClient {
         };
       }
 
-      // 2xx: parse body as JSON. Empty bodies become `undefined`. A PUT
+      // 2xx: parse body as JSON. Empty bodies become `undefined`. A POST
       // /resolve response may be empty in some Bitbucket configurations —
       // callers tolerate `undefined` because the discriminator alone tells
       // them the operation succeeded.

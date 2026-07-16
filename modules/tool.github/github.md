@@ -59,18 +59,44 @@ If the object is empty, no repositories are protected by this module - but you s
 
 gh operations require the user to have authenticated gh beforehand. `gh auth login` is interactive and is NOT in the allowlist; the agent never runs it. The user can trigger `gh auth login` themselves via the "Login to GitHub" button in the `tool.github` module panel, which opens a terminal running the command — this is a HOST/user action, not something the agent performs. The agent may check authentication state with `gh auth status` when that command is enabled. If a gh command fails because gh is not authenticated (or the token lacks scope), surface the failure to the user (TPM) rather than attempting to authenticate or work around it.
 
+## PR creation conventions
+
+Before running `gh pr create`, learn the target repo's conventions and reproduce them - do not invent a bare PR. `gh pr create` in an agent context runs non-interactively: it will not prompt you with the repo's template the way an interactive terminal would, so the reviewer set and the description scaffold must be discovered explicitly and passed on the command line. Everything below is derived from the target repo at PR-creation time - no reviewer names, project names, or team assumptions are hardcoded, and none of this adds a new setting.
+
+Every gh command used for discovery or assignment is still subject to the allowlist above - use only commands present in `parameters.allowedCommands`. `gh pr list` and `gh pr view` are `r`-category and enabled under the default allowlist. If a command you need (e.g. `gh pr edit`) is not enabled, follow the refusal / surface-to-TPM discipline in "Applying the policy" rather than working around it.
+
+### Reviewers - infer from a recent PR
+
+Do not hardcode a reviewer list. Inspect recent PRs in the SAME repository to learn the usual reviewer set - the same repo is the right signal because it reflects that project's tier and review conventions automatically:
+
+1. Find recent PRs, e.g. `gh pr list --state all --limit <n>`.
+2. Inspect one or more with `gh pr view <number> --json reviewRequests,latestReviews,author,assignees` to see who was requested and who actually reviewed.
+3. Prefer the requested reviewers recorded on a recent PR; if none are recorded, fall back to the accounts that actually reviewed or approved recent PRs.
+
+Apply the inferred reviewers at creation via `--reviewer <user>` (repeatable). If create-time assignment is unavailable, run `gh pr edit --add-reviewer` immediately after creating the PR - subject, as always, to that command being enabled.
+
+### Description - template wins, recent PR body as fallback
+
+Source the PR body from the repo's checked-in template FIRST; never pass a bare hand-written `--body` that discards it:
+
+1. Look for a checked-in template: `.github/PULL_REQUEST_TEMPLATE.md`, `.github/pull_request_template.md`, `docs/PULL_REQUEST_TEMPLATE.md`, or any file under a `.github/PULL_REQUEST_TEMPLATE/` directory. If one exists, use its structure as the scaffold.
+2. If no checked-in template exists, fall back to the body of a recent PR in the same repo (`gh pr view <number> --json body`) to recover the structure the team actually uses.
+3. Fill the scaffold in with the real change's content and pass it via `--body` or `--body-file`. Do NOT delete or flatten the template's headings and checklists. Populate the sections that apply; leave checklist items and placeholders intact where they don't apply rather than stripping the section - fill it the way a human filling the template would.
+
+The failure mode to forbid explicitly: passing a bare `--body` that wipes the repo's template structure. If neither a checked-in template nor a prior PR body is discoverable, say so to TPM and proceed with a clearly-structured body rather than a bare one.
+
 ## Role-Specific Notes
 
 The body above applies identically to every agent. The notes below are short framings for how each role uses the policy.
 
 ### TPM
 
-You are the policy-bearer: you read `allowedCommands` and decide what to assign. Keys present in the object are commands the user has enabled; absent keys are refused. When delegating to a SWE, name the specific gh commands they are permitted to run for the task - don't pass through the full allowlist; cite only the relevant subset ("SWE-1 may run `gh pr create` and `gh pr comment`; nothing else is enabled this session"). Surface refusals back to the user so they can decide whether to enable more commands or pivot the plan.
+You are the policy-bearer: you read `allowedCommands` and decide what to assign. Keys present in the object are commands the user has enabled; absent keys are refused. When delegating to a SWE, name the specific gh commands they are permitted to run for the task - don't pass through the full allowlist; cite only the relevant subset ("SWE-1 may run `gh pr create` and `gh pr comment`; nothing else is enabled this session"). When the task creates a PR, remind SWE to follow the PR creation conventions above - infer reviewers from a recent PR in the same repo and preserve the repo's description template rather than passing a bare body. Surface refusals back to the user so they can decide whether to enable more commands or pivot the plan.
 
 ### SWE
 
-You are the one who actually runs the commands, so the per-command check is yours to do - check each command at the moment you're about to run it, not in a batch up front. Restate which gh commands you used in your return so TPM has a clean audit trail. If you discover mid-task that the right action requires a command not in `allowedCommands`, stop and report to TPM rather than escalating silently, substituting a near-neighbor command, or reaching for `gh api` / `curl` to dodge the check.
+You are the one who actually runs the commands, so the per-command check is yours to do - check each command at the moment you're about to run it, not in a batch up front. You are also the role that actually runs `gh pr create`, so before creating a PR you must run the reviewer-inference and template-discovery steps in "PR creation conventions" above - never fire off a bare PR. Report in your return which reviewers you inferred (and the PR number you inferred them from) and which template source you used (checked-in template path, or the prior PR whose body you reused). Restate which gh commands you used in your return so TPM has a clean audit trail. If you discover mid-task that the right action requires a command not in `allowedCommands`, stop and report to TPM rather than escalating silently, substituting a near-neighbor command, or reaching for `gh api` / `curl` to dodge the check.
 
 ### QA
 
-The `r`-category commands are your everyday workhorse - `gh pr view`, `gh pr diff`, `gh pr checks`, `gh run view`, `gh issue view` are how you inspect the state of a change under review - so under the default allowlist you are already equipped to verify GitHub-side state. `w`- and `d`-category commands are essentially never needed for verification - if an assignment somehow requires one, flag it to TPM rather than improvise. If the `r`-category reads are absent from `allowedCommands`, say so to TPM immediately; the default allowlist is specifically chosen so QA has its reads out of the box, and absent reads is almost certainly a misconfiguration.
+The `r`-category commands are your everyday workhorse - `gh pr view`, `gh pr diff`, `gh pr checks`, `gh run view`, `gh issue view` are how you inspect the state of a change under review - so under the default allowlist you are already equipped to verify GitHub-side state. `w`- and `d`-category commands are essentially never needed for verification - if an assignment somehow requires one, flag it to TPM rather than improvise. When verifying a freshly created PR, confirm it used the repo's description template and requested the expected reviewers, since those are the conventions SWE is required to follow above. If the `r`-category reads are absent from `allowedCommands`, say so to TPM immediately; the default allowlist is specifically chosen so QA has its reads out of the box, and absent reads is almost certainly a misconfiguration.

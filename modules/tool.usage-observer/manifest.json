@@ -1,0 +1,30 @@
+{
+  "id": "tool.usage-observer",
+  "name": "Claude Usage Observer",
+  "version": "0.1.0",
+  "description": "On request, estimates which Claude subscription plan you are likely on by comparing your session token usage to the 5-hour rolling-window percentage shown in the Ghola status line. Speaks only when asked.",
+  "proactive": false,
+  "category": "utility",
+  "kind": "capability",
+  "trigger": "user-request",
+  "tier": "optional",
+  "contributes": {
+    "promptFragments": [
+      { "target": "tpm", "contentPath": "usage-observer.md" }
+    ],
+    "settings": {
+      "planBands": {
+        "type": "keyValue",
+        "optionalValue": true,
+        "label": "Plan Bands (approx 5h token quota)",
+        "fullWidth": true,
+        "description": "Maps a Claude plan name to an ESTIMATED 5-hour rolling-window token quota, used to name the closest plan during estimation. Anthropic does not publish per-plan token limits, so these are best-effort anchors — the RELIABLE structure is the multiplier: Max 5x is 5x Pro, Max 20x is 20x Pro. Tune these once you know your real plan, or tell TPM your plan to calibrate.",
+        "default": {
+          "Pro": "1000000",
+          "Max 5x": "5000000",
+          "Max 20x": "20000000"
+        }
+      }
+    }
+  }
+}

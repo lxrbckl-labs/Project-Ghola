@@ -39,6 +39,7 @@ const BASELINE_IDS: string[] = [
   'tool.time',
   'tool.ghola-ledger',
   'tool.operator-profile',
+  'tool.usage-observer',
 ];
 
 /**

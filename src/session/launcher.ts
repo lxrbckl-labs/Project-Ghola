@@ -260,6 +260,22 @@ export class SessionLauncher {
     });
 
     terminal.show(true);
+    // Auto-pin genuine Ghola Sessions. This works ONLY because the terminal is
+    // created with `location: { viewColumn: ViewColumn.Active }` above, which
+    // makes it an editor-area terminal (a real, pinnable editor tab) rather than
+    // a panel terminal; after `show(true)` it is the active editor, so
+    // `workbench.action.pinEditor` pins exactly this tab. COUPLING: if the
+    // terminal `location` is ever moved to the panel, it stops being an editor
+    // tab and this pin call silently no-ops. Kept immediately after `show(true)`
+    // with no intervening awaits so nothing steals focus before we pin. Gated on
+    // `!oneShot` so the transient one-shot 'Ghola Commit' terminal is never
+    // pinned — only genuine sessions are. Fire-and-forget (`void` + swallowed
+    // rejection, matching updateExtension.ts): pinning is non-critical cosmetics,
+    // so a command failure must never abort `launch()` and leave the session
+    // terminal open but never started.
+    if (!oneShot) {
+      void vscode.commands.executeCommand('workbench.action.pinEditor').then(undefined, () => {});
+    }
     // Print the banner via the shell so it shows in the terminal buffer.
     this.printBanner(terminal, banner);
 

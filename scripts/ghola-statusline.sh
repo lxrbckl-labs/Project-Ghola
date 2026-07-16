@@ -45,6 +45,13 @@ tokens_str = ""
 pct = ""
 five_hour_pct = ""
 
+# Raw numeric values (or None) mirrored into the usage-state file below so the
+# tool.usage-observer module can read them; the display strings above are for
+# the status line itself.
+raw_tokens = None
+raw_ctx = None
+raw_fh = None
+
 def fmt_tokens(n):
     if n < 1000:
         return str(n)
@@ -65,11 +72,13 @@ if raw.strip():
                 total = int(ti) + int(to)
                 if total >= 0:
                     tokens_str = fmt_tokens(total)
+                    raw_tokens = total
             if isinstance(up, (int, float)):
                 p_int = int(round(up))
                 if p_int < 0:
                     p_int = 0
                 pct = str(p_int)
+                raw_ctx = p_int
     except Exception:
         pass
     try:
@@ -84,8 +93,33 @@ if raw.strip():
                     if fh_int < 0:
                         fh_int = 0
                     five_hour_pct = str(fh_int)
+                    raw_fh = fh_int
     except Exception:
         pass
+
+# Best-effort snapshot for tool.usage-observer. GLOBAL location (~/.ghola/),
+# never the work repo. Atomic write (temp + replace). Only written when there is
+# an actual usage signal, so an empty payload never clobbers a good snapshot.
+# Wrapped so a filesystem fault can never break the status line.
+try:
+    if raw_tokens is not None or raw_fh is not None:
+        import time
+        state_dir = os.path.expanduser("~/.ghola")
+        os.makedirs(state_dir, exist_ok=True)
+        state_path = os.path.join(state_dir, "usage-state.json")
+        obj = {"updated": int(time.time())}
+        if raw_tokens is not None:
+            obj["session_tokens"] = raw_tokens
+        if raw_ctx is not None:
+            obj["context_pct"] = raw_ctx
+        if raw_fh is not None:
+            obj["five_hour_pct"] = raw_fh
+        tmp_path = state_path + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(obj, f)
+        os.replace(tmp_path, state_path)
+except Exception:
+    pass
 
 sys.stdout.write(f"{tokens_str}|{pct}|{five_hour_pct}")
 PY
