@@ -155,7 +155,12 @@ fi
 # (main is ./dist/extension.js; vsce nests everything under extension/).
 # Skipped with a warning when `unzip` is unavailable.
 if command -v unzip >/dev/null 2>&1; then
-  if ! unzip -l "$VSIX_NAME" | grep -q "extension/dist/extension.js"; then
+  # Capture the full listing first, then grep the variable. Piping `unzip -l`
+  # straight into `grep -q` lets grep exit on the first match and SIGPIPE the
+  # still-writing unzip (exit 141), which under `pipefail` makes the pipeline
+  # fail and falsely trips the "missing" branch once the listing is long.
+  VSIX_LISTING="$(unzip -l "$VSIX_NAME")"
+  if ! printf '%s\n' "$VSIX_LISTING" | grep -q "extension/dist/extension.js"; then
     echo "[ext] ERROR: $VSIX_NAME is missing extension/dist/extension.js (bad build?)" >&2
     exit 1
   fi
