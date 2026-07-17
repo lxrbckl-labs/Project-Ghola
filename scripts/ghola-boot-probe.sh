@@ -147,6 +147,37 @@ elif [ -n "$key" ]; then
   ticket_state="unavailable"
 fi
 
+# 7b. related PR via the bridge (best-effort, TIGHT timeout — boot never drags)
+# Mirrors the ticket gate: a non-ticket mode (support, cd, self-upgrade) owns its
+# own work surface, so it is a clean skip (pr_state=skipped, no bridge call). For
+# a ticket-scoped session with a resolvable branch + repo, resolve the PR via the
+# SAME bb-bridge path the ticket pull uses. The call is wrapped in `timeout 3` so
+# a slow/unreachable bridge cannot stall boot; ANY failure (timeout, non-zero
+# exit, empty/garbage output, missing slug) degrades to pr_state=na and the probe
+# continues — matching its never-fail discipline. The find-pr JSON keys consumed
+# are `status`, `prState`, `prId`, `prTitle`, `prUrl`, `prAuthor` (parsed with the
+# same `node -e` tool the ticket pull uses).
+pr_state="na"; pr_id=""; pr_title=""; pr_url=""; pr_author=""
+if [ "$non_ticket_mode" = "yes" ]; then
+  pr_state="skipped"
+elif [ -n "$branch" ] && [ -n "$repo" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_ROOT/scripts/bb-bridge.mjs" ]; then
+  # Repo slug = origin's last path segment with any `.git` suffix stripped
+  # (handles both git@host:workspace/repo.git and https://.../workspace/repo.git).
+  pr_slug="$(git -C "$repo" remote get-url origin 2>/dev/null | sed -E 's#\.git$##; s#.*[/:]##')"
+  if [ -n "$pr_slug" ]; then
+    pj="$(timeout 3 node "$GHOLA_ROOT/scripts/bb-bridge.mjs" find-pr --repo "$pr_slug" --branch "$branch" 2>/dev/null)"
+    if [ -n "$pj" ]; then
+      parsedpr="$(printf '%s' "$pj" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);let st="na",id="",ti="",ur="",au="";if(j&&j.status==="ok"){st=j.prState||"OPEN";id=(j.prId!=null?String(j.prId):"");ti=j.prTitle||"";ur=j.prUrl||"";au=j.prAuthor||""}else if(j&&j.status==="not-found"){st="none"}process.stdout.write(st+"\t"+id+"\t"+ti+"\t"+ur+"\t"+au)}catch(e){process.stdout.write("na\t\t\t\t")}})' 2>/dev/null)"
+      if [ -n "$parsedpr" ]; then
+        pr_state="${parsedpr%%$'\t'*}"; r="${parsedpr#*$'\t'}"
+        pr_id="${r%%$'\t'*}"; r="${r#*$'\t'}"
+        pr_title="${r%%$'\t'*}"; r="${r#*$'\t'}"
+        pr_url="${r%%$'\t'*}"; pr_author="${r#*$'\t'}"
+      fi
+    fi
+  fi
+fi
+
 # 8. vault + notes (READ-ONLY: probe never creates the notes file)
 vault="${GHOLA_VAULT:-}"
 if [ -z "$vault" ]; then
@@ -185,6 +216,11 @@ emit ticket_key "${key:-none}"
 emit ticket_state "$ticket_state"
 [ -n "$ticket_status" ] && emit ticket_status "$ticket_status"
 [ -n "$ticket_summary" ] && emit ticket_summary "$ticket_summary"
+emit pr_state "$pr_state"
+[ -n "$pr_id" ] && emit pr_id "$pr_id"
+[ -n "$pr_title" ] && emit pr_title "$pr_title"
+[ -n "$pr_url" ] && emit pr_url "$pr_url"
+[ -n "$pr_author" ] && emit pr_author "$pr_author"
 emit vault "${vault:-none}"
 emit notes_file "${notes_file:-none}"
 emit notes_exists "$notes_exists"

@@ -142,6 +142,19 @@ export interface PrLookupResult {
    *  on a request failure. Lets a caller say "found a MERGED PR #123" distinctly
    *  from "no PR at all". */
   prState?: BitbucketPrState;
+  /** The PR author's Bitbucket `nickname` — the username-like handle best for
+   *  case-insensitive matching against a configured Bitbucket username. Chosen
+   *  over `account_id` / `uuid` (opaque, not user-recognizable) and over
+   *  `display_name` (a free-form name, not a stable login) because `nickname` is
+   *  the closest thing Bitbucket Cloud still exposes to the old `username` the
+   *  GDPR-era API dropped. Present on a found PR (OPEN or the closed fallback)
+   *  when the API returned an author handle; absent on the genuine no-PR case,
+   *  on a request failure, and when the API omitted the field. */
+  prAuthor?: string;
+  /** The PR author's human-readable `display_name`, for surfacing in UI/log
+   *  text. NOT used for matching (it is not a stable handle). Same presence
+   *  rules as `prAuthor`. */
+  prAuthorDisplay?: string;
   /** Present ONLY on a real request failure (auth / ratelimit / network / other
    *  non-2xx, including a 404 that means the workspace / repo slug is wrong). A
    *  genuine "no PR for the branch" stays `{ prUrl: null }` with no failure. */
@@ -171,12 +184,17 @@ interface JiraIssueResponse {
 }
 
 /** Minimal slice of the Bitbucket pull-request search response. `state` and
- *  `updated_on` back the state fallback and the deterministic multi-PR pick. */
+ *  `updated_on` back the state fallback and the deterministic multi-PR pick;
+ *  `author` backs the author-vs-reviewer determination a boot-time step makes.
+ *  Bitbucket's account object exposes `nickname` (the username-like handle a
+ *  user picks — the closest thing to a login now that the GDPR-era API dropped
+ *  the old `username` field) and `display_name` (their human-readable name). */
 interface BitbucketPullRequest {
   id?: number;
   title?: string;
   state?: string;
   updated_on?: string;
+  author?: { nickname?: string; display_name?: string };
   links?: { html?: { href?: string } };
 }
 interface BitbucketPullRequestListResponse {
@@ -463,6 +481,11 @@ export class AtlassianClient {
       prTitle: typeof pr.title === 'string' ? pr.title : undefined,
       prId: typeof pr.id === 'number' ? pr.id : undefined,
       prState: state,
+      // Author handle for the author-vs-reviewer boot check. `nickname` is the
+      // matchable username-like handle; `display_name` is the human label.
+      prAuthor: typeof pr.author?.nickname === 'string' ? pr.author.nickname : undefined,
+      prAuthorDisplay:
+        typeof pr.author?.display_name === 'string' ? pr.author.display_name : undefined,
     };
   }
 

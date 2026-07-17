@@ -1,6 +1,6 @@
 # Operator Profile
 
-When this module is loaded, TPM has two pieces of operator personalization: the operator's **name** (`parameters.userName`) and an optional **persona** (`parameters.persona`), a voice/tone overlay for TPM's user-facing communication. This fragment is targeted at **TPM only** — SWE and QA never read it. The personalization applies to how TPM greets and talks to the operator; it never changes what TPM does, what it is allowed to do, or how it briefs its subagents.
+When this module is loaded, TPM has operator personalization (the operator's **name** via `parameters.userName` and an optional **persona** via `parameters.persona`, a voice/tone overlay for TPM's user-facing communication) and operator **identity handles** (`parameters.bitbucketUsername`, `parameters.gitEmail`, `parameters.jiraAccountId`) used for identity-based review detection. This fragment is targeted at **TPM only** — SWE and QA never read it. The personalization applies to how TPM greets and talks to the operator; it never changes what TPM does, what it is allowed to do, or how it briefs its subagents.
 
 This module is **proactive**: TPM reads it once, at session start, so the personalization is in effect for the very first greeting (composed by `tool.session-bootstrap`'s `ready` step) and for the rest of the session.
 
@@ -33,6 +33,18 @@ Rules for the dial:
 - **It governs BOTH the operator-profile persona AND any persona overlay other modules contribute.** For example, `integration.bitbucket-pr-comments`'s `coderabbitReplyPersona` (the voice used when replying to CodeRabbit PR comments) respects this same dial at the same rubric — a low intensity means the reply carries only a whisper of that persona, a high intensity means it comes through full-on.
 - **Still fully subordinate to the floor.** Intensity changes only HOW strongly the persona colors the **voice** — never **what** TPM does, **what it is allowed** to do, or the **safety floor**. A high intensity is not a license to cross any hard rule, relax the floor, or expand permissions; it only turns up the flavor of the words. Everything in the CRITICAL precedence section below applies unchanged at every intensity.
 - **Default when absent.** If this module is not loaded, or `personaIntensity` is unset in the Session Manifest, treat it as the **default of 5 (moderate)**.
+
+## Identity Handles (review-mode detection)
+
+Alongside name and persona, this module carries three **identity handle** settings. Unlike `userName` and `persona`, these are not about voice — they let a boot step distinguish **authoring** a session's work from **reviewing** someone else's, by comparing the operator's own handles against the PR/branch under inspection.
+
+- **Bitbucket Username** (`parameters.bitbucketUsername`) — the operator's Bitbucket account username/nickname (the handle, not the display name). **PRIMARY, wired now.** At boot, the consuming step compares the open PR's author against this handle: if they match, the session is in **author mode**; if they don't, the session is in **review mode** — the operator is looking at someone else's work rather than their own. **Empty** disables identity-based review detection entirely for that step, which then falls back to the git-author heuristic below.
+- **Git Email** (`parameters.gitEmail`) — the operator's git commit email. Used to refine the **fallback** author/review heuristic when `bitbucketUsername` is empty or unavailable: the fallback compares this email (or, if empty, whatever `git config user.email` reports) against the branch's commit authors to guess author-vs-review. Optional.
+- **Jira Account / Username** (`parameters.jiraAccountId`) — the operator's Jira account identifier. **Reserved, not yet wired** — a future identity-based review-detection path may compare this against a ticket's assignee/reporter to corroborate author-vs-review, but no consumer reads it yet. Optional.
+
+All three are **non-secret identifiers** — handles and usernames a person's teammates can already see on a PR or commit, not credentials. They are plain settings, not SecretStorage-backed secrets: never treat them as tokens, never warn about echoing them, and never route them through a secrets wrapper.
+
+Like `userName`, **never invent or infer these values.** Use only what is configured in `parameters.bitbucketUsername`, `parameters.gitEmail`, and `parameters.jiraAccountId`. An empty field means that identity signal is unavailable for this session — fall back per the rules above rather than guessing a handle from context.
 
 ## CRITICAL precedence — the persona is subordinate to the floor
 

@@ -238,7 +238,11 @@ async function cmdFindPr(flags) {
   // so a found-but-closed PR (status 'ok' + prState !== 'OPEN', e.g. a merged PR
   // still carrying CodeRabbit comments) is distinct from a genuine "no PR at
   // all" (status 'not-found'). A workspace-misconfiguration lookup surfaces its
-  // own status/message rather than a bare not-found.
+  // own status/message rather than a bare not-found. A found PR also carries
+  // `prAuthor` (the author's Bitbucket nickname handle, for case-insensitive
+  // matching against the configured Bitbucket username) and `prAuthorDisplay`
+  // (their display name), so a boot-time step can tell author mode from review
+  // mode; both flow through untouched via the bridge's `...lookup` spread.
   await postToBridge('/find-pr', { repoSlug, branch });
 }
 

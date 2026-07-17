@@ -33,22 +33,31 @@ At session start — before TPM responds to the user's first request — TPM ins
 
 ### Review trigger
 
-When `parameters.autoKickReviewOnColleagueBranch` is true, TPM runs the following read-only commands at session start:
+When `parameters.autoKickReviewOnColleagueBranch` is true, TPM decides review-vs-author at session start. The **PRIMARY signal is IDENTITY** — who owns the PR — not the git commit authors on the branch.
 
-```
-git log <base>..HEAD --format='%ae'   # authors of branch commits
-git config user.email                  # current user
-```
+**Why identity is primary.** The old git-commit-author heuristic (`git log <base>..HEAD --format='%ae'` vs the current user) false-positives "review" as soon as a `dev` (or `main`) merge brings other authors' commits onto your own branch: those merged commits look like "someone else's work" even though the branch is yours. Comparing the PR's author to the operator's own Bitbucket handle is immune to that — a merge changes the commit set but never the PR author. This directly fixes the merged-`dev` false-positive.
 
-It then applies this decision table:
+**Precedence:**
 
-- **No commits ahead of base** — trigger does not fire (the planning trigger may pick this up instead).
-- **All commits by current user** — author mode; trigger does not fire.
-- **All commits by someone else** — fire: announce `Detected a review session — N commits by <author> on \`<branch>\`. Deploying lens-driven review.` and immediately dispatch the security/logic/quality lens trio per the Review Mode section below.
-- **Mixed authors** — behavior per `parameters.mixedAuthorBehavior`:
-  - `ask` — prompt the user to confirm whether this is a review session or their own work, then act on the answer.
-  - `skip` — silently treat the branch as author-mode and do not kick Review Mode.
-  - `kick` — treat any colleague commit as a review trigger and kick immediately.
+1. **PRIMARY — PR author vs operator handle.** When a PR for the branch was resolved (its `prAuthor` is available — e.g. from the session-bootstrap `related-pr` probe field, or a direct `find-pr` lookup) AND `tool.operator-profile` is loaded with a non-empty `bitbucketUsername`, compare `prAuthor` against `bitbucketUsername` **case-insensitively, after trimming whitespace**:
+   - **Not equal** — this is a review session (you are reviewing someone else's PR). Fire: announce `Detected a review session — PR #<id> authored by <prAuthor> on \`<branch>\`. Deploying lens-driven review.` and immediately dispatch the security/logic/quality lens trio per the Review Mode section below.
+   - **Equal** — author mode; the trigger does not fire (it is your own PR, regardless of whose commits a merge dragged in).
+2. **FALLBACK — git commit authors.** Only when no PR/handle is available (no PR resolved, or `tool.operator-profile` / `bitbucketUsername` absent or empty) does TPM fall back to the git-commit-author check, running the read-only commands:
+
+   ```
+   git log <base>..HEAD --format='%ae'   # authors of branch commits
+   git config user.email                  # current user
+   ```
+
+   and applying this decision table:
+
+   - **No commits ahead of base** — trigger does not fire (the planning trigger may pick this up instead).
+   - **All commits by current user** — author mode; trigger does not fire.
+   - **All commits by someone else** — fire: announce `Detected a review session — N commits by <author> on \`<branch>\`. Deploying lens-driven review.` and immediately dispatch the security/logic/quality lens trio per the Review Mode section below.
+   - **Mixed authors** — behavior per `parameters.mixedAuthorBehavior` (this governs the fallback path only; when the identity signal is available it decides on its own):
+     - `ask` — prompt the user to confirm whether this is a review session or their own work, then act on the answer.
+     - `skip` — silently treat the branch as author-mode and do not kick Review Mode.
+     - `kick` — treat any colleague commit as a review trigger and kick immediately.
 
 ### Planning trigger
 
