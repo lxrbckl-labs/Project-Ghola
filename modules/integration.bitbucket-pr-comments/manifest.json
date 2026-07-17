@@ -19,8 +19,8 @@
         "type": "string",
         "label": "Reply Instruction",
         "multiline": true,
-        "default": "Write a 1-2 sentence professional PR reply confirming what was fixed and where. No double-dashes.",
-        "description": "Instruction used to generate PR replies after SWEs fix the underlying code."
+        "default": "Write a 1-2 sentence professional PR reply explaining why we are declining the requested change (the finding is incorrect, out of scope, or intentionally not being made). No double-dashes.",
+        "description": "Instruction used to compose the reply we post when we are pushing back on a comment rather than making the requested change. Protest replies are the only replies we send: an accepted finding is fixed, pushed, and left for CodeRabbit to auto-resolve without a reply."
       },
       "coderabbitReplyPersona": {
         "type": "string",
@@ -114,6 +114,12 @@
         "label": "To Draft Enabled",
         "default": false,
         "description": "Enables the to draft / back to draft verb, which flips the current branch's ready-for-review Bitbucket PR back to draft via the bb-bridge.mjs wrapper's to-draft subcommand. The exact reverse of mark ready and, like it, a Bitbucket write always behind an explicit user confirmation gate. Off by default so first-run installs cannot flip a PR's state without opting in."
+      },
+      "deleteCommentEnabled": {
+        "type": "boolean",
+        "label": "Delete Comment Enabled",
+        "default": false,
+        "description": "Enables the delete verb, which deletes PR comment(s) via the bb-bridge.mjs wrapper's delete-comment subcommand — either specific comments by ordinal/id or, via delete resolved, every resolved comment on the PR. Deletion is DESTRUCTIVE and IRREVERSIBLE on Bitbucket (there is no undo), so it is always behind an explicit user confirmation gate. Its primary use is freeing room under Bitbucket's 200-comment-per-PR cap by clearing resolved comments. Off by default so first-run installs cannot delete comments without opting in."
       }
     }
   }

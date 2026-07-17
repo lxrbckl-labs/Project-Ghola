@@ -14,7 +14,7 @@ const COMMIT_MESSAGE_FORMAT_KEY = `${COMMIT_PUSH_MODULE_ID}::commitMessageFormat
  * commit-push module ships so the fallback (used when the user has never edited
  * the setting) is identical to the documented out-of-the-box behavior.
  */
-const DEFAULT_COMMIT_MESSAGE_FORMAT = '[TICKET] <type>: <summary>';
+const DEFAULT_COMMIT_MESSAGE_FORMAT = '<TICKET>: <summary>';
 
 /**
  * Register the `ghola.commitAndPush` command. Dispatches a one-shot Claude

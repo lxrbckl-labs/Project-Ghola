@@ -2,7 +2,7 @@
   "name": "ghola",
   "displayName": "Ghola",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.18.4",
+  "version": "0.18.5",
   "icon": "resources/icon-source.png",
   "publisher": "local",
   "engines": {
@@ -57,7 +57,7 @@
       {
         "command": "ghola.commitAndPush",
         "title": "Ghola: Commit and Push Staged",
-        "icon": "$(git-commit)"
+        "icon": "$(wand)"
       }
     ],
     "configuration": {

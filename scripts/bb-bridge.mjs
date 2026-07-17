@@ -19,6 +19,7 @@
 //   node scripts/bb-bridge.mjs find-pr       --repo <slug> --branch <name>
 //   node scripts/bb-bridge.mjs list-comments --repo <slug> --pr <id>
 //   node scripts/bb-bridge.mjs resolve       --repo <slug> --pr <id> --comment <id>
+//   node scripts/bb-bridge.mjs delete-comment --repo <slug> --pr <n> --comment <id>
 //   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
 //   node scripts/bb-bridge.mjs to-draft      --repo <slug> --pr <id>
 //   node scripts/bb-bridge.mjs create-pr     --repo <slug> --source <branch> --target <branch> \
@@ -250,6 +251,14 @@ async function cmdResolve(flags) {
   await postToBridge('/resolve', { repoSlug, prId, commentId });
 }
 
+async function cmdDeleteComment(flags) {
+  const usage = 'bb-bridge delete-comment --repo <slug> --pr <n> --comment <id>';
+  const repoSlug = requireFlag(flags, 'repo', usage);
+  const prId = requireNumberFlag(flags, 'pr', usage);
+  const commentId = requireNumberFlag(flags, 'comment', usage);
+  await postToBridge('/delete-comment', { repoSlug, prId, commentId });
+}
+
 async function cmdMarkReady(flags) {
   const usage = 'bb-bridge mark-ready --repo <slug> --pr <id>';
   const repoSlug = requireFlag(flags, 'repo', usage);
@@ -333,6 +342,7 @@ Usage:
   node scripts/bb-bridge.mjs find-pr       --repo <slug> --branch <name>
   node scripts/bb-bridge.mjs list-comments --repo <slug> --pr <id>
   node scripts/bb-bridge.mjs resolve       --repo <slug> --pr <id> --comment <id>
+  node scripts/bb-bridge.mjs delete-comment --repo <slug> --pr <n> --comment <id>
   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
   node scripts/bb-bridge.mjs to-draft      --repo <slug> --pr <id>
   node scripts/bb-bridge.mjs create-pr     --repo <slug> --source <branch> --target <branch> \\
@@ -357,6 +367,7 @@ async function main() {
     'find-pr': cmdFindPr,
     'list-comments': cmdListComments,
     resolve: cmdResolve,
+    'delete-comment': cmdDeleteComment,
     'mark-ready': cmdMarkReady,
     'to-draft': cmdToDraft,
     'create-pr': cmdCreatePr,

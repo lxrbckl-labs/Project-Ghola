@@ -259,14 +259,23 @@ export class SessionLauncher {
       env,
     });
 
-    terminal.show(true);
+    // `show()` with preserveFocus left at its default (false) so the terminal
+    // TAKES focus and becomes the active editor. This is load-bearing for the
+    // pin below: `launch()` is typically invoked from the "Ghola" settings
+    // webview's "Open Session" button, so that webview is the active editor at
+    // this point. A previous `show(true)` (preserveFocus=true) revealed the
+    // terminal without focusing it, leaving the settings webview active — so
+    // `workbench.action.pinEditor` pinned the wrong tab ("Ghola" instead of
+    // "Ghola Session"). Focusing the terminal makes IT the active editor so the
+    // pin targets the correct tab.
+    terminal.show();
     // Auto-pin genuine Ghola Sessions. This works ONLY because the terminal is
     // created with `location: { viewColumn: ViewColumn.Active }` above, which
     // makes it an editor-area terminal (a real, pinnable editor tab) rather than
-    // a panel terminal; after `show(true)` it is the active editor, so
+    // a panel terminal; after `show()` focuses it, it is the active editor, so
     // `workbench.action.pinEditor` pins exactly this tab. COUPLING: if the
     // terminal `location` is ever moved to the panel, it stops being an editor
-    // tab and this pin call silently no-ops. Kept immediately after `show(true)`
+    // tab and this pin call silently no-ops. Kept immediately after `show()`
     // with no intervening awaits so nothing steals focus before we pin. Gated on
     // `!oneShot` so the transient one-shot 'Ghola Commit' terminal is never
     // pinned — only genuine sessions are. Fire-and-forget (`void` + swallowed

@@ -30,6 +30,14 @@ Even when a command IS on the allowlist, the agent must still avoid using it in 
 
 Commonly seeded values (the defaults this module ships with): `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, `npm ls`, `npm outdated`, `ng test`, `ng lint`, `ng build`. These are read-only or build-only — they inspect or produce artifacts but do not mutate source, `node_modules`, or `package-lock.json`. The user may add or remove freely. High-risk commands deliberately NOT seeded by default: `npm install` / `npm ci` / `npm i` (mutate `node_modules` and the lockfile), `npm publish` (pushes to a registry), `npm run dev` / `ng serve` (long-running dev servers — user starts those, not the agent), `ng new` / `ng generate` (scaffolding that creates files), and anything resembling `npm uninstall` or shell-style destructive operations. The user can add these explicitly if they want them; they are not part of the safe starter set.
 
+## Version bumps — only the `--no-git-tag-version` form is allowed
+
+`npm version` is a special case. The ONLY authorized form is the non-destructive bump `npm version <patch|minor|major> --no-git-tag-version`, expressed on the allowlist by the key `npm version <patch|minor|major> --no-git-tag-version` — the `<patch|minor|major>` placeholder is the bump level the caller chooses (exactly one of the three), and the trailing `--no-git-tag-version` flag is mandatory. This form edits `package.json` and `package-lock.json` only: it creates NO git commit, NO git tag, does NOT publish, and does not churn `node_modules`. It is the sanctioned way to keep the two version fields in sync — reversible and consistent with this module's rule against hand-editing `package-lock.json`, because the bump is applied by the tool rather than by hand.
+
+Bare `npm version <patch|minor|major>` (without `--no-git-tag-version`) is NOT authorized: npm defaults to creating a git commit and tag, which is out of scope for this module. Never drop the `--no-git-tag-version` flag, and never add flags such as `-m` / `--message` that re-introduce a commit. Because this command writes `package.json` and `package-lock.json`, it is the one allowlisted command whose file changes fall under the package/lockfile always-applied protections below — call the bump out in your return, since visibility is the point of that guardrail.
+
+This command is NOT part of the global factory default allowlist (the `(defaults)` set above). It is enabled by default only in the **Project** preset; in any other configuration the user must add it explicitly before an agent may run it.
+
 ## Always-applied protections (regardless of allowlist)
 
 These protections apply whether or not the allowlist is populated. They are about file edits and command behavior, not allowlist membership, and the allowlist setting has no effect on them.

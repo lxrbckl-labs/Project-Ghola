@@ -20,7 +20,7 @@ Each product has its own independent token slot, managed from the Modules tab de
 Ghola touches Atlassian in exactly two ways, and the required permissions follow directly from that:
 
 - **Jira — read only.** Ghola validates the token, then reads ticket summary, status, and description (ADF). It **never** creates, edits, transitions, or comments on a Jira issue.
-- **Bitbucket — read plus a narrow set of writes.** Ghola reads the workspace (validation), open PRs for a branch, and PR comments/threads. It **writes** only against pull requests: reply to a comment, resolve a comment thread, flip a PR between draft and ready-for-review (both directions), and create a pull request. It does **not** touch repository contents, pipelines, or any non-PR resource.
+- **Bitbucket — read plus a narrow set of writes.** Ghola reads the workspace (validation), open PRs for a branch, and PR comments/threads. It **writes** only against pull requests: reply to a comment, resolve a comment thread, delete a comment, flip a PR between draft and ready-for-review (both directions), and create a pull request. It does **not** touch repository contents, pipelines, or any non-PR resource.
 
 Every distinct REST call the extension makes:
 
@@ -38,6 +38,7 @@ Every distinct REST call the extension makes:
 | 10 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}` with `{ title, draft: false }` | Mark a draft PR ready-for-review | WRITE | `write:pullrequest:bitbucket` |
 | 11 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}` with `{ title, draft: true }` | Flip a ready PR back to draft | WRITE | `write:pullrequest:bitbucket` |
 | 12 | `POST /2.0/repositories/{ws}/{repo}/pullrequests` with `{ title, source, destination, description, draft }` | Create a pull request | WRITE | `write:pullrequest:bitbucket` |
+| 13 | `DELETE /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments/{cid}` | Delete a comment | WRITE | `write:pullrequest:bitbucket` |
 
 (All Bitbucket paths are rooted at `https://api.bitbucket.org/2.0`.) There are **no pipeline calls** anywhere in the extension today. `Pipelines: Read` is not required by any current code path — it is only worth granting as forward-looking prep for a planned pipeline-status/feedback capability (see below).
 
@@ -53,7 +54,7 @@ Created at id.atlassian.com → **Create API token with scopes** → pick **Bitb
 
 Scopes to grant:
 
-- **`write:pullrequest:bitbucket`** — required for all PR writes: reply, resolve, mark-ready, to-draft, create-pr. **Watch the read-vs-write trap:** *adding/replying to comments* is permitted under the READ pullrequest scope, but *resolving a thread* (endpoint 8), *the ready/draft flips* (10, 11), and *create-pr* (12) all need the WRITE scope. A read-only token therefore posts replies fine but 403s on resolve/mark-ready/to-draft/create-pr — if you see that pattern, the token is missing `write:pullrequest:bitbucket` (see setup.md).
+- **`write:pullrequest:bitbucket`** — required for all PR writes: reply, resolve, mark-ready, to-draft, create-pr, delete-comment. **Watch the read-vs-write trap:** *adding/replying to comments* is permitted under the READ pullrequest scope, but *resolving a thread* (endpoint 8), *the ready/draft flips* (10, 11), *create-pr* (12), and *deleting a comment* (13) all need the WRITE scope. A read-only token therefore posts replies fine but 403s on resolve/mark-ready/to-draft/create-pr/delete-comment — if you see that pattern, the token is missing `write:pullrequest:bitbucket` (see setup.md).
 - **`read:pullrequest:bitbucket`** — required to list/read PRs and their comments.
 - **`read:repository:bitbucket`** — required for the branch-PR-lookup call.
 - **`read:workspace:bitbucket`** — required for the token-validation probe (`GET /2.0/workspaces/{slug}`); without it, Validate's Bitbucket indicator fails red even when PR operations would succeed.

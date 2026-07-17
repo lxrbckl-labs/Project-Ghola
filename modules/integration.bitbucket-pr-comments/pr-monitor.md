@@ -1,6 +1,6 @@
 # PR Monitor
 
-When this module is loaded, the session can fetch open review comments on the current branch's Bitbucket pull request, triage them with the user, dispatch SWEs to apply code fixes, and post generated replies back to Bitbucket. The flow is round-trip: read comments, fix code, reply, optionally resolve. TPM never authors the code or the public reply text on its own — SWEs produce the fixes and the reply-generation step produces the reply, all under explicit user approval.
+When this module is loaded, the session can fetch open review comments on the current branch's Bitbucket pull request, triage them with the user, dispatch SWEs to apply code fixes, and — only when we are pushing back on a comment — post a reply to Bitbucket. The usual flow is: read comments, fix the code, and push; when the reviewer is CodeRabbit (or Bitbucket) it re-reviews the pushed commit, confirms the fix, and marks the thread resolved on its own — so we do NOT post a "done / fixed this" acknowledgement reply and do NOT manually resolve. The one time we post a reply in response to a comment is to PROTEST — when we are not going to make the requested change and want to explain the reasoning. TPM never authors the code or any public reply text on its own — SWEs produce the fixes and the reply-composition step produces the protest reply, all under explicit user approval.
 
 Invoke this module when the user types a trigger from the grammar below, or proactively offer it at session start if you observe that the current branch has an open PR with unresolved comments. Do not auto-fetch on session start; offer the module and wait for the user to opt in. The module is designed to fail loudly rather than silently: every API failure, every staleness condition, every refused write surfaces in chat so the user knows exactly what state Bitbucket is in.
 
@@ -22,7 +22,7 @@ node "$GHOLA_ROOT/scripts/bb-bridge.mjs" <subcommand> [flags]
 
 The wrapper prints the operation's JSON result to stdout and exits non-zero on failure — loud, never silent. Internally the bridge server authenticates through the AtlassianBridge / `integration.atlassian-suite` credentials exactly as before, so the Bitbucket token still never crosses the agent boundary. The agent also never sees the bridge server's own bearer token: the wrapper reads `GHOLA_BRIDGE_TOKEN` from its environment. Never echo it in chat or logs, and never pass it as a flag — this is the same secrets discipline the module already applies to the Bitbucket token itself.
 
-Five subcommands are available:
+Seven subcommands are available:
 
 - `find-pr --repo <slug> --branch <name>` — resolves the open PR id for the current branch.
 - `list-comments --repo <slug> --pr <id>` — fetches all PR comments (resolved + unresolved, inline + general); this is the `address comments` snapshot source. Each comment carries: `id`, `parentId` (`null` for top-level thread starters), `kind` (`'inline'`/`'general'`), `author` (`{ displayName, accountId }`), `body`, `inline?` (`{ path, to, from? }`), `resolved`, `createdAt`, `updatedAt`.
@@ -30,12 +30,13 @@ Five subcommands are available:
 - `resolve --repo <slug> --pr <id> --comment <id>` — marks a comment thread resolved.
 - `mark-ready --repo <slug> --pr <id>` — marks a DRAFT PR ready for review. This is a Bitbucket write; see "Mark Ready Verb" below for the confirmation gate that guards it.
 - `to-draft --repo <slug> --pr <id>` — flips a READY PR back to draft (the reverse of `mark-ready`). This is a Bitbucket write; see "To Draft Verb" below for the confirmation gate that guards it.
+- `delete-comment --repo <slug> --pr <id> --comment <id>` — deletes a single PR comment. This is a DESTRUCTIVE, IRREVERSIBLE Bitbucket write; see "Delete Verb" below for the confirmation gate that guards it.
 
 Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). PR id comes from `find-pr`.
 
 ### Required Bitbucket write permission
 
-The WRITE verbs — `reply`, `resolve`, `mark-ready`, `to-draft`, and `create pr` (owned by `integration.atlassian-suite`) — mutate Bitbucket and require the Bitbucket token to carry the `write:pullrequest:bitbucket` scope. The READ verbs — `find-pr`, `list-comments`, and pipeline status — need only the `read:*:bitbucket` scopes (`read:pullrequest:bitbucket`, `read:repository:bitbucket`, `read:workspace:bitbucket`). Scopes are chosen when the Atlassian API token is created and are a property of the token itself — not something this module or the Modules tab can turn on. Bitbucket App Passwords are deprecated (permanently removed 2026-07-28); the only supported credential is an Atlassian API token with scopes, and `integration.atlassian-suite` owns that setup end-to-end. See the 401/403 note in Failure Handling for what to do when a write verb is refused.
+The WRITE verbs — `reply`, `resolve`, `mark-ready`, `to-draft`, `delete-comment`, and `create pr` (owned by `integration.atlassian-suite`) — mutate Bitbucket and require the Bitbucket token to carry the `write:pullrequest:bitbucket` scope. The READ verbs — `find-pr`, `list-comments`, and pipeline status — need only the `read:*:bitbucket` scopes (`read:pullrequest:bitbucket`, `read:repository:bitbucket`, `read:workspace:bitbucket`). Scopes are chosen when the Atlassian API token is created and are a property of the token itself — not something this module or the Modules tab can turn on. Bitbucket App Passwords are deprecated (permanently removed 2026-07-28); the only supported credential is an Atlassian API token with scopes, and `integration.atlassian-suite` owns that setup end-to-end. See the 401/403 note in Failure Handling for what to do when a write verb is refused.
 
 > PR *creation* is owned by `integration.atlassian-suite` (the `create pr` verb, which uses the same bridge via `bb-bridge.mjs create-pr`). This module handles the post-creation lifecycle only — read/reply/resolve comments and flip a PR between draft and ready.
 
@@ -45,16 +46,18 @@ Reply bodies are multi-line, so they are piped into the wrapper via a heredoc ra
 
 ```bash
 node "$GHOLA_ROOT/scripts/bb-bridge.mjs" reply --repo my-repo --pr 42 --parent 9876 <<'EOF'
-Fixed by extracting the validation into validateInput() -- see src/Foo.ts:88.
+Leaving this as-is: validateInput() already guards this path upstream, so the extra check would be dead code.
 EOF
 ```
+
+(Replies exist for pushing back, not for acknowledging fixes — see the Round-Trip Flow. The body above declines a finding rather than confirming a change.)
 
 For an inline reply, add the `--inline-*` flags before the heredoc:
 
 ```bash
 node "$GHOLA_ROOT/scripts/bb-bridge.mjs" reply --repo my-repo --pr 42 --parent 9876 \
   --inline-path src/Foo.ts --inline-to 88 <<'EOF'
-Fixed by extracting the validation into validateInput() -- see src/Foo.ts:88.
+Leaving this as-is: validateInput() already guards this path upstream, so the extra check would be dead code.
 EOF
 ```
 
@@ -75,6 +78,7 @@ The user invokes this flow by typing one of:
 - `mark ready` / `ready for review` — marks the current branch's draft PR ready for review via the `mark-ready` bridge subcommand. This is a Bitbucket write; see "Mark Ready Verb" below for the confirmation gate and the `markReadyEnabled` setting that gate it.
 - `to draft` / `back to draft` — flips the current branch's ready PR back to draft via the `to-draft` bridge subcommand (the reverse of `mark ready`). This is a Bitbucket write; see "To Draft Verb" below for the confirmation gate and the `toDraftEnabled` setting that gate it.
 - `resolve <ordinals>` — `resolve 1`, `resolve 1, 3`, `resolve 2-4`, `resolve all`. Resolves comment threads from the current snapshot (same ordinal grammar as `address`/`post`). This is a Bitbucket write; see "Resolve Ordinals Verb" below for the confirmation gate that guards it.
+- `delete <ordinals>` — `delete 1`, `delete 1, 3`, `delete 2-4`. Deletes the named comment(s) from the current snapshot (same ordinal grammar as `resolve`); `delete <id>` also accepts a raw comment id. `delete resolved` bulk-deletes every resolved comment on the PR. This is a DESTRUCTIVE, IRREVERSIBLE Bitbucket write; see "Delete Verb" below for the confirmation gate and the `deleteCommentEnabled` setting that gate it.
 
 Ambiguous gestures (`address that one`, `address the rest`) should be confirmed with the user, not guessed. When the user references an ordinal that isn't in the current snapshot, ask whether they meant to refresh the snapshot first.
 
@@ -108,19 +112,22 @@ Within a snapshot, ordinals are stable. If the user resolves comments 1, 2, and 
        "..."
    ```
 4. **Triage.** For each picked ordinal, TPM offers a default action and asks the user to confirm or override:
-   - **Code fix** (default for actionable comments)
-   - **Manual reply** (user provides the text)
-   - **Dismiss** (no action; flagged in audit)
+   - **Code fix** (default for actionable comments) — dispatch a SWE, fix, and push. This path posts NO reply and does NOT resolve the thread; CodeRabbit re-reviews the pushed commit and auto-resolves (see step 6).
+   - **Protest reply** — when we are NOT making the requested change (the finding is wrong, out of scope, or intentionally declined) and want to explain the reasoning. This is the only case that posts a comment in response; the text is either composed via `parameters.replyInstruction` (steps 7-8) or supplied verbatim by the user.
+   - **Dismiss** (no action, no reply; flagged in audit)
 5. **Dispatch SWEs.** For code-fix ordinals, deploy SWEs in parallel respecting `SWE_AGENT_COUNT`. Each assignment carries the comment's body verbatim, `file:line`, the PR id, and the dependency that this is a PR-comment fix (so the SWE knows to keep the change scoped to the comment).
-6. **Generate replies.** After SWEs return, write each reply using `parameters.replyInstruction`. 1-2 sentences. Never include severity/rating/SWE attribution.
+6. **Fix, push, and stay silent (the default).** For every ordinal triaged as a code fix, the thread is done from our side once the SWE's fix is pushed. Do NOT post an acknowledgement reply and do NOT call `resolve`: CodeRabbit (or Bitbucket) automatically re-reviews the pushed code, confirms the fix, and marks the thread resolved on its own — a "done / fixed this" reply is redundant. Skipping it also preserves headroom under Bitbucket's hard 200-comment-per-PR cap, and the threads CodeRabbit auto-resolves this way are exactly what the `delete resolved` verb later clears out. (If CodeRabbit marks a thread resolved that is NOT actually fixed, `parameters.flagFalselyResolved` still surfaces it — see step 9.)
+7. **Compose protest replies (exception path only).** This step and step 8 fire ONLY for ordinals triaged as a protest — comments we are declining rather than fixing. Write each protest reply using `parameters.replyInstruction`. 1-2 sentences. Never include severity/rating/SWE attribution. If the user supplied the reply text verbatim, skip composition and post their words unchanged.
 
-   **CodeRabbit persona overlay.** If the parent comment's author display name contains "coderabbit" (case-insensitive), prepend the `parameters.coderabbitReplyPersona` instruction onto the `parameters.replyInstruction` before generating the reply. The persona shapes voice/tone; the instruction shapes content. If `parameters.coderabbitReplyPersona` is empty, treat CodeRabbit replies the same as any other (no overlay). When the overlay IS applied, apply it at the level set by this module's own `parameters.coderabbitReplyPersonaIntensity` (1–10). The level controls HOW MUCH the reply acts in-character (the persona's character and mannerisms), NOT how extreme any single trait is — and at EVERY level the reply must still fully convey the actual message it needs to communicate. At 1 the reply is mostly plain with only a light touch of the persona; at 5 (default) it is clearly in-character but balanced; at 10 it is fully in-character. If unset, use the moderate default (5). This level is self-contained to this module and does NOT depend on `tool.operator-profile`. It affects VOICE only — it never relaxes the no-severity/no-rating/no-attribution rule or the `ok`-before-post approval gate, and it never lets persona flavor drop or distort the substance of the reply.
-7. **Approve + post.** Show all generated replies in one block. User confirms with `ok / revise N: <change> / cancel`. On `ok`, post each via the `reply` subcommand, piping the reply body via stdin (per the heredoc pattern in Capabilities), passing the comment's own `.id` as `--parent` (not its `.parentId` field — that is the comment's parent, which is `null` for top-level threads) and the parent comment's `inline` block (if any) as `--inline-path`/`--inline-to`/`--inline-from` so the reply lands on the correct thread.
-8. **Flag falsely-resolved comments.** If `parameters.flagFalselyResolved` is enabled, scan each unresolved comment (and the text of its latest reply, if any) for phrases that claim resolution — e.g., "resolved", "fixed", "done", "addressed", "handled", "taken care of". For each match, list the comment with its `file:line` location and a short excerpt of the claim phrase. Do not call `resolve` automatically; the user reviews the list and resolves manually. If `parameters.flagFalselyResolved` is disabled, skip this scan entirely.
+   **CodeRabbit persona overlay.** If the parent comment's author display name contains "coderabbit" (case-insensitive), prepend the `parameters.coderabbitReplyPersona` instruction onto the `parameters.replyInstruction` before composing the protest reply. The persona shapes voice/tone; the instruction shapes content. If `parameters.coderabbitReplyPersona` is empty, treat CodeRabbit replies the same as any other (no overlay). When the overlay IS applied, apply it at the level set by this module's own `parameters.coderabbitReplyPersonaIntensity` (1–10). The level controls HOW MUCH the reply acts in-character (the persona's character and mannerisms), NOT how extreme any single trait is — and at EVERY level the reply must still fully convey the actual message it needs to communicate. At 1 the reply is mostly plain with only a light touch of the persona; at 5 (default) it is clearly in-character but balanced; at 10 it is fully in-character. If unset, use the moderate default (5). This level is self-contained to this module and does NOT depend on `tool.operator-profile`. It affects VOICE only — it never relaxes the no-severity/no-rating/no-attribution rule or the `ok`-before-post approval gate, and it never lets persona flavor drop or distort the substance of the reply.
+8. **Approve + post (protest replies only).** Show all composed protest replies in one block. User confirms with `ok / revise N: <change> / cancel`. On `ok`, post each via the `reply` subcommand, piping the reply body via stdin (per the heredoc pattern in Capabilities), passing the comment's own `.id` as `--parent` (not its `.parentId` field — that is the comment's parent, which is `null` for top-level threads) and the parent comment's `inline` block (if any) as `--inline-path`/`--inline-to`/`--inline-from` so the reply lands on the correct thread.
+9. **Flag falsely-resolved comments.** If `parameters.flagFalselyResolved` is enabled, scan each unresolved comment (and the text of its latest reply, if any) for phrases that claim resolution — e.g., "resolved", "fixed", "done", "addressed", "handled", "taken care of". For each match, list the comment with its `file:line` location and a short excerpt of the claim phrase. Do not call `resolve` automatically; the user reviews the list and resolves manually. If `parameters.flagFalselyResolved` is disabled, skip this scan entirely.
 
 ## Failure Handling
 
 Every bridge subcommand's result surfaces two things: the wrapper's process exit code (zero on success, non-zero on failure) and, on failure, a JSON body on stdout carrying a `status` field plus a `message`. The taxonomy below documents `status` values as they map onto the wrapper's output — treat "the client returns" and "the wrapper reports" as the same thing; the wrapper is a thin pass-through onto the same host-side response shape.
+
+The client now appends Bitbucket's own `error.message` to the failure `message` whenever the API returns one, so a failed `delete-comment`/`reply`/`resolve`/`create pr` surfaces the ACTUAL reason rather than a bare status code. In practice this means a **403** now names the permission-scope cause (the token is missing `write:pullrequest:bitbucket`), and a **400** on a `create pr`/`reply`/`delete` at the comment ceiling now carries Bitbucket's real cap text ("By default, you can't create more than 200 comments per pull request."). Relay the surfaced message to the user verbatim instead of a generic "failed" — the real reason is now in the `message`.
 
 - Exit code 2 -> the bridge server itself is unavailable (not a Ghola session, or the extension host isn't running the loopback server). This is not a Bitbucket error and there is no `status` field to inspect. Surface it to the user in one sentence — "the Bitbucket bridge isn't available in this session" — and stop; do not retry, do not fall back to another auth path.
 - Per-comment post failure -> tell the user, leave audit untouched, continue the batch. No silent retries (could double-post on timeouts). User retries via `address <ordinal>` again.
@@ -128,20 +135,22 @@ Every bridge subcommand's result surfaces two things: the wrapper's process exit
 - `status: 'not-found'` with `message` starting "Missing repo" -> the bridge detected that `--repo` is empty or `--pr` / `--comment` / `--parent` is not a finite number before making any request. This is a call-site gap, not a Bitbucket error. Surface the message to the user so they can check repo-slug resolution and PR-id lookup.
 - `status: 'unknown-error'` with `message` "Reply body is empty" -> the bridge detected an empty reply body (stdin) before making any request in `reply`. Surface the message and ask the user to provide reply text before retrying.
 - `status: 'unauthorized'` with `message` starting "Missing:" -> the bridge detected that `email`, `bitbucketWorkspace`, or `bitbucketToken` is unset before making any request. Cancel the batch and tell the user which fields are missing (the message names them) — this is a configuration gap, not a token-rejection; point the user at the Atlassian Suite settings to fill in the missing values.
-- 401 / 403 from the API (`status: 'unauthorized'` with message "401 Unauthorized..." or `status: 'forbidden'`) -> cancel the batch. A **401** means the token is invalid or expired: re-set it via the Atlassian Suite's **Set Bitbucket API Token**. A **403** on a WRITE verb (`reply`, `resolve`, `mark-ready`, `to-draft`, `create pr`) almost always means the token is valid but lacks the `write:pullrequest:bitbucket` scope -> per `integration.atlassian-suite`, create a new Atlassian API token with scopes (https://id.atlassian.com/manage-profile/security/api-tokens -> Create API token with scopes -> Bitbucket, with `write:pullrequest:bitbucket` selected) and re-save it via the suite's **Set Bitbucket API Token**. Scopes can't be edited after a token is created, so make a fresh token — you can't add the scope to the existing one. Alternatively perform the one-off action in the Bitbucket web UI, which uses the browser session rather than the token. There is NO Modules-tab toggle that grants this scope — the scope is a property of the token, chosen on Bitbucket's side when the token is issued, so do not tell the user to "enable write access in the Modules tab" or invent a permission setting. Do not echo the token, do not suggest the user paste it into chat.
+- 401 / 403 from the API (`status: 'unauthorized'` with message "401 Unauthorized..." or `status: 'forbidden'`) -> cancel the batch. A **401** means the token is invalid or expired: re-set it via the Atlassian Suite's **Set Bitbucket API Token**. A **403** on a WRITE verb (`reply`, `resolve`, `mark-ready`, `to-draft`, `delete-comment`, `create pr`) almost always means the token is valid but lacks the `write:pullrequest:bitbucket` scope (the surfaced `message` now names this permission cause directly) -> per `integration.atlassian-suite`, create a new Atlassian API token with scopes (https://id.atlassian.com/manage-profile/security/api-tokens -> Create API token with scopes -> Bitbucket, with `write:pullrequest:bitbucket` selected) and re-save it via the suite's **Set Bitbucket API Token**. Scopes can't be edited after a token is created, so make a fresh token — you can't add the scope to the existing one. Alternatively perform the one-off action in the Bitbucket web UI, which uses the browser session rather than the token. There is NO Modules-tab toggle that grants this scope — the scope is a property of the token, chosen on Bitbucket's side when the token is issued, so do not tell the user to "enable write access in the Modules tab" or invent a permission setting. Do not echo the token, do not suggest the user paste it into chat.
 - 404 on the PR id -> the PR may have been merged or closed since the snapshot was taken. Refresh the snapshot via a fresh `address comments` rather than retrying the stale id.
 - 429 (rate limit) -> maps to `status: 'unknown-error'` with a `message` of the form `"<status-code> <statusText>"` (e.g. "429 Too Many Requests") or `"429 request failed"` when statusText is absent. Detect this by checking `status === 'unknown-error' && message.startsWith('429 ')` (note the trailing space — avoids false positives from other codes that might begin with the digits "429"). Stop the batch, tell the user what completed, and recommend they retry after a short pause. Do not implement automatic backoff in this module's flow; that belongs in the bridge.
-- 5xx / other non-2xx -> all HTTP errors not explicitly handled (400, 409, 422, 500, 502, 503, etc.) map to `status: 'unknown-error'` with a sanitized `message` of the form `"<status-code> <statusText>"`. Surface `message` to the user so they can see the raw code; do not retry automatically. This applies to `mark-ready` too — a `400` from `mark-ready` (e.g. the PR is already ready) should be surfaced loudly rather than treated as success.
+- 5xx / other non-2xx -> all HTTP errors not explicitly handled (400, 409, 422, 500, 502, 503, etc.) map to `status: 'unknown-error'` with a `message` of the form `"<status-code> <statusText>"`, now with Bitbucket's own `error.message` appended when the API supplies one. Surface `message` to the user so they can see the raw code AND the real reason; do not retry automatically. This applies to `mark-ready` too — a `400` from `mark-ready` (e.g. the PR is already ready) should be surfaced loudly rather than treated as success. It also covers the 200-comment cap: a `reply`/`create pr` (or, if it hit the ceiling mid-flow, a comment-creating path) that trips Bitbucket's per-PR limit now surfaces the real "By default, you can't create more than 200 comments per pull request." text — relay it so the user knows to free room via `delete resolved` rather than seeing a bare `400`.
 - Snapshot staleness: if a comment in the snapshot has been deleted/resolved upstream between fetch and post, the bridge returns `not-found` — surface this to the user and continue.
 
 ## Hard Rules
 
-- **No auto-posting.** Every reply requires explicit `ok` confirmation. `address all` still gates on the generate + approve step.
+- **Reply only to protest, never to acknowledge.** When we accept a finding, the response is code: fix it and push, then stop — do NOT post a "done / fixed this" reply and do NOT manually `resolve`. CodeRabbit (or Bitbucket) re-reviews the push and auto-resolves the thread. A reply in response to a comment is warranted ONLY when we are declining the change and want to explain why. Redundant acknowledgement replies also burn Bitbucket's hard 200-comment-per-PR budget.
+- **No auto-posting.** Every reply requires explicit `ok` confirmation. `address all` still gates on the compose + approve step for any protest replies.
 - **No token echo.** Neither secret ever appears in chat, logs, or error messages: the Bitbucket token stays behind the AtlassianBridge on the host side, and the bridge server's own bearer token (`GHOLA_BRIDGE_TOKEN`) is read from the environment by the `bb-bridge.mjs` wrapper and never surfaced to or handled by the agent. Never echo either token, and never pass a token as a flag.
 - **No git writes / no Jira writes.** Read-only git only (local git — `git commit`, `git push`, etc.). This module never touches Jira. This is a separate concern from `mark ready` / `to draft` below: flipping a PR's draft state is a Bitbucket API write, not a local git write, and is allowed — but only behind the explicit confirmation gate and the respective `markReadyEnabled` / `toDraftEnabled` setting.
 - **`mark ready` requires explicit confirmation.** Same discipline as reply posting: show intent (repo, PR id, branch), require the user to type `ok`, never auto-run. Refuse the verb outright if `parameters.markReadyEnabled` is false.
 - **`to draft` requires explicit confirmation.** Same discipline as `mark ready`: show intent (repo, PR id, branch), require the user to type `ok`, never auto-run. Refuse the verb outright if `parameters.toDraftEnabled` is false.
 - **`resolve <ordinals>` requires explicit confirmation.** Like reply and mark-ready, resolving a thread is a Bitbucket write: show intent (the selected threads), require the user to type `ok`, never auto-run. `resolve all` still gates on this confirmation. It never auto-resolves.
+- **`delete` requires explicit confirmation and is IRREVERSIBLE.** Deletion is DESTRUCTIVE and cannot be undone on Bitbucket — there is no restore. Show intent (the exact comment(s) to be deleted, by ordinal/id + short text), require the user to type `ok`, never auto-run. This holds for both `delete <ordinals>`/`delete <id>` and the bulk `delete resolved`. Refuse the verb outright if `parameters.deleteCommentEnabled` is false. Deleting requires the `write:pullrequest:bitbucket` scope.
 - **No new code in the work repo outside what SWEs are dispatched to do.** TPM does not author code in this flow; SWEs do.
 - **Generated reply must not include severity, rating, attribution, or any Ghola-internal filter metadata.** It's a public Bitbucket comment.
 - **Don't replace the user's words in manual replies.** When the user supplies reply text, post it verbatim (no generation step).
@@ -150,7 +159,7 @@ Every bridge subcommand's result surfaces two things: the wrapper's process exit
 
 ## Post Ordinals Verb
 
-`post <ordinals>` is the outbound twin of `address <ordinals>`: where `address` reads inbound review comments, triages them, and posts replies, `post` reads SWE Review Mode findings, polishes them, and publishes the selected ones as inline Bitbucket PR comments via the AtlassianBridge. The findings source is the most recent `tool.lenses`-driven Review Mode dispatch held in session memory; this verb does not initiate a new review on its own.
+`post <ordinals>` is the outbound twin of `address <ordinals>`: where `address` reads inbound review comments, triages them, fixes the code, and posts a reply only to push back, `post` reads SWE Review Mode findings, polishes them, and publishes the selected ones as inline Bitbucket PR comments via the AtlassianBridge. The findings source is the most recent `tool.lenses`-driven Review Mode dispatch held in session memory; this verb does not initiate a new review on its own.
 
 ### Grammar
 
@@ -193,7 +202,7 @@ For each selected finding:
 
 ### Symmetry With The Address Verb
 
-`address <ordinals>` is inbound (read inbound review comments, triage, reply); `post <ordinals>` is outbound (read SWE findings, polish, post). They share the ordinal grammar, the user-approval gate, and the same `bb-bridge.mjs` wrapper's `reply` subcommand as the write path. This module owns both halves of the PR-comment workflow — there is no separate "post" module.
+`address <ordinals>` is inbound (read inbound review comments, triage, fix, and reply only to protest); `post <ordinals>` is outbound (read SWE findings, polish, post). They share the ordinal grammar, the user-approval gate, and the same `bb-bridge.mjs` wrapper's `reply` subcommand as the write path. This module owns both halves of the PR-comment workflow — there is no separate "post" module.
 
 ### Dependency On tool.lenses
 
@@ -318,6 +327,49 @@ Per-comment failure handling mirrors the taxonomy in "Failure Handling" above �
 
 This verb never AUTO-resolves, consistent with the "Flag falsely-resolved comments" rule in the Round-Trip Flow: that scan flags claim-phrases but does not resolve anything on its own. `resolve <ordinals>` is the explicit, user-directed way to resolve a thread.
 
+## Delete Verb
+
+`delete` removes PR comments outright via the `delete-comment` bridge subcommand. Unlike `resolve`, which only flips a thread's resolved-state, `delete` permanently removes the comment — it is a DESTRUCTIVE, IRREVERSIBLE Bitbucket write with no undo. The primary use case is Bitbucket's **200-comment-per-PR cap**: once a PR hits that ceiling, new comments cannot be posted (the create call 400s with "By default, you can't create more than 200 comments per pull request."), so deleting resolved comments frees room for new ones. It carries the same confirmation discipline as `resolve`/`mark-ready`, plus its own feature gate, plus stronger destructive-action language because there is no going back.
+
+### Grammar
+
+Two forms:
+
+- **Per-comment** — `delete <ordinals>` (`delete 1`, `delete 1, 3`, `delete 2-4`) deletes the specific comment(s) named. Ordinals map to the CURRENT snapshot exactly as in `resolve <ordinals>`. `delete <id>` also accepts a raw Bitbucket comment id for a comment not in the snapshot. Ranges (`1-3`), comma-separated lists (`1, 4, 7`), and combinations (`1, 3-5, 9`) parse the same way; whitespace is forgiven; out-of-range ordinals are reported back with the valid range, not silently dropped.
+- **Bulk delete-resolved** — `delete resolved` deletes every resolved comment on the PR. There is no ordinal argument; the set is computed from a fresh `list-comments` fetch (see the flow below).
+
+### Gate check
+
+If `parameters.deleteCommentEnabled` is false, refuse the trigger in one sentence: "Delete is disabled in the Modules tab. Enable it to delete PR comments." Do not proceed, do not improvise a resolve-instead workaround, and do not attempt any other deletion path. Deleting also requires the Bitbucket token to carry the `write:pullrequest:bitbucket` scope; a Read-only token 403s on `delete-comment`, and per the enriched Failure Handling the surfaced `message` now names that permission cause.
+
+### Per-comment delete flow
+
+1. **Select.** Parse the ordinals against the current snapshot (or take the raw id for `delete <id>`). Report any out-of-range ordinal with the valid range.
+2. **Show intent.** List each selected comment by ordinal/id with its `file:line` (or `general`), author, resolved-state, and a short excerpt of the body before doing anything. State plainly that these comments will be permanently deleted and CANNOT be restored.
+3. **Confirm.** Require the user to type `ok` (or explicitly cancel). No auto-run — deletion is irreversible, so the gate is not configurable off and there is no bulk bypass.
+4. **Execute.** On `ok`, invoke `node "$GHOLA_ROOT/scripts/bb-bridge.mjs" delete-comment --repo <slug> --pr <id> --comment <id>` once per selected comment id, using the same repo-slug and PR-id resolution the other verbs use.
+5. **Report.** After the batch, report each deleted comment id back to the user as an audit trail, in the same shape as the `resolve` post-batch summary.
+
+### Bulk delete-resolved flow
+
+1. **Fetch.** Run `list-comments --repo <slug> --pr <id>` to get the current comment set, then filter to comments where `resolved === true`. This snapshot is bounded (~200 comments), which lines up with the per-PR cap the flow exists to relieve.
+2. **Show intent.** Present the exact list to be deleted — each resolved comment's `id` plus a short excerpt of its body. When the list is large, summarize the count (e.g. "38 resolved comments will be deleted") and offer a `list-all` option so the user can see every entry before deciding. State plainly that this permanently deletes each listed comment and CANNOT be undone.
+3. **Confirm.** Require the user to type `ok` (or explicitly cancel). No auto-run — the destructive-action gate applies to the bulk path exactly as to the per-comment path.
+4. **Execute.** On `ok`, delete each comment via `node "$GHOLA_ROOT/scripts/bb-bridge.mjs" delete-comment --repo <slug> --pr <id> --comment <id>`, one call per id.
+5. **Report.** After the batch, report the deleted ids (or the deleted count) back as an audit trail; surface any per-id failure loudly and continue.
+
+### Operational caveats
+
+- **Tombstoned replies.** Deleting a resolved thread's ROOT comment tombstones its replies on Bitbucket's side. So a later `delete-comment` for a child id that was already removed as part of its parent may come back `not-found` — tolerate that, treat it as already-gone, and continue the batch rather than aborting.
+- **Bounded list.** The `list-comments` snapshot is bounded (~200), which aligns with the 200-comment cap this flow relieves; if a PR is at the ceiling the fetched set is effectively the whole comment population.
+- **Per-comment failure handling** mirrors the taxonomy in "Failure Handling" above — surface each failure loudly (relaying Bitbucket's now-included `error.message`, e.g. a 403 naming the missing write scope), continue the batch, no silent retries.
+
+### Module-Disabled Vs Feature-Disabled
+
+- **`integration.bitbucket-pr-comments` disabled**: `delete` is unavailable (the whole module is off).
+- **Module enabled, `deleteCommentEnabled` off (default)**: `delete` refuses per the gate-check message above. `address`/`post`/`resolve`/`mark ready`/`to draft` verbs are unaffected.
+- **Module enabled, `deleteCommentEnabled` on**: `delete` works, still gated per-invocation on the explicit `ok` confirmation, for both the per-comment and bulk `delete resolved` paths.
+
 ## Role-Specific Notes
 
 ### TPM
@@ -329,9 +381,10 @@ This verb never AUTO-resolves, consistent with the "Flag falsely-resolved commen
 - For the `mark ready` verb: gate on `parameters.markReadyEnabled`, resolve the PR, show intent, require explicit `ok`, then invoke the wrapper's `mark-ready` subcommand. Report success or surface the failure loudly per the Mark Ready Verb section above.
 - For the `to draft` verb: gate on `parameters.toDraftEnabled`, resolve the PR, show intent, require explicit `ok`, then invoke the wrapper's `to-draft` subcommand. Report success or surface the failure loudly per the To Draft Verb section above.
 - For the `resolve <ordinals>` verb: parse the ordinals against the current snapshot, show intent (selected threads by ordinal with `file:line`/author + resolved-state), require explicit `ok`, then invoke the wrapper's `resolve` subcommand once per selected comment id. Report each resolved thread id back as audit trail per the Resolve Ordinals Verb section above.
+- For the `delete` verb: gate on `parameters.deleteCommentEnabled`. For `delete <ordinals>`/`delete <id>`, select against the current snapshot; for `delete resolved`, run `list-comments` and filter to `resolved === true`. Show intent (the exact comment(s) with id + short text) and state plainly that deletion is permanent and cannot be undone, require explicit `ok`, then invoke the wrapper's `delete-comment` subcommand once per id. Tolerate a `not-found` on an already-tombstoned child id and continue. Report the deleted ids back as audit trail per the Delete Verb section above.
 - Settings (read from the module's parameters block in the Session Manifest):
-  - `parameters.replyInstruction` — feed into the reply-generation step. If absent from the Session Manifest, the default applies: `"Write a 1-2 sentence professional PR reply confirming what was fixed and where. No double-dashes."`
-  - `parameters.coderabbitReplyPersona` — optional voice/tone overlay layered onto `parameters.replyInstruction` when the parent comment author is CodeRabbit. If absent from the Session Manifest, the default applies: empty string (no overlay).
+  - `parameters.replyInstruction` — feeds the protest-reply composition step (step 7). Protest replies are the only replies we post: accepted findings are fixed, pushed, and left for CodeRabbit to auto-resolve without a reply. If absent from the Session Manifest, the default applies: `"Write a 1-2 sentence professional PR reply explaining why we are declining the requested change (the finding is incorrect, out of scope, or intentionally not being made). No double-dashes."`
+  - `parameters.coderabbitReplyPersona` — optional voice/tone overlay layered onto `parameters.replyInstruction` when the parent comment author is CodeRabbit (and therefore applied only to protest replies). If absent from the Session Manifest, the default applies: empty string (no overlay).
   - `parameters.coderabbitReplyPersonaIntensity` — how much the reply acts in-character (the persona's character/mannerisms) while STILL fully conveying the message, 1–10. Not a measure of any single trait; the substance is always delivered at every level. If absent from the Session Manifest, the default applies: `5` (moderate). Self-contained to this module — no dependency on `tool.operator-profile`. Only matters when `coderabbitReplyPersona` is set; affects reply VOICE only — never the no-severity/no-rating/no-attribution rule or the approval gate.
   - `parameters.flagFalselyResolved` — when true, scan each unresolved comment for claim-phrases and surface matches; does not auto-resolve. If absent from the Session Manifest, the default applies: `true` (scanning is on).
   - `parameters.postOrdinalsEnabled` — when false, refuse the `post <ordinals>` verb. If absent from the Session Manifest, the default applies: `true` (the verb is enabled).
@@ -341,6 +394,7 @@ This verb never AUTO-resolves, consistent with the "Flag falsely-resolved commen
   - `parameters.requireUserApproval` — when true, present polished comments for approval before posting. If absent from the Session Manifest, the default applies: `true` (the safety gate is on).
   - `parameters.markReadyEnabled` — when false, refuse the `mark ready` verb outright. If absent from the Session Manifest, the default applies: `false` (the verb is disabled — off by default since it's a Bitbucket write).
   - `parameters.toDraftEnabled` — when false, refuse the `to draft` verb outright. If absent from the Session Manifest, the default applies: `false` (the verb is disabled — off by default since it's a Bitbucket write).
+  - `parameters.deleteCommentEnabled` — when false, refuse the `delete` verb (both `delete <ordinals>`/`delete <id>` and `delete resolved`) outright. If absent from the Session Manifest, the default applies: `false` (the verb is disabled — off by default since deletion is a DESTRUCTIVE, IRREVERSIBLE Bitbucket write).
 - When `parameters.logCommentsEnabled` is true, fetched comments are appended to `parameters.logFilePath` as JSON lines. Whether your own posted replies are logged too is gated by `parameters.logIncludeReplies`: on (default) logs inbound comments plus posted replies; off logs only inbound comments and skips the reply entries. You do not need to invoke logging explicitly; it happens passively during the address/post workflow.
 
 ### SWE

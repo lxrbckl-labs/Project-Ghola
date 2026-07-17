@@ -16,8 +16,11 @@
  *   - Every public method returns a typed result shape — they never throw to
  *     the caller. Non-2xx responses and network failures are mapped to a
  *     sanitized `status: 'unauthorized' | 'forbidden' | 'not-found' |
- *     'network-error' | 'unknown-error'` value with a generic, user-facing
- *     `message`. Raw response bodies never reach the message field.
+ *     'network-error' | 'unknown-error'` value with a user-facing `message`.
+ *     On a non-2xx response the message is enriched with Bitbucket's own
+ *     `error.message` (its documented `{type:"error",error:{message}}` shape)
+ *     so callers see the real cause; that text is Bitbucket's, never the
+ *     request headers or token. Network errors stay fully generic.
  *   - Every request runs under an 8 s `AbortController` timeout so a wedged
  *     network cannot hang the extension host.
  *
@@ -88,6 +91,11 @@ export interface PrReplyResult {
 }
 
 export interface PrResolveResult {
+  status: BitbucketPrStatus;
+  message?: string;
+}
+
+export interface PrDeleteResult {
   status: BitbucketPrStatus;
   message?: string;
 }
@@ -163,6 +171,13 @@ interface BitbucketPullRequest {
 interface BitbucketCreatedPullRequest {
   id?: number;
   links?: { html?: { href?: string } };
+}
+
+/** Bitbucket's documented error envelope: `{ "type": "error", "error": {
+ *  "message": "..." } }`. We read only `error.message` to enrich the sanitized
+ *  status message on a non-2xx response. */
+interface BitbucketErrorEnvelope {
+  error?: { message?: string };
 }
 
 /**
@@ -342,6 +357,44 @@ export class BitbucketPrClient {
       `/comments/${encodeURIComponent(String(args.commentId))}/resolve`;
 
     const res = await this.request(url, 'POST', auth);
+    if (!res.ok) return { status: res.status, message: res.message };
+    return { status: 'ok' };
+  }
+
+  /**
+   * `DELETE /2.0/repositories/{workspace}/{repo_slug}/pullrequests/{pr_id}/comments/{comment_id}`.
+   *
+   * Permanently deletes a PR comment. The exact mirror of `resolveComment`
+   * except it targets the comment resource itself (no `/resolve` suffix) with
+   * `DELETE` and sends no body. Bitbucket returns `204 No Content` on success,
+   * which `request()` treats as a 2xx with an empty (`undefined`) body; we only
+   * surface the status. Like the other writes this needs the token to carry PR
+   * write permission (`write:pullrequest:bitbucket`, or an App Password with
+   * "Pull requests: Write") — a 403 here means that scope is missing, and its
+   * message now carries Bitbucket's own reason text.
+   */
+  async deleteComment(args: {
+    repoSlug: string;
+    prId: number;
+    commentId: number;
+  }): Promise<PrDeleteResult> {
+    if (
+      !args.repoSlug ||
+      !Number.isFinite(args.prId) ||
+      !Number.isFinite(args.commentId)
+    ) {
+      return { status: 'not-found', message: 'Missing repo, PR id, or comment id' };
+    }
+    const { email, workspace, token, missing } = await this.readAuthContext();
+    if (missing) return { status: 'unauthorized', message: missing };
+
+    const auth = this.buildAuthHeader(email, token);
+    const url =
+      `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
+      `/${encodeURIComponent(args.repoSlug)}/pullrequests/${encodeURIComponent(String(args.prId))}` +
+      `/comments/${encodeURIComponent(String(args.commentId))}`;
+
+    const res = await this.request(url, 'DELETE', auth);
     if (!res.ok) return { status: res.status, message: res.message };
     return { status: 'ok' };
   }
@@ -539,6 +592,41 @@ export class BitbucketPrClient {
   }
 
   /**
+   * Combine a sanitized base message with Bitbucket's own error reason (when
+   * one can be parsed from the response body) so callers see the real cause —
+   * e.g. a scope-missing 403 or the 200-comments cap 400 — instead of only a
+   * generic keyword. Returns the base unchanged when there is no usable detail.
+   */
+  private describeHttpError(base: string, text: string): string {
+    const detail = this.extractErrorDetail(text);
+    return detail ? `${base}: ${detail}` : base;
+  }
+
+  /**
+   * Pull the human-readable reason out of a non-2xx response body. Prefers the
+   * documented `{ "type": "error", "error": { "message": "..." } }` envelope;
+   * falls back to a short slice of the raw text when the body is present but
+   * not that shape. Defensive by contract: the body may be empty or non-JSON,
+   * so the parse is wrapped in try/catch and this never throws out of
+   * `request()`. The text is Bitbucket's own error output — it does not carry
+   * the request headers or token — and the raw fallback is capped so a large
+   * HTML error page cannot bloat the surfaced message.
+   */
+  private extractErrorDetail(text: string): string | undefined {
+    if (!text) return undefined;
+    try {
+      const parsed = JSON.parse(text) as BitbucketErrorEnvelope;
+      const msg = parsed?.error?.message;
+      if (typeof msg === 'string' && msg.trim()) return msg.trim();
+    } catch {
+      // Not JSON — fall through to the raw-text fallback below.
+    }
+    const trimmed = text.trim();
+    if (!trimmed) return undefined;
+    return trimmed.length > 200 ? `${trimmed.slice(0, 200)}...` : trimmed;
+  }
+
+  /**
    * Execute a request with the Basic-auth header, an 8 s timeout, and
    * JSON-body parsing. Returns a discriminated `{ ok, ... }` shape so callers
    * never see a thrown error.
@@ -546,12 +634,14 @@ export class BitbucketPrClient {
    * Token leak audit: the `Authorization` header value is set on the request
    * init object that lives only inside this function — it is never logged,
    * never embedded in an error message, and never re-emitted. Error paths
-   * surface only the mapped status keyword and a sanitized, user-facing
-   * message; the raw response body is intentionally discarded.
+   * surface the mapped status keyword plus Bitbucket's OWN `error.message`
+   * (extracted via `extractErrorDetail`) — that text is Bitbucket's response
+   * body, which never echoes the request headers or token. Network errors stay
+   * fully generic (no body to read).
    */
   private async request(
     url: string,
-    method: 'GET' | 'POST' | 'PUT',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     auth: string,
     jsonBody?: unknown,
   ): Promise<
@@ -578,29 +668,35 @@ export class BitbucketPrClient {
         signal: controller.signal,
       });
 
+      // A response body may be consumed only once, so read it here — before
+      // the status branching — and reuse the text on both the error and the
+      // 2xx paths. Empty bodies (e.g. a 204 No Content from DELETE) become ''.
+      const text = await response.text();
+
       if (response.status === 401) {
-        return { ok: false, status: 'unauthorized', message: '401 Unauthorized — check token' };
+        return { ok: false, status: 'unauthorized', message: this.describeHttpError('401 Unauthorized — check token', text) };
       }
       if (response.status === 403) {
-        return { ok: false, status: 'forbidden', message: '403 Forbidden — token lacks access' };
+        return { ok: false, status: 'forbidden', message: this.describeHttpError('403 Forbidden — token lacks access', text) };
       }
       if (response.status === 404) {
-        return { ok: false, status: 'not-found', message: '404 Not Found — check workspace / repo / PR id' };
+        return { ok: false, status: 'not-found', message: this.describeHttpError('404 Not Found — check workspace / repo / PR id', text) };
       }
       if (!response.ok) {
-        // Generic non-2xx — surface only status + statusText, never the body.
+        // Generic non-2xx (e.g. the 200-comments-per-PR cap comes back as a
+        // 400). Surface status + statusText enriched with Bitbucket's own
+        // reason, never the request headers or token.
         return {
           ok: false,
           status: 'unknown-error',
-          message: `${response.status} ${response.statusText || 'request failed'}`,
+          message: this.describeHttpError(`${response.status} ${response.statusText || 'request failed'}`, text),
         };
       }
 
       // 2xx: parse body as JSON. Empty bodies become `undefined`. A POST
-      // /resolve response may be empty in some Bitbucket configurations —
+      // /resolve or DELETE-comment (204 No Content) response is empty —
       // callers tolerate `undefined` because the discriminator alone tells
       // them the operation succeeded.
-      const text = await response.text();
       let body: unknown = undefined;
       if (text) {
         try {

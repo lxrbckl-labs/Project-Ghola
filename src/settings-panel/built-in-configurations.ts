@@ -47,7 +47,7 @@ const BASELINE_IDS: string[] = [
  * intentionally kept identical to the "Project" preset so a new install
  * loads a coherent set that matches a visible preset.
  */
-export const DEFAULT_ENABLED_IDS: string[] = [...BASELINE_IDS, 'mode.cd', 'tool.team-switchboard'];
+export const DEFAULT_ENABLED_IDS: string[] = [...BASELINE_IDS, 'mode.cd', 'tool.team-switchboard', 'tool.commit-push'];
 
 /**
  * The four SWT session-mode presets, seeded in array order. All carry
@@ -65,6 +65,7 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
       'tool.ac-to-testing',
       'tool.playwright',
       'tool.cross-ticket-isolation',
+      'tool.commit-push',
     ],
     settings: {
       'tool.lenses': { autoKickReviewOnColleagueBranch: true, autoKickPlanningOnFreshBranch: true },
@@ -75,7 +76,31 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
   {
     name: 'Project',
     enabledIds: [...DEFAULT_ENABLED_IDS],
-    settings: {},
+    // A keyValue override REPLACES the module's manifest default rather than
+    // deep-merging into it (see composer renderParameters / projectValueForAgent),
+    // so this block reproduces tool.npm-suite's FULL default allowedCommands map
+    // VERBATIM and then appends the sanctioned version-bump command. Dropping any
+    // of the reproduced entries would silently revoke it in Project sessions.
+    // Only the non-destructive `--no-git-tag-version` bump is added: it edits
+    // package.json + package-lock.json only, with no git commit, tag, or publish.
+    // The `value` field is the panel-only description (never passed to the agent);
+    // manifest em-dashes are rewritten to ASCII here to satisfy the source rule.
+    settings: {
+      'tool.npm-suite': {
+        allowedCommands: {
+          'npm test': { value: "Run the project's test script.", enabled: true },
+          'npm run lint': { value: 'Run the lint script if present.', enabled: true },
+          'npm run typecheck': { value: 'Run the typecheck script if present.', enabled: true },
+          'npm run build': { value: 'Build the project. Safe - produces artifacts in dist/ or build/ but does not modify source.', enabled: true },
+          'npm ls': { value: 'List installed dependency tree. Read-only.', enabled: true },
+          'npm outdated': { value: 'Show packages with newer versions available. Read-only.', enabled: true },
+          'ng test': { value: 'Run Angular CLI tests.', enabled: true },
+          'ng lint': { value: 'Run Angular CLI lint.', enabled: true },
+          'ng build': { value: 'Build the Angular project. Safe - produces artifacts in dist/ but does not modify source.', enabled: true },
+          'npm version <patch|minor|major> --no-git-tag-version': { value: 'Bump the version in package.json + package-lock.json only. The --no-git-tag-version form is mandatory: no git commit, no git tag, no publish; reversible and keeps the two version fields in sync.', enabled: true },
+        },
+      },
+    },
     isDefault: false,
   },
   {
@@ -89,7 +114,7 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
   },
   {
     name: 'Self Upgrade',
-    enabledIds: [...BASELINE_IDS, 'tool.self-upgrade', 'tool.github'],
+    enabledIds: [...BASELINE_IDS, 'tool.self-upgrade', 'tool.github', 'tool.commit-push'],
     // The composer emits a keyValue override VERBATIM (see composer.ts
     // renderParameters / projectValueForAgent): it iterates only the entries
     // present in the override and never merges the module's manifest default.

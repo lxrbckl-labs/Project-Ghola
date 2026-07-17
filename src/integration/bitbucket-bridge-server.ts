@@ -260,6 +260,12 @@ async function dispatch(
         prId: num(args.prId),
         commentId: num(args.commentId),
       });
+    case '/delete-comment':
+      return client.deleteComment({
+        repoSlug: str(args.repoSlug),
+        prId: num(args.prId),
+        commentId: num(args.commentId),
+      });
     case '/mark-ready':
       return client.markPrReady({
         repoSlug: str(args.repoSlug),

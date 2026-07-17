@@ -16,8 +16,8 @@
       "commitMessageFormat": {
         "type": "string",
         "label": "Commit Message Format",
-        "description": "Single-line template the dispatched agent fills in when writing the commit message from the staged diff. Placeholders the agent substitutes: [TICKET] for the active ticket id if known, <type> for the change type (feat, fix, chore, docs, refactor), and <summary> for a concise description. Keep this on one line; multi-line templates lose their newlines when passed to the agent. Changing this changes how every future button-triggered commit is worded.",
-        "default": "[TICKET] <type>: <summary>"
+        "description": "Single-line template the dispatched agent fills in when writing the commit message from the staged diff. Placeholders the agent substitutes: <TICKET> for the active ticket id if known, substituted bare, and <summary> for a concise description. When no ticket is known, the <TICKET>: prefix (the ticket id, colon, and following space) is dropped cleanly, so the message is just the summary — never a leading colon or space. Keep this on one line; multi-line templates lose their newlines when passed to the agent. Changing this changes how every future button-triggered commit is worded.",
+        "default": "<TICKET>: <summary>"
       }
     }
   }
