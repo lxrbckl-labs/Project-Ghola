@@ -70,6 +70,28 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
     settings: {
       'tool.lenses': { autoKickReviewOnColleagueBranch: true, autoKickPlanningOnFreshBranch: true },
       'integration.bitbucket-pr-comments': { logCommentsEnabled: true, markReadyEnabled: true, toDraftEnabled: true },
+      // A keyValue override REPLACES the module's manifest default rather than
+      // deep-merging into it, so this block reproduces tool.npm-suite's FULL
+      // default allowedCommands map VERBATIM and then appends the sanctioned
+      // version-bump command, mirroring the Project preset so all three presets
+      // (Ticket Work, Project, Self Upgrade) grant the same set. Dropping any
+      // reproduced entry would silently revoke it in Ticket Work sessions.
+      // Only the non-destructive `--no-git-tag-version` bump is added: it edits
+      // package.json + package-lock.json only, with no git commit, tag, or publish.
+      'tool.npm-suite': {
+        allowedCommands: {
+          'npm test': { value: "Run the project's test script.", enabled: true },
+          'npm run lint': { value: 'Run the lint script if present.', enabled: true },
+          'npm run typecheck': { value: 'Run the typecheck script if present.', enabled: true },
+          'npm run build': { value: 'Build the project. Safe - produces artifacts in dist/ or build/ but does not modify source.', enabled: true },
+          'npm ls': { value: 'List installed dependency tree. Read-only.', enabled: true },
+          'npm outdated': { value: 'Show packages with newer versions available. Read-only.', enabled: true },
+          'ng test': { value: 'Run Angular CLI tests.', enabled: true },
+          'ng lint': { value: 'Run Angular CLI lint.', enabled: true },
+          'ng build': { value: 'Build the Angular project. Safe - produces artifacts in dist/ but does not modify source.', enabled: true },
+          'npm version <patch|minor|major> --no-git-tag-version': { value: 'Bump the version in package.json + package-lock.json only. The --no-git-tag-version form is mandatory: no git commit, no git tag, no publish; reversible and keeps the two version fields in sync.', enabled: true },
+        },
+      },
     },
     isDefault: false,
   },
@@ -179,6 +201,28 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
           'git reset --hard': { value: 'd', enabled: false, description: 'Reset HEAD and working tree; discards all uncommitted changes.' },
           'git stash clear': { value: 'd', enabled: false, description: 'Delete every stash entry; the entire stash stack is wiped.' },
           'git stash drop': { value: 'd', enabled: false, description: 'Delete a single stash entry from the stash stack.' },
+        },
+      },
+      // A keyValue override REPLACES the module's manifest default rather than
+      // deep-merging into it, so this block reproduces tool.npm-suite's FULL
+      // default allowedCommands map VERBATIM and then appends the sanctioned
+      // version-bump command, mirroring the Project preset so all three presets
+      // (Ticket Work, Project, Self Upgrade) grant the same set. Dropping any
+      // reproduced entry would silently revoke it in Self Upgrade sessions.
+      // Only the non-destructive `--no-git-tag-version` bump is added: it edits
+      // package.json + package-lock.json only, with no git commit, tag, or publish.
+      'tool.npm-suite': {
+        allowedCommands: {
+          'npm test': { value: "Run the project's test script.", enabled: true },
+          'npm run lint': { value: 'Run the lint script if present.', enabled: true },
+          'npm run typecheck': { value: 'Run the typecheck script if present.', enabled: true },
+          'npm run build': { value: 'Build the project. Safe - produces artifacts in dist/ or build/ but does not modify source.', enabled: true },
+          'npm ls': { value: 'List installed dependency tree. Read-only.', enabled: true },
+          'npm outdated': { value: 'Show packages with newer versions available. Read-only.', enabled: true },
+          'ng test': { value: 'Run Angular CLI tests.', enabled: true },
+          'ng lint': { value: 'Run Angular CLI lint.', enabled: true },
+          'ng build': { value: 'Build the Angular project. Safe - produces artifacts in dist/ but does not modify source.', enabled: true },
+          'npm version <patch|minor|major> --no-git-tag-version': { value: 'Bump the version in package.json + package-lock.json only. The --no-git-tag-version form is mandatory: no git commit, no git tag, no publish; reversible and keeps the two version fields in sync.', enabled: true },
         },
       },
     },

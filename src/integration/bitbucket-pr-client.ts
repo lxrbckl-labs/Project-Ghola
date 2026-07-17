@@ -7,16 +7,20 @@
  *
  * Security contract — read before extending:
  *   - The constructor receives an `AtlassianBridge` (token source) and a
- *     workspace-slug accessor. Each request reads the Bitbucket token via
- *     `bridge.getBitbucketToken()`, builds the `Authorization: Basic
- *     <base64(email:token)>` header inside `request()`, and lets the request
- *     object fall out of scope when the call resolves. The token is NEVER
- *     logged, returned to the webview, embedded in error messages, stored on
- *     the instance, or otherwise echoed.
+ *     workspace-slug accessor. Each operation reads the ORDERED Bitbucket token
+ *     list via `bridge.getBitbucketTokens()` and runs a shared round-robin
+ *     failover loop (`withBitbucketFailover`): the `Authorization: Basic
+ *     <base64(email:token)>` header is rebuilt INSIDE each attempt from that
+ *     attempt's token, so a token swap takes effect for every request in the
+ *     operation (including a paginated list). Each request object falls out of
+ *     scope when the call resolves. Tokens are NEVER logged, returned to the
+ *     webview, embedded in error messages, stored on the instance, or otherwise
+ *     echoed — the failover loop treats them as opaque strings.
  *   - Every public method returns a typed result shape — they never throw to
  *     the caller. Non-2xx responses and network failures are mapped to a
  *     sanitized `status: 'unauthorized' | 'forbidden' | 'not-found' |
- *     'network-error' | 'unknown-error'` value with a user-facing `message`.
+ *     'rate-limited' | 'network-error' | 'unknown-error'` value with a
+ *     user-facing `message` (429 carries `retryAfter`, never acted on).
  *     On a non-2xx response the message is enriched with Bitbucket's own
  *     `error.message` (its documented `{type:"error",error:{message}}` shape)
  *     so callers see the real cause; that text is Bitbucket's, never the
@@ -30,6 +34,11 @@
 
 import type { AtlassianBridge } from '../extension';
 import { AtlassianClient, type PrLookupResult } from './atlassian-client';
+import {
+  withBitbucketFailover,
+  withTransientRetry,
+  parseRetryAfterSeconds,
+} from './bitbucket-failover';
 
 /** Per-request timeout. Mirrors `atlassian-client.ts` so a wedged network
  *  cannot hang the extension UI thread. */
@@ -44,12 +53,16 @@ const BITBUCKET_BASE_URL = 'https://api.bitbucket.org/2.0';
  *  hit we still return `status: 'ok'` but flag truncation via `message`. */
 const COMMENT_PAGE_CAP = 200;
 
-/** Discriminator carried on every result shape returned by this client. */
+/** Discriminator carried on every result shape returned by this client.
+ *  `'rate-limited'` maps a 429 distinctly (Phase 0 noted 429s previously fell
+ *  into `'unknown-error'`), keeping this client's taxonomy consistent with
+ *  `atlassian-client.ts`'s `RequestFailure` `'ratelimit'` kind. */
 export type BitbucketPrStatus =
   | 'ok'
   | 'unauthorized'
   | 'forbidden'
   | 'not-found'
+  | 'rate-limited'
   | 'network-error'
   | 'unknown-error';
 
@@ -81,6 +94,9 @@ export interface PrCommentListResult {
   comments: PrComment[];
   /** Sanitized, user-facing string. Also set on `'ok'` when truncation occurs. */
   message?: string;
+  /** Raw `Retry-After` header value carried verbatim on a `'rate-limited'`
+   *  (429) result. Carried, never acted on — a later phase may honor it. */
+  retryAfter?: string;
 }
 
 export interface PrReplyResult {
@@ -88,26 +104,36 @@ export interface PrReplyResult {
   /** Returned by Bitbucket on a successful create. */
   commentId?: number;
   message?: string;
+  /** Raw `Retry-After` on a `'rate-limited'` result; carried, never acted on. */
+  retryAfter?: string;
 }
 
 export interface PrResolveResult {
   status: BitbucketPrStatus;
   message?: string;
+  /** Raw `Retry-After` on a `'rate-limited'` result; carried, never acted on. */
+  retryAfter?: string;
 }
 
 export interface PrDeleteResult {
   status: BitbucketPrStatus;
   message?: string;
+  /** Raw `Retry-After` on a `'rate-limited'` result; carried, never acted on. */
+  retryAfter?: string;
 }
 
 export interface PrReadyResult {
   status: BitbucketPrStatus;
   message?: string;
+  /** Raw `Retry-After` on a `'rate-limited'` result; carried, never acted on. */
+  retryAfter?: string;
 }
 
 export interface PrDraftResult {
   status: BitbucketPrStatus;
   message?: string;
+  /** Raw `Retry-After` on a `'rate-limited'` result; carried, never acted on. */
+  retryAfter?: string;
 }
 
 export interface PrCreateResult {
@@ -117,6 +143,8 @@ export interface PrCreateResult {
   /** Web (`links.html.href`) URL of the created PR, for the user to open. */
   url?: string;
   message?: string;
+  /** Raw `Retry-After` on a `'rate-limited'` result; carried, never acted on. */
+  retryAfter?: string;
 }
 
 // ─── Minimal slices of the Bitbucket response shapes we read ──────────────
@@ -182,15 +210,14 @@ interface BitbucketErrorEnvelope {
 
 /**
  * Bitbucket Cloud PR-comments client. Cheap to construct — holds no token
- * state; each request re-reads the token from the bridge so a cleared token
- * is honored without rebuilding the client.
+ * state; each operation re-reads the token list from the bridge so a cleared or
+ * reordered list is honored without rebuilding the client.
  *
  * `email` is read from the same workspace-state field the rest of the
  * extension uses (`integration.atlassian-suite::email`) via the
- * `getAtlassianSetting` callback. The bridge supplies the Bitbucket token.
- * The workspace slug is read the same way as `email`. We deliberately do not
- * widen `AtlassianBridge` with new methods — the existing `getJiraToken` /
- * `getBitbucketToken` contract stays minimal and per-product.
+ * `getAtlassianSetting` callback. The bridge supplies the ordered Bitbucket
+ * token list via `getBitbucketTokens()` (a Phase 1 accessor — no new bridge
+ * method is added here). The workspace slug is read the same way as `email`.
  */
 export class BitbucketPrClient {
   constructor(
@@ -208,10 +235,12 @@ export class BitbucketPrClient {
    * lookup here keeps the agent-side caller graph clean.
    */
   async findOpenPrForBranch(repoSlug: string, branch: string): Promise<PrLookupResult> {
-    const { email, workspace, token } = await this.readAuthContext();
+    const { email, workspace, tokens } = await this.readAuthContext();
+    // Hand the full token list to `AtlassianClient`, which runs the SAME shared
+    // failover loop (and shares the cursor) for its Bitbucket lookup.
     const client = new AtlassianClient({
       email,
-      bitbucketToken: token,
+      bitbucketTokens: tokens,
       jiraBase: '',
       bitbucketWorkspace: workspace,
     });
@@ -234,39 +263,43 @@ export class BitbucketPrClient {
     if (!repoSlug || !Number.isFinite(prId)) {
       return { status: 'not-found', comments: [], message: 'Missing repo or PR id' };
     }
-    const { email, workspace, token, missing } = await this.readAuthContext();
+    const { email, workspace, tokens, missing } = await this.readAuthContext();
     if (missing) return { status: 'unauthorized', comments: [], message: missing };
 
-    const auth = this.buildAuthHeader(email, token);
-    const comments: PrComment[] = [];
-    let nextUrl: string | undefined =
-      `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
-      `/${encodeURIComponent(repoSlug)}/pullrequests/${encodeURIComponent(String(prId))}/comments?pagelen=50`;
-    let truncated = false;
+    // The ENTIRE pagination walk runs inside the failover callback so a failed
+    // page on token A restarts the whole list from page 1 on token B, with the
+    // auth header rebuilt from token B for every page.
+    return this.runWithFailover(email, tokens, async (auth): Promise<PrCommentListResult> => {
+      const comments: PrComment[] = [];
+      let nextUrl: string | undefined =
+        `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
+        `/${encodeURIComponent(repoSlug)}/pullrequests/${encodeURIComponent(String(prId))}/comments?pagelen=50`;
+      let truncated = false;
 
-    while (nextUrl) {
-      const res = await this.request(nextUrl, 'GET', auth);
-      if (!res.ok) return { status: res.status, comments: [], message: res.message };
-      const body = res.body as BitbucketCommentListResponse | undefined;
-      const values = Array.isArray(body?.values) ? body!.values : [];
-      for (const raw of values) {
-        if (raw?.deleted === true) continue;
-        const normalized = this.normalizeComment(raw);
-        if (normalized) comments.push(normalized);
-        if (comments.length >= COMMENT_PAGE_CAP) {
-          truncated = true;
-          break;
+      while (nextUrl) {
+        const res = await this.request(nextUrl, 'GET', auth);
+        if (!res.ok) return { status: res.status, comments: [], message: res.message, retryAfter: res.retryAfter };
+        const body = res.body as BitbucketCommentListResponse | undefined;
+        const values = Array.isArray(body?.values) ? body!.values : [];
+        for (const raw of values) {
+          if (raw?.deleted === true) continue;
+          const normalized = this.normalizeComment(raw);
+          if (normalized) comments.push(normalized);
+          if (comments.length >= COMMENT_PAGE_CAP) {
+            truncated = true;
+            break;
+          }
         }
+        if (truncated) break;
+        nextUrl = typeof body?.next === 'string' ? body.next : undefined;
       }
-      if (truncated) break;
-      nextUrl = typeof body?.next === 'string' ? body.next : undefined;
-    }
 
-    const result: PrCommentListResult = { status: 'ok', comments };
-    if (truncated) {
-      result.message = `Truncated at ${COMMENT_PAGE_CAP} comments — older comments omitted`;
-    }
-    return result;
+      const result: PrCommentListResult = { status: 'ok', comments };
+      if (truncated) {
+        result.message = `Truncated at ${COMMENT_PAGE_CAP} comments — older comments omitted`;
+      }
+      return result;
+    });
   }
 
   /**
@@ -292,10 +325,9 @@ export class BitbucketPrClient {
     if (!args.body) {
       return { status: 'unknown-error', message: 'Reply body is empty' };
     }
-    const { email, workspace, token, missing } = await this.readAuthContext();
+    const { email, workspace, tokens, missing } = await this.readAuthContext();
     if (missing) return { status: 'unauthorized', message: missing };
 
-    const auth = this.buildAuthHeader(email, token);
     const url =
       `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
       `/${encodeURIComponent(args.repoSlug)}/pullrequests/${encodeURIComponent(String(args.prId))}/comments`;
@@ -316,11 +348,13 @@ export class BitbucketPrClient {
       payload.inline = inlinePayload;
     }
 
-    const res = await this.request(url, 'POST', auth, payload);
-    if (!res.ok) return { status: res.status, message: res.message };
-    const body = res.body as BitbucketComment | undefined;
-    const id = typeof body?.id === 'number' ? body.id : undefined;
-    return { status: 'ok', commentId: id };
+    return this.runWithFailover(email, tokens, async (auth): Promise<PrReplyResult> => {
+      const res = await this.request(url, 'POST', auth, payload);
+      if (!res.ok) return { status: res.status, message: res.message, retryAfter: res.retryAfter };
+      const body = res.body as BitbucketComment | undefined;
+      const id = typeof body?.id === 'number' ? body.id : undefined;
+      return { status: 'ok', commentId: id };
+    });
   }
 
   /**
@@ -347,18 +381,19 @@ export class BitbucketPrClient {
     ) {
       return { status: 'not-found', message: 'Missing repo, PR id, or comment id' };
     }
-    const { email, workspace, token, missing } = await this.readAuthContext();
+    const { email, workspace, tokens, missing } = await this.readAuthContext();
     if (missing) return { status: 'unauthorized', message: missing };
 
-    const auth = this.buildAuthHeader(email, token);
     const url =
       `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
       `/${encodeURIComponent(args.repoSlug)}/pullrequests/${encodeURIComponent(String(args.prId))}` +
       `/comments/${encodeURIComponent(String(args.commentId))}/resolve`;
 
-    const res = await this.request(url, 'POST', auth);
-    if (!res.ok) return { status: res.status, message: res.message };
-    return { status: 'ok' };
+    return this.runWithFailover(email, tokens, async (auth): Promise<PrResolveResult> => {
+      const res = await this.request(url, 'POST', auth);
+      if (!res.ok) return { status: res.status, message: res.message, retryAfter: res.retryAfter };
+      return { status: 'ok' };
+    });
   }
 
   /**
@@ -385,18 +420,19 @@ export class BitbucketPrClient {
     ) {
       return { status: 'not-found', message: 'Missing repo, PR id, or comment id' };
     }
-    const { email, workspace, token, missing } = await this.readAuthContext();
+    const { email, workspace, tokens, missing } = await this.readAuthContext();
     if (missing) return { status: 'unauthorized', message: missing };
 
-    const auth = this.buildAuthHeader(email, token);
     const url =
       `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
       `/${encodeURIComponent(args.repoSlug)}/pullrequests/${encodeURIComponent(String(args.prId))}` +
       `/comments/${encodeURIComponent(String(args.commentId))}`;
 
-    const res = await this.request(url, 'DELETE', auth);
-    if (!res.ok) return { status: res.status, message: res.message };
-    return { status: 'ok' };
+    return this.runWithFailover(email, tokens, async (auth): Promise<PrDeleteResult> => {
+      const res = await this.request(url, 'DELETE', auth);
+      if (!res.ok) return { status: res.status, message: res.message, retryAfter: res.retryAfter };
+      return { status: 'ok' };
+    });
   }
 
   /**
@@ -413,22 +449,25 @@ export class BitbucketPrClient {
     if (!args.repoSlug || !Number.isFinite(args.prId)) {
       return { status: 'not-found', message: 'Missing repo or PR id' };
     }
-    const { email, workspace, token, missing } = await this.readAuthContext();
+    const { email, workspace, tokens, missing } = await this.readAuthContext();
     if (missing) return { status: 'unauthorized', message: missing };
 
-    const auth = this.buildAuthHeader(email, token);
     const url =
       `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
       `/${encodeURIComponent(args.repoSlug)}/pullrequests/${encodeURIComponent(String(args.prId))}`;
 
-    const getRes = await this.request(url, 'GET', auth);
-    if (!getRes.ok) return { status: getRes.status, message: getRes.message };
-    const current = getRes.body as BitbucketPullRequest | undefined;
-    const title = typeof current?.title === 'string' ? current.title : '';
+    // GET-then-PUT run inside ONE failover attempt so both requests use the same
+    // token; if either fails, the whole ready-flip retries on the next token.
+    return this.runWithFailover(email, tokens, async (auth): Promise<PrReadyResult> => {
+      const getRes = await this.request(url, 'GET', auth);
+      if (!getRes.ok) return { status: getRes.status, message: getRes.message, retryAfter: getRes.retryAfter };
+      const current = getRes.body as BitbucketPullRequest | undefined;
+      const title = typeof current?.title === 'string' ? current.title : '';
 
-    const putRes = await this.request(url, 'PUT', auth, { title, draft: false });
-    if (!putRes.ok) return { status: putRes.status, message: putRes.message };
-    return { status: 'ok' };
+      const putRes = await this.request(url, 'PUT', auth, { title, draft: false });
+      if (!putRes.ok) return { status: putRes.status, message: putRes.message, retryAfter: putRes.retryAfter };
+      return { status: 'ok' };
+    });
   }
 
   /**
@@ -442,22 +481,25 @@ export class BitbucketPrClient {
     if (!args.repoSlug || !Number.isFinite(args.prId)) {
       return { status: 'not-found', message: 'Missing repo or PR id' };
     }
-    const { email, workspace, token, missing } = await this.readAuthContext();
+    const { email, workspace, tokens, missing } = await this.readAuthContext();
     if (missing) return { status: 'unauthorized', message: missing };
 
-    const auth = this.buildAuthHeader(email, token);
     const url =
       `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
       `/${encodeURIComponent(args.repoSlug)}/pullrequests/${encodeURIComponent(String(args.prId))}`;
 
-    const getRes = await this.request(url, 'GET', auth);
-    if (!getRes.ok) return { status: getRes.status, message: getRes.message };
-    const current = getRes.body as BitbucketPullRequest | undefined;
-    const title = typeof current?.title === 'string' ? current.title : '';
+    // GET-then-PUT run inside ONE failover attempt so both requests use the same
+    // token; if either fails, the whole draft-flip retries on the next token.
+    return this.runWithFailover(email, tokens, async (auth): Promise<PrDraftResult> => {
+      const getRes = await this.request(url, 'GET', auth);
+      if (!getRes.ok) return { status: getRes.status, message: getRes.message, retryAfter: getRes.retryAfter };
+      const current = getRes.body as BitbucketPullRequest | undefined;
+      const title = typeof current?.title === 'string' ? current.title : '';
 
-    const putRes = await this.request(url, 'PUT', auth, { title, draft: true });
-    if (!putRes.ok) return { status: putRes.status, message: putRes.message };
-    return { status: 'ok' };
+      const putRes = await this.request(url, 'PUT', auth, { title, draft: true });
+      if (!putRes.ok) return { status: putRes.status, message: putRes.message, retryAfter: putRes.retryAfter };
+      return { status: 'ok' };
+    });
   }
 
   /**
@@ -489,10 +531,9 @@ export class BitbucketPrClient {
       if (!args.targetBranch) missingInputs.push('targetBranch');
       return { status: 'unauthorized', message: `Missing: ${missingInputs.join(', ')}` };
     }
-    const { email, workspace, token, missing } = await this.readAuthContext();
+    const { email, workspace, tokens, missing } = await this.readAuthContext();
     if (missing) return { status: 'unauthorized', message: missing };
 
-    const auth = this.buildAuthHeader(email, token);
     const url =
       `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
       `/${encodeURIComponent(args.repoSlug)}/pullrequests`;
@@ -510,12 +551,14 @@ export class BitbucketPrClient {
     if (args.description !== undefined) payload.description = args.description;
     if (args.draft !== undefined) payload.draft = args.draft;
 
-    const res = await this.request(url, 'POST', auth, payload);
-    if (!res.ok) return { status: res.status, message: res.message };
-    const body = res.body as BitbucketCreatedPullRequest | undefined;
-    const prId = typeof body?.id === 'number' ? body.id : undefined;
-    const href = typeof body?.links?.html?.href === 'string' ? body.links.html.href : undefined;
-    return { status: 'ok', prId, url: href };
+    return this.runWithFailover(email, tokens, async (auth): Promise<PrCreateResult> => {
+      const res = await this.request(url, 'POST', auth, payload);
+      if (!res.ok) return { status: res.status, message: res.message, retryAfter: res.retryAfter };
+      const body = res.body as BitbucketCreatedPullRequest | undefined;
+      const prId = typeof body?.id === 'number' ? body.id : undefined;
+      const href = typeof body?.links?.html?.href === 'string' ? body.links.html.href : undefined;
+      return { status: 'ok', prId, url: href };
+    });
   }
 
   // ─── Internal: shape normalization ────────────────────────────────────
@@ -557,28 +600,58 @@ export class BitbucketPrClient {
   // ─── Internal: auth + request ─────────────────────────────────────────
 
   /**
-   * Read `email`, `bitbucketWorkspace`, and the stored Bitbucket token in
-   * parallel. When any required value is empty we return a `missing` string
-   * naming the offenders so the public methods can short-circuit into the
-   * `unauthorized` shape with an explanatory message.
+   * Read `email`, `bitbucketWorkspace`, and the ordered Bitbucket token LIST in
+   * parallel. `tokens` is the rotation list (empty entries dropped) the failover
+   * loop cycles through; an empty list means "no Bitbucket token" and yields a
+   * `missing` string so the public methods short-circuit into the `unauthorized`
+   * shape exactly as the single-token path did. When exactly one token is stored
+   * the list has one element and every op makes exactly one attempt — identical
+   * to the pre-rotation behavior.
    */
   private async readAuthContext(): Promise<{
     email: string;
     workspace: string;
-    token: string;
+    tokens: string[];
     missing?: string;
   }> {
     const email = this.getAtlassianSetting('email');
     const workspace = this.getAtlassianSetting('bitbucketWorkspace');
-    const token = (await this.bridge.getBitbucketToken()) ?? '';
+    const entries = await this.bridge.getBitbucketTokens();
+    const tokens = entries
+      .map((e) => e.value)
+      .filter((v) => typeof v === 'string' && v !== '');
     const missingFields: string[] = [];
     if (!email) missingFields.push('email');
     if (!workspace) missingFields.push('bitbucketWorkspace');
-    if (!token) missingFields.push('bitbucketToken');
+    if (tokens.length === 0) missingFields.push('bitbucketToken');
     const missing = missingFields.length
       ? `Missing: ${missingFields.join(', ')}`
       : undefined;
-    return { email, workspace, token, missing };
+    return { email, workspace, tokens, missing };
+  }
+
+  /**
+   * Run a whole logical PR operation with round-robin token failover. Delegates
+   * the shared cursor + one-full-pass policy to `withBitbucketFailover`, and
+   * rebuilds the `Authorization` header from THIS attempt's token INSIDE the
+   * callback — so a token swap takes effect for every request in `run`
+   * (including a paginated `listPullRequestComments`, whose entire while-loop
+   * runs inside `run` and therefore retries wholesale on the next token). A
+   * result is a FAILURE (rotates) when its `status` is not `'ok'`; `'ok'`
+   * (including a truncated-but-successful list) sticks the cursor. After one
+   * full failed pass the LAST result is returned so its real status / message /
+   * retryAfter still surfaces.
+   */
+  private runWithFailover<T extends { status: BitbucketPrStatus }>(
+    email: string,
+    tokens: string[],
+    run: (auth: string) => Promise<T>,
+  ): Promise<T> {
+    return withBitbucketFailover(
+      tokens,
+      (token) => run(this.buildAuthHeader(email, token)),
+      (result) => result.status !== 'ok',
+    );
   }
 
   /**
@@ -646,7 +719,46 @@ export class BitbucketPrClient {
     jsonBody?: unknown,
   ): Promise<
     | { ok: true; body: unknown }
-    | { ok: false; status: BitbucketPrStatus; message: string }
+    | { ok: false; status: BitbucketPrStatus; message: string; retryAfter?: string; httpStatus?: number }
+  > {
+    // Bounded transient retry on the SAME token (the auth header is captured by
+    // the closure), composed UNDER `runWithFailover`'s token rotation: a
+    // TRANSIENT failure (429 / network / 5xx) retries here with backoff; an auth
+    // failure (401/403), a 404, or any other non-2xx returns at once so failover
+    // can rotate on auth as before. `httpStatus` on the failure lets us tell a
+    // retryable 5xx apart from a non-retryable 4xx that also maps to
+    // `'unknown-error'`. The auth header is never logged during a retry.
+    return withTransientRetry(
+      () => this.requestOnce(url, method, auth, jsonBody),
+      (r) => {
+        if (r.ok) return { retry: false };
+        if (r.status === 'rate-limited') {
+          const secs = parseRetryAfterSeconds(r.retryAfter);
+          return { retry: true, retryAfterMs: secs !== undefined ? secs * 1000 : undefined };
+        }
+        if (r.status === 'network-error') return { retry: true };
+        if (typeof r.httpStatus === 'number' && r.httpStatus >= 500) return { retry: true };
+        return { retry: false };
+      },
+    );
+  }
+
+  /**
+   * Perform ONE request attempt. A fresh `AbortController` / timeout is created
+   * per call so every retry gets its own 8 s deadline. Same status mapping and
+   * token-leak audit as before; additionally carries the raw `httpStatus` on the
+   * failure branch so the retry classifier can distinguish a retryable 5xx from
+   * a non-retryable 4xx (both otherwise map to `'unknown-error'`). `httpStatus`
+   * is internal — the public result shapes never surface it.
+   */
+  private async requestOnce(
+    url: string,
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    auth: string,
+    jsonBody?: unknown,
+  ): Promise<
+    | { ok: true; body: unknown }
+    | { ok: false; status: BitbucketPrStatus; message: string; retryAfter?: string; httpStatus?: number }
   > {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -674,21 +786,38 @@ export class BitbucketPrClient {
       const text = await response.text();
 
       if (response.status === 401) {
-        return { ok: false, status: 'unauthorized', message: this.describeHttpError('401 Unauthorized — check token', text) };
+        return { ok: false, status: 'unauthorized', httpStatus: 401, message: this.describeHttpError('401 Unauthorized — check token', text) };
       }
       if (response.status === 403) {
-        return { ok: false, status: 'forbidden', message: this.describeHttpError('403 Forbidden — token lacks access', text) };
+        return { ok: false, status: 'forbidden', httpStatus: 403, message: this.describeHttpError('403 Forbidden — token lacks access', text) };
       }
       if (response.status === 404) {
-        return { ok: false, status: 'not-found', message: this.describeHttpError('404 Not Found — check workspace / repo / PR id', text) };
+        return { ok: false, status: 'not-found', httpStatus: 404, message: this.describeHttpError('404 Not Found — check workspace / repo / PR id', text) };
+      }
+      if (response.status === 429) {
+        // Rate limited. Map distinctly to `'rate-limited'` and capture
+        // `Retry-After` verbatim (seconds or an HTTP-date) so it is not lost.
+        // The transient-retry wrapper honors it (waiting on the SAME token);
+        // if retries are exhausted the failover loop rotates like any failure.
+        const retryAfter = response.headers.get('retry-after');
+        const result: { ok: false; status: BitbucketPrStatus; message: string; retryAfter?: string; httpStatus?: number } = {
+          ok: false,
+          status: 'rate-limited',
+          httpStatus: 429,
+          message: this.describeHttpError('429 Too Many Requests — rate limited', text),
+        };
+        if (retryAfter) result.retryAfter = retryAfter;
+        return result;
       }
       if (!response.ok) {
         // Generic non-2xx (e.g. the 200-comments-per-PR cap comes back as a
-        // 400). Surface status + statusText enriched with Bitbucket's own
-        // reason, never the request headers or token.
+        // 400, or a transient 5xx). Surface status + statusText enriched with
+        // Bitbucket's own reason, never the request headers or token. The raw
+        // `httpStatus` lets the retry classifier retry a 5xx but not a 4xx.
         return {
           ok: false,
           status: 'unknown-error',
+          httpStatus: response.status,
           message: this.describeHttpError(`${response.status} ${response.statusText || 'request failed'}`, text),
         };
       }

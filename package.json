@@ -2,7 +2,7 @@
   "name": "ghola",
   "displayName": "Ghola",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.18.5",
+  "version": "0.19.0",
   "icon": "resources/icon-source.png",
   "publisher": "local",
   "engines": {
@@ -13,8 +13,7 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished",
-    "onView:gholaTicketWidget"
+    "onStartupFinished"
   ],
   "contributes": {
     "commands": [
@@ -192,17 +191,6 @@
           "description": "Show the Ghola mode / War Mode indicator in the VS Code status bar."
         }
       }
-    },
-    "views": {
-      "scm": [
-        {
-          "type": "webview",
-          "id": "gholaTicketWidget",
-          "name": "Ghola Ticket Widget",
-          "icon": "$(tasklist)",
-          "when": "ghola.ticketWork.widgetEnabled"
-        }
-      ]
     },
     "menus": {
       "scm/title": [

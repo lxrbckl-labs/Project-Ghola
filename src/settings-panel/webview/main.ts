@@ -40,13 +40,21 @@ interface FeedbackLoadedMessage {
 // ─── Atlassian Suite protocol types ─────────────────────────────────────────
 // Local re-declarations kept in sync with src/settings-panel/protocol.ts.
 
+/** Masked descriptor of one stored Bitbucket token (never the value). */
+interface BitbucketTokenStatus {
+  id: string;
+  label: string;
+  set: boolean;
+  last4?: string;
+}
+
 interface AtlassianTokenStatusMessage {
   type: 'atlassianTokenStatus';
   jiraSet: boolean;
-  bitbucketSet: boolean;
-  /** Last 4 chars of the stored token (masked confirmation hint), if any. */
+  /** Last 4 chars of the stored Jira token (masked confirmation hint), if any. */
   jiraLast4?: string;
-  bitbucketLast4?: string;
+  /** One masked descriptor per stored Bitbucket token, in failover order. */
+  bitbucketTokens: BitbucketTokenStatus[];
 }
 
 interface AtlassianValidationProductStatus {
@@ -55,9 +63,14 @@ interface AtlassianValidationProductStatus {
   displayName?: string;
 }
 
+/** Per-token Bitbucket validation outcome, joined to a row by `id`. */
+interface BitbucketTokenValidation extends AtlassianValidationProductStatus {
+  id: string;
+}
+
 interface AtlassianValidationResult {
   jira: AtlassianValidationProductStatus;
-  bitbucket: AtlassianValidationProductStatus;
+  bitbucket: BitbucketTokenValidation[];
   lastCheckedAt: string;
 }
 
@@ -221,22 +234,24 @@ interface UIState {
    */
   atlassianJiraTokenSet: boolean;
   /**
-   * Whether the Bitbucket API token is currently stored in SecretStorage.
-   * Set by 'atlassianTokenStatus' messages from the host; never contains the
-   * actual token value.
+   * Ordered list of masked Bitbucket token descriptors (id + label + last4),
+   * in failover order. Set by 'atlassianTokenStatus' messages from the host;
+   * never contains an actual token value.
    */
-  atlassianBitbucketTokenSet: boolean;
+  atlassianBitbucketTokens: BitbucketTokenStatus[];
   /**
-   * Last 4 characters of the stored Jira / Bitbucket token — a masked
-   * confirmation fingerprint sent by the host so the operator can verify a
-   * token was replaced. Never the full token. Undefined when unset.
+   * Last 4 characters of the stored Jira token — a masked confirmation
+   * fingerprint sent by the host so the operator can verify a token was
+   * replaced. Never the full token. Undefined when unset.
    */
   atlassianJiraTokenLast4?: string;
-  atlassianBitbucketTokenLast4?: string;
   /** Whether the Jira Clear token button is in its two-step confirm state. */
   atlassianJiraTokenConfirming: boolean;
-  /** Whether the Bitbucket Clear token button is in its two-step confirm state. */
-  atlassianBitbucketTokenConfirming: boolean;
+  /**
+   * Id of the Bitbucket token row whose Remove button is currently in its
+   * two-step confirm state, or null when none. Only one row confirms at a time.
+   */
+  atlassianBitbucketRemoveConfirmingId: string | null;
   /**
    * Last validation result received from the host. Null means no validation
    * has been run yet. Updated by 'atlassianValidationResult' messages.
@@ -371,9 +386,9 @@ const state: UIState = {
   selectedAlias: '',
   aliasFile: '~/.bashrc',
   atlassianJiraTokenSet: false,
-  atlassianBitbucketTokenSet: false,
+  atlassianBitbucketTokens: [],
   atlassianJiraTokenConfirming: false,
-  atlassianBitbucketTokenConfirming: false,
+  atlassianBitbucketRemoveConfirmingId: null,
   atlassianValidation: null,
   atlassianValidating: false,
   supportDiscovering: false,
@@ -732,12 +747,17 @@ function handleFeedbackLoaded(msg: FeedbackLoadedMessage): void {
  */
 function handleAtlassianTokenStatus(msg: AtlassianTokenStatusMessage): void {
   state.atlassianJiraTokenSet = msg.jiraSet;
-  state.atlassianBitbucketTokenSet = msg.bitbucketSet;
   state.atlassianJiraTokenLast4 = msg.jiraLast4;
-  state.atlassianBitbucketTokenLast4 = msg.bitbucketLast4;
+  state.atlassianBitbucketTokens = msg.bitbucketTokens ?? [];
   // Reset confirming state when tokens flip — the button context changes.
   state.atlassianJiraTokenConfirming = false;
-  state.atlassianBitbucketTokenConfirming = false;
+  // Drop a stale remove-confirm if that row no longer exists.
+  if (
+    state.atlassianBitbucketRemoveConfirmingId !== null &&
+    !state.atlassianBitbucketTokens.some((t) => t.id === state.atlassianBitbucketRemoveConfirmingId)
+  ) {
+    state.atlassianBitbucketRemoveConfirmingId = null;
+  }
   const isAtlassianDetailOpen =
     state.activeSection === 'modules' &&
     state.moduleView.mode === 'detail' &&
@@ -1959,7 +1979,7 @@ function openModuleDetail(moduleId: string): void {
   // also reset transient UI state so confirm/validating don't linger across navigations.
   if (moduleId === 'integration.atlassian-suite') {
     state.atlassianJiraTokenConfirming = false;
-    state.atlassianBitbucketTokenConfirming = false;
+    state.atlassianBitbucketRemoveConfirmingId = null;
     state.atlassianValidating = false;
     vscode.postMessage({ type: 'atlassianTokenStatusRequested' } as unknown as WebviewToHostMessage);
     vscode.postMessage({ type: 'atlassianValidationStatusRequested' } as unknown as WebviewToHostMessage);
@@ -3796,9 +3816,10 @@ function renderQaConfigBlock(): HTMLElement {
 }
 
 /**
- * Atlassian Suite API token slots container. Renders two stacked token slots —
- * one for Jira and one for Bitbucket — followed by a single shared helper link.
- * Token values are NEVER read or displayed — only set/cleared status flows here.
+ * Atlassian Suite API token slots container. Renders the Jira single-token slot
+ * followed by the Bitbucket MULTI-token list (round-robin failover order), then
+ * a single shared helper link. Token values are NEVER read or displayed — only
+ * set/clear status and masked last-4 fragments flow here.
  */
 function renderAtlassianTokenSlots(): HTMLElement {
   const wrapper = el('div', { class: 'atlassian-token-slots' });
@@ -3820,21 +3841,7 @@ function renderAtlassianTokenSlots(): HTMLElement {
     getConfirming: () => state.atlassianJiraTokenConfirming,
   }));
 
-  wrapper.appendChild(renderSingleTokenSlot({
-    label: 'Bitbucket API Token',
-    tokenSet: state.atlassianBitbucketTokenSet,
-    last4: state.atlassianBitbucketTokenLast4,
-    confirming: state.atlassianBitbucketTokenConfirming,
-    validationStatus: validation?.bitbucket?.status,
-    onSet: () => {
-      vscode.postMessage({ type: 'atlassianSetBitbucketToken' } as unknown as WebviewToHostMessage);
-    },
-    onClear: () => {
-      vscode.postMessage({ type: 'atlassianClearBitbucketToken' } as unknown as WebviewToHostMessage);
-    },
-    setConfirming: (v) => { state.atlassianBitbucketTokenConfirming = v; },
-    getConfirming: () => state.atlassianBitbucketTokenConfirming,
-  }));
+  wrapper.appendChild(renderBitbucketTokenList());
 
   // Shared helper text + external link — shown once below both slots.
   const helper = el('div', { class: 'atlassian-token-helper' });
@@ -3849,6 +3856,220 @@ function renderAtlassianTokenSlots(): HTMLElement {
   wrapper.appendChild(helper);
 
   return wrapper;
+}
+
+/**
+ * Re-render only the Atlassian token block in place (preserving scroll and the
+ * surrounding validation block). Mirrors the replace-by-id pattern the token /
+ * validation message handlers use.
+ */
+function rerenderAtlassianTokenBlock(): void {
+  const tokenBlock = document.getElementById('atlassian-token-block');
+  if (!tokenBlock) return;
+  const fresh = renderAtlassianTokenSlots();
+  fresh.id = 'atlassian-token-block';
+  tokenBlock.replaceWith(fresh);
+}
+
+/**
+ * Render the Bitbucket MULTI-token list: a labelled header, one row per stored
+ * token (label · masked last-4 · Validate · Remove · reorder up/down), and an
+ * "Add token" control. Row order is the round-robin failover order. Token values
+ * are only ever SENT inbound (Add) — never displayed. Mirrors the single-slot
+ * chrome so it sits flush with the Jira slot above.
+ */
+function renderBitbucketTokenList(): HTMLElement {
+  const tokens = state.atlassianBitbucketTokens;
+  const validation = state.atlassianValidation;
+
+  const container = el('div', { class: 'atlassian-token-slot atlassian-token-list' });
+
+  // Leading key glyph — same credential-field affordance as the Jira slot.
+  const icon = el('span', { class: 'atlassian-token-slot-icon', 'aria-hidden': 'true' });
+  icon.innerHTML = KEY_ICON_SVG;
+  container.appendChild(icon);
+
+  // Body column: header, rows, add control.
+  const body = el('div', { class: 'atlassian-token-list-body' });
+
+  const header = el('div', { class: 'atlassian-token-slot-label' });
+  header.textContent = 'Bitbucket API Tokens';
+  body.appendChild(header);
+
+  if (tokens.length === 0) {
+    const empty = textEl('div', 'No tokens set — add one below.', 'atlassian-token-status');
+    body.appendChild(empty);
+  } else {
+    const rows = el('div', { class: 'atlassian-token-rows' });
+    tokens.forEach((tok, index) => {
+      const rowStatus = validation?.bitbucket?.find((b) => b.id === tok.id)?.status;
+      rows.appendChild(renderBitbucketTokenRow(tok, index, tokens.length, rowStatus));
+    });
+    body.appendChild(rows);
+  }
+
+  body.appendChild(renderBitbucketAddControl());
+  container.appendChild(body);
+  return container;
+}
+
+/**
+ * One Bitbucket token row: reorder up/down, editable label, masked last-4,
+ * per-row Validate, and a two-step Remove. `index` / `total` gate the reorder
+ * arrows at the ends of the list.
+ */
+function renderBitbucketTokenRow(
+  tok: BitbucketTokenStatus,
+  index: number,
+  total: number,
+  validationStatus?: 'ok' | 'failed' | 'skipped',
+): HTMLElement {
+  const row = el('div', { class: 'atlassian-token-row' });
+
+  // ── Reorder arrows (order = failover priority) ──
+  const reorder = el('div', { class: 'atlassian-token-reorder' });
+  const upBtn = el('button', { class: 'icon-button', type: 'button', title: 'Move up', 'aria-label': 'Move token up' }) as HTMLButtonElement;
+  upBtn.textContent = '▲';
+  upBtn.disabled = index === 0;
+  upBtn.addEventListener('click', () => moveBitbucketToken(index, index - 1));
+  const downBtn = el('button', { class: 'icon-button', type: 'button', title: 'Move down', 'aria-label': 'Move token down' }) as HTMLButtonElement;
+  downBtn.textContent = '▼';
+  downBtn.disabled = index === total - 1;
+  downBtn.addEventListener('click', () => moveBitbucketToken(index, index + 1));
+  reorder.appendChild(upBtn);
+  reorder.appendChild(downBtn);
+  row.appendChild(reorder);
+
+  // ── Validation glyph (per-token) ──
+  const glyph = el('span', { class: `atlassian-token-row-glyph atlassian-validation-glyph-${validationStatus ?? 'none'}` });
+  glyph.textContent = validationStatus === 'ok' ? '✓' : validationStatus === 'failed' ? '✗' : '•';
+  row.appendChild(glyph);
+
+  // ── Editable label — commits on Enter / blur ──
+  const labelInput = el('input', {
+    type: 'text',
+    class: 'atlassian-token-label-input',
+    value: tok.label,
+    'aria-label': 'Token label',
+  }) as HTMLInputElement;
+  labelInput.value = tok.label;
+  const commitLabel = (): void => {
+    const next = labelInput.value.trim();
+    if (next !== '' && next !== tok.label) {
+      vscode.postMessage({ type: 'atlassianSetBitbucketTokenLabel', id: tok.id, label: next } as unknown as WebviewToHostMessage);
+    } else {
+      // Revert a blank edit to the stored label.
+      labelInput.value = tok.label;
+    }
+  };
+  labelInput.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); labelInput.blur(); }
+  });
+  labelInput.addEventListener('blur', commitLabel);
+  row.appendChild(labelInput);
+
+  // ── Masked last-4 fingerprint ──
+  const masked = textEl('span', tok.last4 ? `●●●●${tok.last4}` : '●●●●●●', 'atlassian-token-status');
+  row.appendChild(masked);
+
+  // ── Actions: Validate + Remove (two-step) ──
+  const actions = el('div', { class: 'atlassian-token-actions' });
+
+  const validateBtn = el('button', { class: 'secondary', type: 'button' }) as HTMLButtonElement;
+  validateBtn.textContent = 'Validate';
+  validateBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'atlassianValidateBitbucketToken', id: tok.id } as unknown as WebviewToHostMessage);
+  });
+  actions.appendChild(validateBtn);
+
+  const confirming = state.atlassianBitbucketRemoveConfirmingId === tok.id;
+  const removeBtn = el('button', { class: 'secondary atlassian-token-clear', type: 'button' }) as HTMLButtonElement;
+  removeBtn.textContent = confirming ? 'Confirm?' : 'Remove';
+  if (confirming) removeBtn.classList.add('atlassian-token-confirming');
+  removeBtn.addEventListener('click', () => {
+    if (state.atlassianBitbucketRemoveConfirmingId === tok.id) {
+      // Second click — execute the removal.
+      state.atlassianBitbucketRemoveConfirmingId = null;
+      vscode.postMessage({ type: 'atlassianRemoveBitbucketToken', id: tok.id } as unknown as WebviewToHostMessage);
+    } else {
+      // First click — enter confirming state, auto-reset after 2s.
+      state.atlassianBitbucketRemoveConfirmingId = tok.id;
+      rerenderAtlassianTokenBlock();
+      setTimeout(() => {
+        if (state.atlassianBitbucketRemoveConfirmingId === tok.id) {
+          state.atlassianBitbucketRemoveConfirmingId = null;
+          rerenderAtlassianTokenBlock();
+        }
+      }, 2000);
+    }
+  });
+  actions.appendChild(removeBtn);
+  row.appendChild(actions);
+
+  return row;
+}
+
+/**
+ * Compute a reordered id list swapping the token at `from` with `to` and send it
+ * to the host. Bounds-checked (the arrows are disabled at the ends, this is a
+ * belt-and-braces guard). The host re-broadcasts the list, which re-renders.
+ */
+function moveBitbucketToken(from: number, to: number): void {
+  const tokens = state.atlassianBitbucketTokens;
+  if (to < 0 || to >= tokens.length) return;
+  const order = tokens.map((t) => t.id);
+  const [moved] = order.splice(from, 1);
+  order.splice(to, 0, moved);
+  vscode.postMessage({ type: 'atlassianReorderBitbucketTokens', order } as unknown as WebviewToHostMessage);
+}
+
+/**
+ * The "Add token" control: an optional label field, a password-masked token
+ * field, and an Add button. On Add, the VALUE travels inbound to the host
+ * exactly like the single-token Set flow; the fields are then cleared. Empty
+ * token input is a no-op.
+ */
+function renderBitbucketAddControl(): HTMLElement {
+  const add = el('div', { class: 'atlassian-token-add' });
+
+  const labelInput = el('input', {
+    type: 'text',
+    class: 'atlassian-token-add-label',
+    placeholder: 'Label (optional)',
+    'aria-label': 'New token label',
+  }) as HTMLInputElement;
+
+  const tokenInput = el('input', {
+    type: 'password',
+    class: 'atlassian-token-add-value',
+    placeholder: 'Paste a Bitbucket API token',
+    'aria-label': 'New token value',
+  }) as HTMLInputElement;
+
+  const addBtn = el('button', { class: 'primary', type: 'button' }) as HTMLButtonElement;
+  addBtn.textContent = 'Add token';
+  const submit = (): void => {
+    const value = tokenInput.value.trim();
+    if (value === '') return;
+    const label = labelInput.value.trim();
+    vscode.postMessage({
+      type: 'atlassianAddBitbucketToken',
+      value,
+      ...(label !== '' ? { label } : {}),
+    } as unknown as WebviewToHostMessage);
+    // Clear inputs so the plaintext value never lingers in the DOM.
+    tokenInput.value = '';
+    labelInput.value = '';
+  };
+  addBtn.addEventListener('click', submit);
+  tokenInput.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); submit(); }
+  });
+
+  add.appendChild(labelInput);
+  add.appendChild(tokenInput);
+  add.appendChild(addBtn);
+  return add;
 }
 
 /**
@@ -4004,10 +4225,23 @@ function renderAtlassianValidationBlock(): HTMLElement {
 
   const statusLines = el('div', { class: 'atlassian-validation-status-lines' });
 
-  // Jira row
+  // Jira row (single aggregate)
   statusLines.appendChild(renderValidationStatusLine('Jira', result.jira, jiraHost));
-  // Bitbucket row
-  statusLines.appendChild(renderValidationStatusLine('Bitbucket', result.bitbucket, workspace));
+  // Bitbucket rows — one per token, labelled from the current masked list so a
+  // relabel is reflected here. A token in the result with no matching row (just
+  // removed) is skipped. When nothing has a status yet, show a single skipped line.
+  const labelById = new Map(state.atlassianBitbucketTokens.map((t) => [t.id, t.label]));
+  if (result.bitbucket.length === 0) {
+    statusLines.appendChild(
+      renderValidationStatusLine('Bitbucket', { status: 'skipped', message: 'no token set' }, workspace),
+    );
+  } else {
+    result.bitbucket.forEach((b) => {
+      const label = labelById.get(b.id);
+      const name = label ? `Bitbucket · ${label}` : 'Bitbucket';
+      statusLines.appendChild(renderValidationStatusLine(name, b, workspace));
+    });
+  }
 
   block.appendChild(statusLines);
 
@@ -4066,11 +4300,15 @@ function renderValidationStatusLine(
       break;
     case 'failed':
       glyphText = '✗'; // ✗
-      detail = `${product} — ${s.message ?? 'validation failed'}`;
+      detail = hint
+        ? `${product} (${hint}) — ${s.message ?? 'validation failed'}`
+        : `${product} — ${s.message ?? 'validation failed'}`;
       break;
     case 'skipped':
       glyphText = '—'; // —
-      detail = `${product} — ${s.message ?? 'skipped'}`;
+      detail = hint
+        ? `${product} (${hint}) — ${s.message ?? 'skipped'}`
+        : `${product} — ${s.message ?? 'skipped'}`;
       break;
     default:
       glyphText = '?';

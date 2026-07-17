@@ -22,7 +22,7 @@
       "autoOfferOnAcComplete": {
         "type": "boolean",
         "label": "Auto-Offer On AC Complete",
-        "description": "When on, TPM proactively offers to draft testing procedures when the user marks the last AC item complete in the Ticket Widget (or otherwise signals AC is met). When off, TPM only generates procedures when the user explicitly asks. On is the typical flow where testing is the next gesture after AC completion.",
+        "description": "When on, TPM proactively offers to draft testing procedures when the user signals AC is met (marking the last AC item complete, saying 'AC complete', etc.). When off, TPM only generates procedures when the user explicitly asks. On is the typical flow where testing is the next gesture after AC completion.",
         "default": true
       },
       "oneProcedurePerAcItem": {

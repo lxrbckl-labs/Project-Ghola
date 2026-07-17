@@ -127,9 +127,35 @@ export interface AtlassianValidationProductStatus {
   displayName?: string;
 }
 
+/**
+ * Per-token Bitbucket validation outcome. Extends the product status with the
+ * stable token `id` so the panel can join it back to the masked token row it
+ * came from. The token value is never present here — only the sanitized status.
+ */
+export interface BitbucketTokenValidation extends AtlassianValidationProductStatus {
+  id: string;
+}
+
+/**
+ * Non-secret masked descriptor of ONE stored Bitbucket token, safe to forward
+ * across the webview boundary. `set` is always true for a present entry (kept
+ * for symmetry with the single-token status fields); `last4` is the last four
+ * characters of the value, or undefined when shorter than four. Never the value.
+ */
+export interface BitbucketTokenStatus {
+  id: string;
+  label: string;
+  set: boolean;
+  last4?: string;
+}
+
 export interface AtlassianValidationResult {
   jira: AtlassianValidationProductStatus;
-  bitbucket: AtlassianValidationProductStatus;
+  /**
+   * PER-TOKEN Bitbucket outcome (one entry per stored token, keyed by `id`).
+   * Empty when no Bitbucket token is stored. Jira stays a single aggregate.
+   */
+  bitbucket: BitbucketTokenValidation[];
   /** ISO 8601 timestamp of when the validation probe completed. */
   lastCheckedAt: string;
 }
@@ -399,6 +425,21 @@ export type WebviewToHostMessage =
   | { type: 'atlassianClearJiraToken' }
   | { type: 'atlassianSetBitbucketToken' }
   | { type: 'atlassianClearBitbucketToken' }
+  // ── Multi-token Bitbucket list operations ── The token VALUE only ever
+  // travels INBOUND here (webview -> host, the user typing a token, exactly
+  // like the single-token Set flow); the host never sends a value back.
+  /** Append a new token to the list, with an optional label. */
+  | { type: 'atlassianAddBitbucketToken'; value: string; label?: string }
+  /** Remove the token with this stable id. */
+  | { type: 'atlassianRemoveBitbucketToken'; id: string }
+  /** Replace the secret value of the token with this id. */
+  | { type: 'atlassianReplaceBitbucketToken'; id: string; value: string }
+  /** Rename the token with this id. */
+  | { type: 'atlassianSetBitbucketTokenLabel'; id: string; label: string }
+  /** Reorder the token list — `order` is the new failover order of ids. */
+  | { type: 'atlassianReorderBitbucketTokens'; order: string[] }
+  /** Re-validate a single token by id (merged into the cached result). */
+  | { type: 'atlassianValidateBitbucketToken'; id: string }
   | { type: 'atlassianTokenStatusRequested' }
   /** Trigger an on-demand validation probe via the ghola.atlassianSuite.validateToken command. */
   | { type: 'atlassianValidate' }
@@ -549,16 +590,16 @@ export type HostToWebviewMessage =
   | { type: 'aliasesLoaded'; aliases: CliAlias[]; selectedAlias: string; aliasFile: string }
   | { type: 'aliasesSaved'; ok: boolean; error?: string }
   | { type: 'feedbackLoaded'; entries: FeedbackEntry[] }
-  // `jiraLast4` / `bitbucketLast4` are the LAST FOUR characters of each stored
-  // token (a masked confirmation fingerprint), or undefined when unset / shorter
-  // than 4 chars. Only this 4-char fragment ever crosses the webview boundary —
-  // never the full token — so the operator can confirm a token was replaced.
+  // `jiraLast4` is the LAST FOUR characters of the stored Jira token (a masked
+  // confirmation fingerprint), or undefined when unset / shorter than 4 chars.
+  // Bitbucket is now a LIST: `bitbucketTokens` carries one masked descriptor per
+  // stored token (id + label + last4). Only these fragments ever cross the
+  // webview boundary — never a full token value.
   | {
       type: 'atlassianTokenStatus';
       jiraSet: boolean;
-      bitbucketSet: boolean;
       jiraLast4?: string;
-      bitbucketLast4?: string;
+      bitbucketTokens: BitbucketTokenStatus[];
     }
   /**
    * Sent after a validation probe completes (event-driven) or in response to

@@ -1725,6 +1725,120 @@ button.module-row-chevron:focus-visible {
   color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
 }
 
+/* ─── Bitbucket multi-token list ─── Layout only; buttons reuse the global
+   button.primary / .secondary / .icon-button chrome and inputs mirror the
+   existing .field input material (see the .field input rule above). */
+
+/* The list container reuses .atlassian-token-slot for its border/background but
+   stacks its body vertically, so align the leading glyph to the top row. */
+.atlassian-token-list {
+  align-items: flex-start;
+}
+
+.atlassian-token-list-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.atlassian-token-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* One token row: [reorder] [glyph] [label input] [last4] … [actions]. */
+.atlassian-token-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Stacked up/down reorder arrows — tight column of two icon-buttons. */
+.atlassian-token-reorder {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.atlassian-token-reorder .icon-button {
+  width: 18px;
+  height: 14px;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.atlassian-token-reorder .icon-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Per-token validation glyph — colors mirror the validation block glyphs. */
+.atlassian-token-row-glyph {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Editable label field — mirrors the .field input material (background, border,
+   padding, inherited font) with the shared 3px radius. */
+.atlassian-token-label-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 200px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 4px 8px;
+  font: inherit;
+  border-radius: 3px;
+}
+
+.atlassian-token-label-input:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+/* Add-token control — label + password value + Add button on one wrapping row. */
+.atlassian-token-add {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.atlassian-token-add-label,
+.atlassian-token-add-value {
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 4px 8px;
+  font: inherit;
+  border-radius: 3px;
+}
+
+.atlassian-token-add-label {
+  flex: 0 1 140px;
+  min-width: 0;
+}
+
+.atlassian-token-add-value {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.atlassian-token-add-label:focus,
+.atlassian-token-add-value:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
 /* Helper text below buttons — links styled naturally; text is muted. */
 .atlassian-token-helper {
   font-size: 11px;

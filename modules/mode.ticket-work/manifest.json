@@ -31,30 +31,6 @@
         "label": "Notes Sections",
         "description": "Comma-separated list of top-level sections the per-ticket notes file should contain, in the order TPM writes them when creating the file. Trim entries you do not use or extend with custom sections to taste. Note that Session Handoff in this list is the heading the tool.session-handoff module manages — Ticket Work mode ensures the heading exists but defers the writing of that block to that module. The section structure, YAML frontmatter, update discipline, and per-type templates are defined authoritatively by tool.obsidian-notes; this list only selects which of that module's ticket-note catalog sections appear and in what order.",
         "default": "Ticket Summary, Implementation Notes, Changes Made, Edge Cases, Testing Procedures, QA Findings, Session Handoff"
-      },
-      "showWidget": {
-        "type": "boolean",
-        "label": "Show Ticket Widget",
-        "description": "Renders the Ticket Widget in the Source Control sidebar with the active ticket's summary, status, AC-derived todo list, and links to open the ticket in Jira or the related PR. Off hides the widget entirely without disabling the rest of the module. On is the default for the typical ticket-work flow where the widget is the primary touchpoint.",
-        "default": true
-      },
-      "parseAcAsTodo": {
-        "type": "boolean",
-        "label": "Parse AC As Todo List",
-        "description": "Auto-extracts a todo list from the Jira ticket description by scanning for an acceptance-criteria section. Each AC item becomes a checkbox in the widget that the user or TPM can mark complete as work ships. Off displays the widget without the todo section; users can still add manual items.",
-        "default": true
-      },
-      "acSectionMarker": {
-        "type": "string",
-        "label": "AC Section Marker",
-        "description": "The heading text in the Jira ticket description that marks the start of the acceptance-criteria list. Matched case-insensitively with substring containment, so \"Acceptance Criteria\", \"Acceptance criteria:\", and \"AC\" all work as configured. Has no effect when Parse AC As Todo List is off, or when the description already uses a Jira task list (which the widget detects automatically as the canonical AC source).",
-        "default": "Acceptance Criteria"
-      },
-      "widgetShowsPrButton": {
-        "type": "boolean",
-        "label": "Widget Shows PR Button",
-        "description": "Includes a PR button in the widget that opens the open pull request for the current branch when one exists, or the branch overview otherwise. Requires the Atlassian Suite to have a Bitbucket token configured. Off hides the PR button entirely; the Ticket button is unaffected.",
-        "default": true
       }
     }
   }

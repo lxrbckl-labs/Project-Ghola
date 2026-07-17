@@ -31,49 +31,6 @@ TPM does the following BEFORE responding to the user's first request:
 7. If the notes file exists, defer to `tool.session-handoff` for the resume surfacing — that module reads the most-recent `## Session Handoff` block and includes a summary in the opening message. This mode does not duplicate that surfacing.
 8. Include the ticket id and summary in the opening message so the user knows the scope: "Ticket Work mode — working on `<TICKET-ID>`: `<summary>`." Combine this with the notes-file message (step 6) and the session-handoff summary (step 7) into a single coherent opening rather than three separate messages.
 
-## Ticket Widget
-
-The Ticket Widget is a VS Code Source Control sidebar webview that activates whenever `mode.ticket-work` is enabled AND the branch-derived ticket id resolves successfully. It shows the active ticket's summary and status, an AC-derived todo list (when `parameters.parseAcAsTodo` is true), and two buttons that open the ticket in Jira or the related PR. When `parameters.showWidget` is false, the widget is hidden entirely but the rest of this mode's behavior is unaffected — ticket binding, notes, and cross-ticket discipline all continue.
-
-### AC extraction
-
-When the widget activates (or when the description changes upstream), it pulls the full ticket description via `integration.atlassian-suite`'s `getTicketDetails` helper and runs the description through a three-branch heuristic to populate the todo list:
-
-1. **Jira task list present.** If the description contains a Jira task list (a `taskList` ADF node), that is the canonical AC source — no further searching. Each `taskItem` maps to one todo, and its `state: "TODO" | "DONE"` carries straight over to the widget's done state.
-2. **AC heading match.** Otherwise, the widget finds the first heading whose text contains `parameters.acSectionMarker` (case-insensitive substring match) and collects every bullet or numbered list item under it until the next heading or end of description. Each list item becomes one todo.
-3. **First-list fallback.** Otherwise, the widget uses the first bullet or numbered list anywhere in the description as the AC source.
-4. **No match.** If none of the three branches match, the widget shows an empty AC section with an affordance to add items manually.
-
-### Done-state preservation across re-extracts
-
-When the description changes upstream and the widget re-pulls, it hashes each AC item's normalized text and merges the new extraction with the existing todo list:
-
-- AC items whose hash still appears in the new description **retain their current done state** — the user's checkmark survives a typo fix or a minor wording tweak that does not change the normalized text.
-- AC items whose hash no longer appears are **dropped** — the description removed them.
-- New AC items are **appended at the end**, in extraction order.
-- **Manual items added by the user persist verbatim** across re-extracts — they are never touched by the AC merge.
-
-### TPM-side interaction
-
-TPM checks AC items off as work ships, mirroring how it consolidates SWE returns into the `Changes Made` section of the per-ticket notes. When a SWE completes a unit of work that satisfies an AC item, TPM marks the corresponding todo as done; the widget UI auto-updates via the workspace-state event. TPM does NOT add new manual items unsolicited — that is the user's gesture. TPM may, however, suggest a manual item if a SWE flagged a missing AC item during work, and surface that suggestion to the user before adding it.
-
-### Buttons
-
-The widget shows one or two buttons depending on configuration:
-
-- **Ticket button** (always present) opens the active ticket in Jira at `${jiraBase}/browse/${ticketId}`, with `jiraBase` resolved from `integration.atlassian-suite`'s settings and `ticketId` the branch-derived ticket id from ticket resolution step 1.
-- **PR button** (present when `parameters.widgetShowsPrButton` is true and a Bitbucket token is configured) opens the open pull request for the current branch via `integration.atlassian-suite`'s `findOpenPrForBranch` helper. When no open PR exists for the branch, the button falls back to the branch overview URL. The PR button is hidden entirely when `parameters.widgetShowsPrButton` is false or when no Bitbucket token is configured — the Ticket button is unaffected by that.
-
-### Dependencies recap
-
-The widget composes three modules:
-
-- `integration.atlassian-suite` — provides `getTicketDetails` (ticket summary, status, description for AC extraction) and `findOpenPrForBranch` (PR button target).
-- `mode.ticket-work` (this module) — provides the branch-derived ticket id and the four widget-behavior settings (`showWidget`, `parseAcAsTodo`, `acSectionMarker`, `widgetShowsPrButton`).
-- An extension-side todos store keyed by ticket id, persisted in workspace state at `ghola.ticketWork.todos`.
-
-When the Atlassian Suite is disabled or its tokens are cleared, the widget falls back to "ticket id known, but cannot fetch description" — todos already extracted persist (the workspace-state store survives integration loss), but new extraction is blocked until tokens return. The Ticket button still works in this degraded state (the URL only needs `jiraBase` and the ticket id, both of which remain locally known); the PR button is hidden until the Bitbucket token returns.
-
 ## Cross-ticket discipline (mid-session scope binding)
 
 This is the core behavior of this mode. When the user references a ticket other than the active one — asks to look at it, asks SWE to investigate it, asks for a change there — TPM responds per `parameters.crossTicketStrictness`:

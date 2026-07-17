@@ -1,8 +1,8 @@
 {
   "id": "integration.atlassian-suite",
   "name": "Atlassian Suite",
-  "version": "0.3.0",
-  "description": "Manages Atlassian credentials (email, Jira base URL, Bitbucket workspace, per-product API tokens in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, and token validation. Also answers natural language sprint and board questions by forming JQL and querying Jira read only via the Atlassian MCP.",
+  "version": "0.4.1",
+  "description": "Manages Atlassian credentials (email, Jira base URL, Bitbucket workspace, a single Jira token plus an ordered list of Bitbucket API tokens with round-robin failover, all in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, and per-token validation. Also answers natural language sprint and board questions by forming JQL and querying Jira read only via the Atlassian MCP.",
   "proactive": false,
   "category": "integration",
   "kind": "capability",
@@ -29,7 +29,7 @@
       "bitbucketWorkspace": {
         "type": "string",
         "label": "Bitbucket Workspace",
-        "description": "Bitbucket Cloud workspace slug used as a fallback when the local repo's git remote URL cannot be parsed. Normally auto-detected from origin's URL; this value only takes effect when auto-detection fails.",
+        "description": "Bitbucket Cloud workspace slug (the organization slug, e.g. herzog-technologies) that scopes every branch and PR lookup. When set, this value takes priority; leave it blank to auto-detect the slug from origin's git remote URL. CRITICAL: a wrong or renamed slug makes find-pr query the wrong workspace and silently report no PR even when one exists — if PR lookups come up empty, verify this matches your actual Bitbucket workspace.",
         "default": "herzog-technologies"
       },
       "boardId": {

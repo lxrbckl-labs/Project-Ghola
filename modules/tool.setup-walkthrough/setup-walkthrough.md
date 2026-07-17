@@ -1,6 +1,6 @@
 # Setup Walkthrough
 
-When this module is loaded, TPM acts as the agent-driven first-time-setup playbook for new Ghola users — replacing the need to read SETUP.md cold. The module is proactive: it detects fresh-install state at session start and offers to walk the user through Obsidian vault setup, Atlassian credentials, default module selection, and the SCM-sidebar Ticket Widget. Only TPM reads this fragment; SWE and QA are not involved in the walkthrough.
+When this module is loaded, TPM acts as the agent-driven first-time-setup playbook for new Ghola users — replacing the need to read SETUP.md cold. The module is proactive: it detects fresh-install state at session start and offers to walk the user through Obsidian vault setup, Atlassian credentials, and default module selection. Only TPM reads this fragment; SWE and QA are not involved in the walkthrough.
 
 The walkthrough is a conversation, not a wizard. TPM presents one stage at a time (or the full list, depending on `parameters.paceMode`), waits for the user, and only moves on when the user signals they're done. The point is for the user to leave the session with a working Ghola configuration and an understanding of why each piece exists — not a checked box.
 
@@ -28,7 +28,7 @@ TPM never auto-offers. The walkthrough only fires when the user explicitly asks 
 
 At session start, when fresh-install is detected and `parameters.autoOfferOnFreshInstall` is true, TPM surfaces:
 
-> "Looks like this is a fresh setup — want me to walk you through Ghola's configuration? (about 5 stages, ~5 minutes)"
+> "Looks like this is a fresh setup — want me to walk you through Ghola's configuration? (about 4 stages, ~5 minutes)"
 
 The offer is a single sentence appended as a separate paragraph; it does not block the user's first real request. If the user accepts ("yes", "sure", "walk me through it"), TPM enters the walkthrough per `parameters.paceMode`. If the user declines or ignores the offer, TPM records the decision and does not re-offer in the same session — but will re-offer in the next session unless `parameters.completionTracking` has the walkthrough marked done.
 
@@ -61,7 +61,7 @@ TPM lists all enabled stages with one-line summaries and asks "Which would you l
 
 ## Default seeded stages
 
-The `parameters.stages` kv-table seeds with the five core Ghola setup stages. The user can reorder, add, or disable any of them through the Modules tab:
+The `parameters.stages` kv-table seeds with the four core Ghola setup stages. The user can reorder, add, or disable any of them through the Modules tab:
 
 ### `obsidian`
 
@@ -74,10 +74,6 @@ Walks the user through `integration.atlassian-suite` credential setup — the Ji
 ### `modules-default-set`
 
 Tours the Modules tab. Highlights which modules are default-enabled (the cores plus a few standard tools) and which are opt-in. Suggests typical-workflow toggles based on what the user says they do — ticket work suggests `mode.ticket-work`, PR review suggests `tool.pr-prep`, both suggests the full ticket-mode set. The stage ends when the user has reviewed and confirmed (or adjusted) the enabled set.
-
-### `scm-widgets`
-
-Points out the Ticket Widget in the Source Control sidebar. Explains when it appears — when Ticket Work mode is active with a ticket id set and the widget toggle is on. The stage ends when the user has seen the widget render (or knows which mode toggles to flip to see it).
 
 ### `first-session`
 

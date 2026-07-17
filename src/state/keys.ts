@@ -11,11 +11,9 @@ export const WORKSPACE_STATE_KEYS = {
   CONFIGURATIONS_SEEDED: 'ghola.configurations.seeded',
   CONFIGURATIONS_SEEDED_NAMES: 'ghola.configurations.seededNames',
   ACTIVE_CONFIGURATION_ID: 'ghola.activeConfigurationId',
-  TICKET_WORK_TODOS: 'ghola.ticketWork.todos',
   ATLASSIAN_LAST_VALIDATION: 'ghola.atlassianSuite.lastValidation',
 } as const;
 
 export const SET_CONTEXT_KEYS = {
-  TICKET_WORK_WIDGET_ENABLED: 'ghola.ticketWork.widgetEnabled',
   COMMIT_PUSH_ENABLED: 'ghola.commitPush.enabled',
 } as const;

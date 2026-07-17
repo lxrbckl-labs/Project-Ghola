@@ -16,7 +16,8 @@
  * Two public functions:
  *   - `adfToPlainText(adf)` — best-effort flattening for diffing / previewing.
  *   - `adfExtractAcceptanceCriteria(adf, headingMarker)` — heuristic AC list
- *     extractor used by the ticket widget's todo seeding flow.
+ *     extractor used by `tool.ac-to-testing` and `mode.ticket-work` to pull
+ *     acceptance criteria out of a ticket's description.
  */
 
 /** Narrow internal view of an ADF node. ADF is loosely typed in the wire

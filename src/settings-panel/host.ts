@@ -125,8 +125,8 @@ export class SettingsPanel implements vscode.Disposable {
     private readonly atlassianBridge: AtlassianBridge,
     /**
      * Emitter the host fires after every successful module-settings save (and
-     * after batch preset application). Signals the ticket widget provider and
-     * the context-key sync in `extension.ts` to re-pull updated settings.
+     * after batch preset application). Signals `extension.ts` subscribers (the
+     * mode / War Mode status-bar item) to re-pull updated settings.
      */
     private readonly moduleSettingsEmitter: vscode.EventEmitter<void>,
     private readonly logger?: vscode.OutputChannel,
@@ -449,6 +449,31 @@ export class SettingsPanel implements vscode.Disposable {
         break;
       case 'atlassianClearBitbucketToken':
         await vscode.commands.executeCommand('ghola.atlassianSuite.clearBitbucketToken');
+        break;
+      // ── Multi-token Bitbucket list operations ── The bridge mutators fire
+      // onDidChangeAtlassianTokenStatus (which re-broadcasts the masked list)
+      // and, for value-changing ops, onDidChangeValidation. The token VALUE
+      // arrives INBOUND only and is handed straight to the host-side bridge;
+      // it is never echoed back or logged.
+      case 'atlassianAddBitbucketToken':
+        await this.atlassianBridge.addBitbucketToken(msg.label, msg.value);
+        break;
+      case 'atlassianRemoveBitbucketToken':
+        await this.atlassianBridge.removeBitbucketToken(msg.id);
+        break;
+      case 'atlassianReplaceBitbucketToken':
+        await this.atlassianBridge.replaceBitbucketTokenValue(msg.id, msg.value);
+        break;
+      case 'atlassianSetBitbucketTokenLabel':
+        await this.atlassianBridge.setBitbucketTokenLabel(msg.id, msg.label);
+        break;
+      case 'atlassianReorderBitbucketTokens':
+        await this.atlassianBridge.reorderBitbucketTokens(msg.order);
+        break;
+      case 'atlassianValidateBitbucketToken':
+        // Fires onDidChangeValidation → the subscription broadcasts the merged
+        // result, so no explicit post is needed here.
+        await this.atlassianBridge.validateBitbucketToken(msg.id);
         break;
       case 'atlassianTokenStatusRequested':
         await this.broadcastAtlassianTokenStatus();
@@ -832,7 +857,7 @@ export class SettingsPanel implements vscode.Disposable {
       this.postConfigurations();
       // Broadcast fresh composed prompts after settings change per architecture spec.
       this.broadcastComposedPrompts();
-      // Signal ticket widget + context-key sync that module settings changed.
+      // Signal extension.ts subscribers that module settings changed.
       this.moduleSettingsEmitter.fire();
     } catch (err) {
       this.post({ type: 'settingsSaved', ok: false, error: (err as Error).message });
@@ -2214,7 +2239,7 @@ export class SettingsPanel implements vscode.Disposable {
     this.postSettings();
     this.postConfigurations();
     this.broadcastComposedPrompts();
-    // Signal ticket widget + context-key sync that settings changed via preset application.
+    // Signal extension.ts subscribers that settings changed via preset application.
     this.moduleSettingsEmitter.fire();
   }
 
@@ -2473,9 +2498,13 @@ export class SettingsPanel implements vscode.Disposable {
    */
   private async broadcastAtlassianTokenStatus(): Promise<void> {
     if (!this.panel) return;
-    const [jiraToken, bitbucketToken] = await Promise.all([
+    // Jira: read the full value host-side purely to derive its last-4 (the value
+    // never leaves the host). Bitbucket: use the bridge's MASKED summaries — the
+    // full values never enter this method, so the multi-token list can only ever
+    // forward id + label + last4 across the boundary.
+    const [jiraToken, bitbucketSummaries] = await Promise.all([
       this.atlassianBridge.getJiraToken(),
-      this.atlassianBridge.getBitbucketToken(),
+      this.atlassianBridge.getBitbucketTokenSummaries(),
     ]);
     // Last 4 chars only, and only when the token is long enough that revealing
     // them leaks nothing meaningful; undefined otherwise.
@@ -2484,9 +2513,15 @@ export class SettingsPanel implements vscode.Disposable {
     this.post({
       type: 'atlassianTokenStatus',
       jiraSet: typeof jiraToken === 'string' && jiraToken !== '',
-      bitbucketSet: typeof bitbucketToken === 'string' && bitbucketToken !== '',
       jiraLast4: last4(jiraToken),
-      bitbucketLast4: last4(bitbucketToken),
+      bitbucketTokens: bitbucketSummaries.map((s) => ({
+        id: s.id,
+        label: s.label,
+        set: true,
+        // The summary's last4 is '' when the value is shorter than 4 chars;
+        // normalize that to undefined so the UI shows the generic dots.
+        last4: s.last4 !== '' ? s.last4 : undefined,
+      })),
     });
   }
 

@@ -2,14 +2,14 @@
 
 When this module is loaded, the session has access to a TPM-led ritual that turns acceptance-criteria items into structured testing procedures — manual steps, expected outcomes, edge cases — and writes them to the Testing Procedures section of the active per-ticket Obsidian notes file. This module extends the universal hard rules, it never relaxes them. Every agent reads this same fragment; TPM owns the ritual, SWE feeds inputs from the implementation, QA consumes the output as its testing contract, and role-specific framing is collected at the end.
 
-This module is **not proactive**. It does not fire at session start. It fires when the user signals AC is met — typically when the Ticket Widget shows AC items checked off, or when the user says "testing time", "AC complete", "let's test this", or similar. Treat it as the AC-completion gate ahead of QA, not a continuous check.
+This module is **not proactive**. It does not fire at session start. It fires when the user signals AC is met — typically when the user says "testing time", "AC complete", "let's test this", or similar. Treat it as the AC-completion gate ahead of QA, not a continuous check.
 
 ## When to generate procedures
 
 Run the ritual when:
 
 - The user signals AC is met with phrases like "AC complete", "ready for testing", "let's test this", "all AC done", or similar — and `parameters.autoOfferOnAcComplete` is true. In that case TPM proactively offers: "Want me to draft testing procedures for the AC items?" Do not generate without the user's go-ahead; the offer is the gate.
-- The last AC item is checked off in the Ticket Widget (TPM sees this via session memory — either the user clicked it or TPM marked it as work shipped) — same offer fires under the same `parameters.autoOfferOnAcComplete` rule.
+- TPM has marked the last AC item as work shipped (tracked in session memory) — same offer fires under the same `parameters.autoOfferOnAcComplete` rule.
 - The user explicitly asks ("write testing procedures", "let's write tests for these AC items", "draft a TP for that AC item") — generate regardless of the auto-offer setting.
 
 Do **not** run the ritual:
@@ -102,12 +102,12 @@ TPM-only write discipline applies here as everywhere else — SWE and QA never w
 
 TPM identifies the AC list from, in priority order:
 
-1. **The Ticket Widget's todos** — when `mode.ticket-work` and `tool.obsidian-notes` are active and the widget has AC-extracted items in session memory, those are the canonical source. They have already been parsed from the ticket description (Jira task list, AC-heading match, or first-list fallback) and reflect the current ticket state, including user-added manual items.
+1. **`mode.ticket-work`'s extracted AC items** — when `mode.ticket-work` and `tool.obsidian-notes` are active and `mode.ticket-work` has AC-extracted items in session memory, those are the canonical source. They have already been parsed from the ticket description (Jira task list, AC-heading match, or first-list fallback) and reflect the current ticket state.
 2. **The per-ticket notes file's `Acceptance Criteria` section** — if it exists in `<vault>/<Project>/<Ticket>.md`. Use this when the widget is not active but a notes file is present with a populated section.
 3. **The user's verbatim AC list pasted into the conversation** — if the user dropped the AC items directly into chat, treat that as the source for the ritual.
 4. **A direct re-pull from Jira via `integration.atlassian-suite`** — fall back to `getTicketDetails` plus the `adfExtractAcceptanceCriteria` helper when nothing else is available and the Atlassian Suite is loaded with credentials.
 
-If none of these four sources yields an AC list, TPM responds: "I can't find an AC list to derive procedures from. Paste the AC items or enable `mode.ticket-work` + the Ticket Widget to extract them automatically." Do not fabricate AC items from the work that was done — the ritual is AC-driven, not implementation-driven.
+If none of these four sources yields an AC list, TPM responds: "I can't find an AC list to derive procedures from. Paste the AC items or enable `mode.ticket-work` to extract them automatically." Do not fabricate AC items from the work that was done — the ritual is AC-driven, not implementation-driven.
 
 ## Module-disabled vs feature-disabled
 
@@ -125,7 +125,7 @@ Do not merge these cases.
 
 This module composes with several siblings; treat each interaction explicitly:
 
-- **`mode.ticket-work` + Ticket Widget** — the canonical AC source. The widget's todos are extracted from the ticket description and merged across re-extracts (see `mode.ticket-work` for the AC extraction rules). TPM reads the widget's todos via session memory, not by re-extracting independently.
+- **`mode.ticket-work`** — the canonical AC source. Its AC items are extracted from the ticket description and merged across re-extracts (see `mode.ticket-work` for the AC extraction rules). TPM reads those items via session memory, not by re-extracting independently.
 - **`tool.obsidian-notes`** — the target for the `writeToNotes` path. Per-ticket notes live at `<vault>/<Project>/<Ticket>.md` per that module's path resolution. All writes to the Testing Procedures section go through that module's normal write path; this module never picks its own vault location.
 - **`tool.playwright`** — the downstream consumer. When TPM produces procedures and `tool.playwright` is enabled, TPM offers to deploy QA next to write Playwright specs from those procedures. Without `tool.playwright`, the procedures still have value as a manual-testing contract; the auto-offer just doesn't fire.
 - **The checklist in `tool.pr-prep`** — testing-procedure existence is one of the things the checklist could check for (a check description along the lines of "Testing procedures written for shipped AC items"). Not a hard dependency; just an interaction point if the user wants the checklist to gate on it.

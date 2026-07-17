@@ -233,6 +233,12 @@ async function cmdFindPr(flags) {
   const usage = 'bb-bridge find-pr --repo <slug> --branch <name>';
   const repoSlug = requireFlag(flags, 'repo', usage);
   const branch = requireFlag(flags, 'branch', usage);
+  // The printed JSON carries `prState` on a found PR ('OPEN' when the open-state
+  // query matched, else 'MERGED' / 'DECLINED' / 'SUPERSEDED' from the fallback),
+  // so a found-but-closed PR (status 'ok' + prState !== 'OPEN', e.g. a merged PR
+  // still carrying CodeRabbit comments) is distinct from a genuine "no PR at
+  // all" (status 'not-found'). A workspace-misconfiguration lookup surfaces its
+  // own status/message rather than a bare not-found.
   await postToBridge('/find-pr', { repoSlug, branch });
 }
 

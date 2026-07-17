@@ -6,7 +6,6 @@ import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
 import type { ModuleHandle } from '../modules/handle';
 import { readModuleSettings } from '../state/module-settings';
-import { formatBanner } from './banner';
 import { resolveAgentPromptFilePath } from './prompt-file';
 
 /**
@@ -34,13 +33,6 @@ const OBSIDIAN_MODULE_ID = 'tool.obsidian-notes';
  * suppresses ticket/Jira/notes probing and the banner's Mode row agrees.
  */
 const SELF_UPGRADE_MODULE_ID = 'tool.self-upgrade';
-
-/**
- * `mode.war` (War Mode). Not loader-toggleable — enablement is the
- * `mode.war::enabled` setting in the module-settings store, mirroring the
- * composer's gate (see `src/prompts/composer.ts` renderGholaEntry).
- */
-const GHOLA_MODE_ID = 'mode.war';
 
 /** Field key on `tool.fastpath-check` for an explicit user-supplied target directory. */
 const FASTPATH_SETTING_KEY = 'fastpathDirectory';
@@ -107,7 +99,6 @@ export class SessionLauncher {
     const oneShot = typeof promptOverride === 'string';
 
     const enabled = this.loader.getEnabled();
-    const composedAgentIds = this.detectComposedAgentIds(enabled);
 
     const shellPath = this.pickShell();
     const shellArgs = this.pickShellArgs();
@@ -162,31 +153,12 @@ export class SessionLauncher {
       return;
     }
 
-    // War Mode (`mode.war`) is NOT a loader-toggleable module — its enablement
-    // is the `mode.war::enabled` setting (an Agents configuration). Read it from
-    // the SAME module-settings store the composer gates off (see
-    // PromptComposer.renderGholaEntry / host.isGholaEnabled), so the banner's
-    // War-Mode indicator is true exactly when the composer injects mode.war.
-    const warMode = this.readModuleSetting(GHOLA_MODE_ID, 'enabled') === true;
-
     const perfCores = cfg.get<number>('swe.performanceCores', 2);
     const effCores = cfg.get<number>('swe.efficiencyCores', 1);
     const perfModel = cfg.get<string>('swe.performanceCoresModel', 'opus');
     const effModel = cfg.get<string>('swe.efficiencyCoresModel', 'sonnet');
     const qaCount = cfg.get<number>('qa.count', 1);
     const qaModel = cfg.get<string>('qa.model', 'sonnet');
-
-    const banner = formatBanner({
-      enabledModules: enabled,
-      warMode,
-      composedAgentIds,
-      version,
-      cwd: effectiveDir,
-      branch,
-      team: { perfCores, effCores, perfModel, effModel, qaCount, qaModel },
-      cliCommand,
-      sessionCommand,
-    });
 
     // Base env shared by all launches. The GHOLA_{TPM,SWE,QA}_PROMPT_FILE
     // scaffolding is only needed for a full TPM session that may spawn
@@ -259,34 +231,21 @@ export class SessionLauncher {
       env,
     });
 
-    // `show()` with preserveFocus left at its default (false) so the terminal
-    // TAKES focus and becomes the active editor. This is load-bearing for the
-    // pin below: `launch()` is typically invoked from the "Ghola" settings
-    // webview's "Open Session" button, so that webview is the active editor at
-    // this point. A previous `show(true)` (preserveFocus=true) revealed the
-    // terminal without focusing it, leaving the settings webview active — so
-    // `workbench.action.pinEditor` pinned the wrong tab ("Ghola" instead of
-    // "Ghola Session"). Focusing the terminal makes IT the active editor so the
-    // pin targets the correct tab.
-    terminal.show();
-    // Auto-pin genuine Ghola Sessions. This works ONLY because the terminal is
-    // created with `location: { viewColumn: ViewColumn.Active }` above, which
-    // makes it an editor-area terminal (a real, pinnable editor tab) rather than
-    // a panel terminal; after `show()` focuses it, it is the active editor, so
-    // `workbench.action.pinEditor` pins exactly this tab. COUPLING: if the
-    // terminal `location` is ever moved to the panel, it stops being an editor
-    // tab and this pin call silently no-ops. Kept immediately after `show()`
-    // with no intervening awaits so nothing steals focus before we pin. Gated on
-    // `!oneShot` so the transient one-shot 'Ghola Commit' terminal is never
-    // pinned — only genuine sessions are. Fire-and-forget (`void` + swallowed
-    // rejection, matching updateExtension.ts): pinning is non-critical cosmetics,
-    // so a command failure must never abort `launch()` and leave the session
-    // terminal open but never started.
+    // Auto-pin genuine Ghola Sessions. ARM the pin BEFORE `show()` so we never
+    // miss the activation event it triggers (see pinSessionTerminal for the race
+    // this closes). Gated on `!oneShot` so the transient one-shot 'Ghola Commit'
+    // terminal is never pinned — only genuine sessions are.
     if (!oneShot) {
-      void vscode.commands.executeCommand('workbench.action.pinEditor').then(undefined, () => {});
+      this.pinSessionTerminal(terminal);
     }
-    // Print the banner via the shell so it shows in the terminal buffer.
-    this.printBanner(terminal, banner);
+    // `show()` with preserveFocus left at its default (false) so the terminal
+    // TAKES focus and becomes the active editor. A previous `show(true)`
+    // (preserveFocus=true) revealed the terminal without focusing it, leaving
+    // the launching "Ghola" settings webview active — so the pin landed on the
+    // wrong tab. Focusing the terminal makes IT the active editor, but only
+    // asynchronously (see pinSessionTerminal), which is why the pin is wired to
+    // the activation event rather than fired inline here.
+    terminal.show();
 
     // Two-phase launch:
     //   1) Send `cliCommand` (default: "claude") as a shell command. The
@@ -322,6 +281,62 @@ export class SessionLauncher {
     }
 
     this.logger?.appendLine(`[session] launched terminal with shell: ${shellPath ?? '<default>'}`);
+  }
+
+  /**
+   * Pin the freshly-created session terminal's editor tab, deterministically.
+   *
+   * ROOT CAUSE this closes: `terminal.show()` reveals and focuses the terminal,
+   * but VS Code promotes it to the ACTIVE editor asynchronously. Firing
+   * `workbench.action.pinEditor` in the same synchronous tick (the previous
+   * behavior) pins whatever editor was active BEFORE the terminal took over —
+   * typically the "Ghola" settings webview that invoked `launch()` — so the
+   * session tab came up unpinned. That async-activation race, NOT the
+   * already-fixed `show(true)` preserveFocus bug, is why the pin kept landing on
+   * the wrong tab.
+   *
+   * Instead of guessing a delay, we wait for `onDidChangeActiveTerminal` to
+   * confirm THIS terminal is the active terminal, then — on the next tick, once
+   * the editor group has settled — verify the active editor tab really is a
+   * terminal before pinning exactly that tab. The `TabInputTerminal` check is a
+   * belt-and-suspenders guard that makes it impossible to pin a non-terminal tab
+   * (the exact failure this bug reproduced).
+   *
+   * COUPLING: this works only because the terminal is created with
+   * `location: { viewColumn: ViewColumn.Active }`, making it an editor-area
+   * terminal (a real, pinnable editor tab). If the terminal `location` ever
+   * moves to the panel, it stops being an editor tab and the guard below
+   * correctly declines to pin.
+   *
+   * Fire-and-forget: pinning is non-critical cosmetics, so every failure path is
+   * swallowed and never aborts the launch.
+   */
+  private pinSessionTerminal(terminal: vscode.Terminal): void {
+    const disposables: vscode.Disposable[] = [];
+    const dispose = (): void => {
+      while (disposables.length) disposables.pop()!.dispose();
+    };
+    const pinNow = (): void => {
+      if (vscode.window.activeTerminal !== terminal) return;
+      const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+      if (!(activeTab?.input instanceof vscode.TabInputTerminal)) return;
+      void vscode.commands.executeCommand('workbench.action.pinEditor').then(undefined, () => {});
+      dispose();
+    };
+    // Pin once VS Code reports this terminal as active. Deferred one tick so the
+    // editor group has settled and the active tab reflects the terminal.
+    disposables.push(
+      vscode.window.onDidChangeActiveTerminal(() => {
+        if (vscode.window.activeTerminal === terminal) setTimeout(pinNow, 0);
+      }),
+    );
+    // Cover the case where the terminal is already active by the time we
+    // subscribe (no further change event would fire).
+    if (vscode.window.activeTerminal === terminal) setTimeout(pinNow, 0);
+    // Safety net: never leave the listener dangling if the terminal never
+    // becomes active (e.g. the user clicked away during CLI boot).
+    const timer = setTimeout(dispose, 10000);
+    disposables.push(new vscode.Disposable(() => clearTimeout(timer)));
   }
 
   private pickShell(): string | undefined {
@@ -602,53 +617,4 @@ export class SessionLauncher {
     return `'${s.replace(/'/g, "'\\''")}'`;
   }
 
-  private printBanner(terminal: vscode.Terminal, banner: string): void {
-    // A shell-backed terminal echoes every command sent via sendText, so
-    // emitting one echo per banner line surfaced six `echo "..."` command lines
-    // to the user. Instead, send ONE self-clearing command per shell: clear
-    // wipes the echoed command line, then a single printf/Write-Host renders the
-    // whole banner, leaving only the banner text in the terminal buffer.
-    const isWin = os.platform() === 'win32';
-    const lines = banner.split('\n');
-    if (isWin) {
-      // pwsh: Clear-Host wipes the echoed command line; a single piped statement
-      // then writes each banner line. Double-quotes are escaped as `" for pwsh.
-      const arr = lines.map((l) => `"${l.replace(/"/g, '`"')}"`).join(',');
-      terminal.sendText(`Clear-Host; @(${arr}) | ForEach-Object { Write-Host $_ }`, true);
-    } else {
-      // bash: clear wipes the echoed command line; a single printf renders every
-      // banner line (%s\n per arg). Each line is single-quoted (via shellQuote)
-      // so its contents pass through verbatim.
-      const args = lines.map((l) => this.shellQuote(l)).join(' ');
-      terminal.sendText(`clear; printf '%s\\n' ${args}`, true);
-    }
-  }
-
-  /**
-   * Pure, synchronous detection of agent ids represented by enabled modules.
-   * Used for the banner only; does NOT invoke the composer.
-   */
-  private detectComposedAgentIds(enabled: ModuleHandle[]): string[] {
-    const set = new Set<string>();
-    for (const h of enabled) {
-      for (const a of h.manifest.contributes?.agents ?? []) set.add(a.id);
-      for (const f of h.manifest.contributes?.promptFragments ?? []) {
-        // `target: "all"` is a fan-out marker rather than a real agent id —
-        // expand it to the three built-in agents so the banner reflects the
-        // actual recipients of the fragment.
-        if (f.target === 'all') {
-          set.add('tpm');
-          set.add('swe');
-          set.add('qa');
-        } else {
-          set.add(f.target);
-        }
-      }
-    }
-    if (set.size === 0) {
-      // Default skeleton — keeps the banner informative even with no modules.
-      ['tpm', 'swe', 'qa'].forEach((id) => set.add(id));
-    }
-    return [...set].sort();
-  }
 }

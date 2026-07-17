@@ -1,8 +1,6 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { TicketWidgetProvider } from './ticket-widget/provider';
-import { TicketTodosStoreManager } from './ticket-widget/todos-store';
 import { registerCommands } from './commands';
 import { AtlassianClient } from './integration/atlassian-client';
 import { adfToPlainText } from './integration/adf-to-text';
@@ -17,6 +15,18 @@ import { BUILT_IN_CONFIGURATIONS, DEFAULT_ENABLED_IDS } from './settings-panel/b
 import { ConfigurationsStore } from './settings-panel/configurations-store';
 import { SettingsPanel } from './settings-panel/host';
 import { SET_CONTEXT_KEYS, WORKSPACE_STATE_KEYS } from './state/keys';
+import {
+  BitbucketTokenEntry,
+  BitbucketTokenSummary,
+  readBitbucketTokens,
+  writeBitbucketTokens,
+  summarizeBitbucketTokens,
+  addBitbucketToken,
+  removeBitbucketToken,
+  reorderBitbucketTokens,
+  setBitbucketTokenLabel,
+  replaceBitbucketTokenValue,
+} from './state/bitbucket-tokens';
 import {
   readModuleSettings,
   writeModuleSettings,
@@ -36,6 +46,14 @@ const ATLASSIAN_MODULE_ID = 'integration.atlassian-suite';
 const ATLASSIAN_JIRA_TOKEN_SECRET_KEY = 'ghola.atlassianSuite.jiraToken';
 const ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY = 'ghola.atlassianSuite.bitbucketToken';
 
+/**
+ * SecretStorage key for the ORDERED list of Bitbucket tokens (multi-token
+ * failover). The whole list is JSON-serialized under this single key (see
+ * `state/bitbucket-tokens.ts`). The legacy single-token key above is migrated
+ * into this list on first read and then left orphaned in place — never deleted.
+ */
+const ATLASSIAN_BITBUCKET_TOKENS_SECRET_KEY = 'ghola.atlassianSuite.bitbucketTokens';
+
 /*
  * LEGACY: `ghola.atlassianSuite.apiToken` — SecretStorage key from a
  * previous single-token design that stored one shared token used for both
@@ -54,18 +72,36 @@ const ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY = 'ghola.atlassianSuite.bitbucketToke
  * the network failed), or `'skipped'` (a required configuration field is
  * missing so the probe was not even attempted).
  *
- * Persisted to `context.workspaceState` so the Settings panel and Ticket
- * Widget can render a fresh-on-reload indicator without re-running the probes
- * on activation.
+ * Persisted to `context.workspaceState` so the Settings panel can render a
+ * fresh-on-reload indicator without re-running the probes on activation.
  *
  * Shared with SWE-2 — they read this off the bridge to render the panel's
  * Validate-status indicator.
  */
 export interface AtlassianValidationResult {
   jira: { status: 'ok' | 'failed' | 'skipped'; message?: string; displayName?: string };
-  bitbucket: { status: 'ok' | 'failed' | 'skipped'; message?: string; displayName?: string };
+  /**
+   * PER-TOKEN Bitbucket outcome — one entry per stored token (keyed by its
+   * stable `id`), validated individually so the panel can show which specific
+   * token is `ok`, expired (401 → `failed`), or wrong-scope (403 → `failed`).
+   * Empty when no Bitbucket token is stored. Jira stays a single aggregate.
+   */
+  bitbucket: BitbucketTokenValidation[];
   /** ISO 8601 timestamp of when the probe ran. */
   lastCheckedAt: string;
+}
+
+/**
+ * Validation outcome for a SINGLE Bitbucket token, tied to the entry's stable
+ * `id` so the panel can join it back to the masked token row. `message` carries
+ * the sanitized reason on `failed` (it preserves the 401-vs-403 hint from the
+ * REST probe); the token value never appears here.
+ */
+export interface BitbucketTokenValidation {
+  id: string;
+  status: 'ok' | 'failed' | 'skipped';
+  message?: string;
+  displayName?: string;
 }
 
 /**
@@ -85,8 +121,8 @@ export interface AtlassianBridge {
   isBitbucketTokenSet(): Promise<boolean>;
   /**
    * Read the stored Jira token. Intended ONLY for host-side consumers that
-   * need to construct an authenticated HTTP request (the Ticket Widget
-   * provider and the validation routine) or to derive a masked LAST-4
+   * need to construct an authenticated HTTP request (the validation routine
+   * and the host-side Jira ticket fetcher) or to derive a masked LAST-4
    * fingerprint. The full returned value MUST NOT be forwarded across the
    * webview boundary or written to any log / output channel — only a derived
    * last-4 fragment may cross the boundary (see `broadcastAtlassianTokenStatus`).
@@ -96,8 +132,50 @@ export interface AtlassianBridge {
    * Read the stored Bitbucket token. Same host-only contract as
    * `getJiraToken()`. The full value never crosses the webview boundary; only a
    * derived last-4 fragment may.
+   *
+   * Back-compat single-token accessor: now sourced from the ordered token list
+   * (via migration), returning the FIRST entry's value or `undefined` when the
+   * list is empty. Existing single-token callers are unaffected.
    */
   getBitbucketToken(): Promise<string | undefined>;
+
+  /**
+   * Read the FULL ordered list of Bitbucket tokens, including secret values.
+   * Host-only consumer contract (identical to `getBitbucketToken()`): the
+   * future rotation loop uses this to try each token in order. Values MUST NOT
+   * cross the webview boundary — use `getBitbucketTokenSummaries()` for the UI.
+   */
+  getBitbucketTokens(): Promise<BitbucketTokenEntry[]>;
+  /**
+   * Non-secret masked view of the Bitbucket token list for the panel: each
+   * entry's `id`, `label`, and last-4 fingerprint only. Safe to forward across
+   * the webview boundary.
+   */
+  getBitbucketTokenSummaries(): Promise<BitbucketTokenSummary[]>;
+
+  // ── Bitbucket token list mutations (all operate on the ordered LIST) ──
+  //
+  // The webview drives these via the settings-panel protocol. Each mutates the
+  // JSON-array secret, fires `onDidChangeAtlassianTokenStatus` so the panel
+  // re-broadcasts the masked list, and (for value-changing ops) triggers a
+  // re-validate. A token VALUE only ever travels INBOUND (webview -> host, e.g.
+  // the user typing a new token) — never back across the boundary, never logged.
+  /** Append a new token (secret `value`) with an optional label to the list. */
+  addBitbucketToken(label: string | undefined, value: string): Promise<void>;
+  /** Remove the token with the given stable `id`. No-op when absent. */
+  removeBitbucketToken(id: string): Promise<void>;
+  /** Reorder the list to `orderedIds` — this IS the failover order. */
+  reorderBitbucketTokens(orderedIds: string[]): Promise<void>;
+  /** Rename the token with the given `id`, preserving its id + value. */
+  setBitbucketTokenLabel(id: string, label: string): Promise<void>;
+  /** Replace the secret `value` of the token with the given `id`. */
+  replaceBitbucketTokenValue(id: string, value: string): Promise<void>;
+  /**
+   * Re-validate a SINGLE Bitbucket token by `id`, merge the result into the
+   * cached validation (preserving Jira and every other token's status), persist
+   * it, fire `onDidChangeValidation`, and return the merged result. Never throws.
+   */
+  validateBitbucketToken(id: string): Promise<AtlassianValidationResult>;
 
   /**
    * Fires whenever EITHER product's token state changes — set or clear, for
@@ -191,14 +269,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // for either product re-trigger `validate()`, so subscribers always see a
   // fresh result reflecting the new SecretStorage state (with the cleared
   // product's probe naturally returning `skipped` via the client). The
-  // Ticket Widget and the Settings panel both subscribe to refresh their
-  // indicators.
+  // Settings panel subscribes to refresh its indicators.
   const validationEmitter = new vscode.EventEmitter<AtlassianValidationResult>();
   context.subscriptions.push(validationEmitter);
 
-  // Emitter the host fires whenever module-settings change. The ticket widget
-  // subscribes so it can re-pull settings after a save, and we also use it
-  // locally to re-sync the widget context key.
+  // Emitter the host fires whenever module-settings change. The Settings panel
+  // and the mode / War Mode status-bar item subscribe so they re-pull settings
+  // after a save.
   const moduleSettingsEmitter = new vscode.EventEmitter<void>();
   context.subscriptions.push(moduleSettingsEmitter);
 
@@ -248,39 +325,144 @@ export function activate(context: vscode.ExtensionContext): void {
     return typeof manifestDefault === 'string' ? manifestDefault : '';
   };
 
+  // Read the ordered Bitbucket token list, running the one-time non-destructive
+  // legacy migration on first access. All Bitbucket bridge accessors below
+  // route through this so single-token and multi-token callers see one source.
+  const readBbTokens = (): Promise<BitbucketTokenEntry[]> =>
+    readBitbucketTokens(
+      context.secrets,
+      ATLASSIAN_BITBUCKET_TOKENS_SECRET_KEY,
+      ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY,
+    );
+
+  // Probe ONE Bitbucket token in isolation and map it to a per-token result.
+  // A single-token client means the shared failover loop makes exactly one
+  // attempt, so the returned status reflects THIS entry alone (401 → expired,
+  // 403 → wrong-scope, both surface as `failed` with the sanitized message).
+  // The value is only used to build the client; it never leaves this scope.
+  const probeBitbucketEntry = async (
+    entry: BitbucketTokenEntry,
+    email: string,
+    bitbucketWorkspace: string,
+  ): Promise<BitbucketTokenValidation> => {
+    const client = new AtlassianClient({
+      email,
+      bitbucketTokens: [entry.value],
+      jiraBase: '',
+      bitbucketWorkspace,
+    });
+    const probe = await client.validateBitbucket();
+    return {
+      id: entry.id,
+      status: probe.status,
+      message: probe.message,
+      displayName: probe.displayName,
+    };
+  };
+
   const atlassianBridge: AtlassianBridge = {
     isJiraTokenSet: async () =>
       (await context.secrets.get(ATLASSIAN_JIRA_TOKEN_SECRET_KEY)) !== undefined,
-    isBitbucketTokenSet: async () =>
-      (await context.secrets.get(ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY)) !== undefined,
+    isBitbucketTokenSet: async () => (await readBbTokens()).length > 0,
     onDidChangeAtlassianTokenStatus: tokenStatusEmitter.event,
     getJiraToken: async () => context.secrets.get(ATLASSIAN_JIRA_TOKEN_SECRET_KEY),
-    getBitbucketToken: async () => context.secrets.get(ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY),
+    getBitbucketToken: async () => (await readBbTokens())[0]?.value,
+    getBitbucketTokens: () => readBbTokens(),
+    getBitbucketTokenSummaries: async () => summarizeBitbucketTokens(await readBbTokens()),
     getLastValidation: () =>
       context.workspaceState.get<AtlassianValidationResult>(WORKSPACE_STATE_KEYS.ATLASSIAN_LAST_VALIDATION),
     onDidChangeValidation: validationEmitter.event,
     validate: async (): Promise<AtlassianValidationResult> => {
-      // Two-token read happens in parallel so a slow SecretStorage call on
-      // one product does not serialise the other. Either token may be
-      // undefined — the client handles "missing token → skipped" itself.
-      const [jiraToken, bitbucketToken] = await Promise.all([
+      // Read the Jira token and the ordered Bitbucket token list in parallel so
+      // a slow SecretStorage call on one product does not serialise the other.
+      // Jira stays single-token; Bitbucket is validated PER-TOKEN (each entry
+      // probed individually) so the panel can show which specific token is
+      // ok / expired / wrong-scope. Either side may be empty — a single-token
+      // Jira client and an empty Bitbucket list both degrade to `skipped`.
+      const [jiraToken, bitbucketTokenEntries] = await Promise.all([
         context.secrets.get(ATLASSIAN_JIRA_TOKEN_SECRET_KEY),
-        context.secrets.get(ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY),
+        readBbTokens(),
       ]);
       const email = readAtlassianSetting('email');
       const jiraBase = readAtlassianSetting('jiraBase');
       const bitbucketWorkspace = readAtlassianSetting('bitbucketWorkspace');
-      const client = new AtlassianClient({
+      const jiraClient = new AtlassianClient({
         email,
         jiraToken,
-        bitbucketToken,
         jiraBase,
-        bitbucketWorkspace,
+        bitbucketWorkspace: '',
       });
       const [jira, bitbucket] = await Promise.all([
-        client.validateJira(),
-        client.validateBitbucket(),
+        jiraClient.validateJira(),
+        Promise.all(
+          bitbucketTokenEntries.map((entry) =>
+            probeBitbucketEntry(entry, email, bitbucketWorkspace),
+          ),
+        ),
       ]);
+      const result: AtlassianValidationResult = {
+        jira,
+        bitbucket,
+        lastCheckedAt: new Date().toISOString(),
+      };
+      await context.workspaceState.update(WORKSPACE_STATE_KEYS.ATLASSIAN_LAST_VALIDATION, result);
+      validationEmitter.fire(result);
+      return result;
+    },
+    // ── List mutations ── Each fires the token-status event so the panel
+    // re-broadcasts the masked list; value-changing ops (add / replace) also
+    // trigger a re-validate so the per-token status stays fresh.
+    addBitbucketToken: async (label, value) => {
+      await addBitbucketToken(context.secrets, ATLASSIAN_BITBUCKET_TOKENS_SECRET_KEY, label, value);
+      tokenStatusEmitter.fire();
+      void atlassianBridge.validate();
+    },
+    removeBitbucketToken: async (id) => {
+      await removeBitbucketToken(context.secrets, ATLASSIAN_BITBUCKET_TOKENS_SECRET_KEY, id);
+      tokenStatusEmitter.fire();
+    },
+    reorderBitbucketTokens: async (orderedIds) => {
+      await reorderBitbucketTokens(context.secrets, ATLASSIAN_BITBUCKET_TOKENS_SECRET_KEY, orderedIds);
+      tokenStatusEmitter.fire();
+    },
+    setBitbucketTokenLabel: async (id, label) => {
+      await setBitbucketTokenLabel(context.secrets, ATLASSIAN_BITBUCKET_TOKENS_SECRET_KEY, id, label);
+      tokenStatusEmitter.fire();
+    },
+    replaceBitbucketTokenValue: async (id, value) => {
+      await replaceBitbucketTokenValue(context.secrets, ATLASSIAN_BITBUCKET_TOKENS_SECRET_KEY, id, value);
+      tokenStatusEmitter.fire();
+      void atlassianBridge.validate();
+    },
+    validateBitbucketToken: async (id): Promise<AtlassianValidationResult> => {
+      // Re-validate ONE token and merge it into the cached result so Jira and
+      // every other token's status is preserved. Starting from the last cached
+      // result (or an empty scaffold) keeps a per-row Validate from wiping the
+      // rest of the panel.
+      const prior = context.workspaceState.get<AtlassianValidationResult>(
+        WORKSPACE_STATE_KEYS.ATLASSIAN_LAST_VALIDATION,
+      );
+      const jira = prior?.jira ?? { status: 'skipped' as const };
+      const bitbucket = prior?.bitbucket ? [...prior.bitbucket] : [];
+      const entries = await readBbTokens();
+      const entry = entries.find((e) => e.id === id);
+      if (!entry) {
+        // Token was removed between click and probe — drop any stale row.
+        const result: AtlassianValidationResult = {
+          jira,
+          bitbucket: bitbucket.filter((b) => b.id !== id),
+          lastCheckedAt: new Date().toISOString(),
+        };
+        await context.workspaceState.update(WORKSPACE_STATE_KEYS.ATLASSIAN_LAST_VALIDATION, result);
+        validationEmitter.fire(result);
+        return result;
+      }
+      const email = readAtlassianSetting('email');
+      const bitbucketWorkspace = readAtlassianSetting('bitbucketWorkspace');
+      const probed = await probeBitbucketEntry(entry, email, bitbucketWorkspace);
+      const idx = bitbucket.findIndex((b) => b.id === id);
+      if (idx >= 0) bitbucket[idx] = probed;
+      else bitbucket.push(probed);
       const result: AtlassianValidationResult = {
         jira,
         bitbucket,
@@ -300,7 +482,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Host-side Jira ticket fetcher passed into the loopback bridge. Reads the
   // current email + jiraBase settings and the Jira token via the bridge, builds
-  // a fresh AtlassianClient (same pattern as the ticket widget), fetches the
+  // a fresh AtlassianClient, fetches the
   // ticket, and converts the ADF `description` to plain text host-side so the
   // CLI agent only ever sees text. The Jira token is confined to the client we
   // construct here — it is never logged nor returned in the result.
@@ -435,12 +617,18 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       const token = value?.trim();
       if (!token) return;
-      await context.secrets.store(ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY, token);
+      // Multi-token: APPEND to the ordered list (the failover order) rather than
+      // writing the orphaned legacy single key. A single-token user who runs this
+      // once still ends up with a working 1-entry list.
+      await addBitbucketToken(context.secrets, ATLASSIAN_BITBUCKET_TOKENS_SECRET_KEY, undefined, token);
       tokenStatusEmitter.fire();
       void atlassianBridge.validate();
     }),
     vscode.commands.registerCommand('ghola.atlassianSuite.clearBitbucketToken', async () => {
-      await context.secrets.delete(ATLASSIAN_BITBUCKET_TOKEN_SECRET_KEY);
+      // Multi-token: clear the whole list (write an empty array) rather than the
+      // orphaned legacy single key. A valid empty list is authoritative, so the
+      // migration never re-seeds it from the legacy token on the next read.
+      await writeBitbucketTokens(context.secrets, ATLASSIAN_BITBUCKET_TOKENS_SECRET_KEY, []);
       tokenStatusEmitter.fire();
       void atlassianBridge.validate();
     }),
@@ -460,58 +648,6 @@ export function activate(context: vscode.ExtensionContext): void {
     resolveModulesDir,
     logger,
   });
-
-  // ───── Ticket Widget ────────────────────────────────────────────────
-  const ticketTodosStore = new TicketTodosStoreManager(context);
-  context.subscriptions.push(ticketTodosStore);
-
-  // readModeSetting closure for mode.ticket-work — mirrors readAtlassianSetting pattern
-  const readTicketWorkSetting = (key: string): unknown => {
-    const flat = readModuleSettings(context.globalState, context.workspaceState);
-    const flatKey = `mode.ticket-work::${key}`;
-    if (flatKey in flat) {
-      return flat[flatKey];
-    }
-    // Fall back to manifest default
-    const handle = loader.find('mode.ticket-work');
-    const setting = handle?.manifest.contributes?.settings?.[key];
-    return setting?.default;
-  };
-
-  const ticketWidgetProvider = new TicketWidgetProvider(
-    context,
-    moduleSettingsEmitter.event,
-    loader.onDidChange,
-    atlassianBridge,
-    readTicketWorkSetting,
-    ticketTodosStore,
-  );
-
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('gholaTicketWidget', ticketWidgetProvider),
-  );
-
-  // Context-key sync — show the widget whenever the module is enabled and the
-  // showWidget setting is on. The active ticket is derived from the git branch
-  // inside the widget itself, so we no longer gate on a ticketId setting; the
-  // widget renders its own "no ticket on this branch" empty state when the
-  // branch yields no ticket key.
-  const syncTicketWorkWidgetContextKey = (): void => {
-    const moduleEnabled = loader.find('mode.ticket-work')?.isEnabled === true;
-    const showWidgetRaw = readTicketWorkSetting('showWidget');
-    const showWidget = typeof showWidgetRaw === 'boolean' ? showWidgetRaw : true;
-    const enabled = moduleEnabled && showWidget;
-    void vscode.commands.executeCommand('setContext', SET_CONTEXT_KEYS.TICKET_WORK_WIDGET_ENABLED, enabled);
-  };
-
-  // Initial sync
-  syncTicketWorkWidgetContextKey();
-
-  // Re-sync on settings save (covers showWidget changes)
-  context.subscriptions.push(moduleSettingsEmitter.event(syncTicketWorkWidgetContextKey));
-
-  // Re-sync on module enable/disable toggle
-  context.subscriptions.push(loader.onDidChange(syncTicketWorkWidgetContextKey));
 
   // ───── Commit-and-Push button ───────────────────────────────────────
   // The Commit-and-Push action lives in the Source Control view title bar

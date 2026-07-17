@@ -26,6 +26,7 @@ import * as http from 'http';
 import * as crypto from 'crypto';
 import type * as vscode from 'vscode';
 import type { BitbucketPrClient } from './bitbucket-pr-client';
+import type { RequestFailure } from './atlassian-client';
 
 /** Hard cap on inbound request bodies. The agent's payloads are tiny JSON
  *  objects; anything larger is treated as abuse and rejected with 413. */
@@ -230,17 +231,28 @@ async function dispatch(
   switch (route) {
     case '/find-pr': {
       // `findOpenPrForBranch` returns `PrLookupResult` (`{ prUrl, prTitle?,
-      // prId? }`) with NO `status` field — a successful lookup and a "no open
-      // PR" both come back shapeless from the wrapper's perspective. The
-      // bb-bridge.mjs client judges success by `status === 'ok'`, so we tag the
-      // response here to fit that taxonomy (matching list-comments / reply /
-      // resolve / mark-ready) rather than making the client special-case this
-      // route. A finite `prId` is the found-a-PR signal the downstream
-      // pr-monitor / comment / mark-ready flows depend on.
+      // prId?, prState?, failure? }`) with NO `status` field — a successful
+      // lookup and a "no PR" both come back shapeless from the wrapper's
+      // perspective. The bb-bridge.mjs client judges success by
+      // `status === 'ok'`, so we tag the response here to fit that taxonomy
+      // (matching list-comments / reply / resolve / mark-ready) rather than
+      // making the client special-case this route. A finite `prId` is the
+      // found-a-PR signal the downstream pr-monitor / comment / mark-ready flows
+      // depend on. The `...lookup` spread carries `prState` through verbatim, so
+      // a caller sees "found a MERGED PR #123" (prState: 'MERGED') distinctly
+      // from "no PR at all" (the not-found below) — a found-but-closed PR is
+      // NEVER collapsed into not-found.
       const branch = str(args.branch);
       const lookup = await client.findOpenPrForBranch(str(args.repoSlug), branch);
       if (typeof lookup.prId === 'number' && Number.isFinite(lookup.prId)) {
         return { status: 'ok', ...lookup };
+      }
+      // A real request failure (expired token, missing scope, wrong workspace /
+      // repo slug, rate limit, network) must surface its TRUE cause — never get
+      // flattened into the "no open PR" not-found below, which would send the
+      // user chasing a nonexistent PR instead of the real auth/lookup problem.
+      if (lookup.failure) {
+        return { status: findPrFailureStatus(lookup.failure), message: lookup.failure.message };
       }
       return { status: 'not-found', message: `No open PR for branch ${branch}` };
     }
@@ -287,6 +299,24 @@ async function dispatch(
       });
     default:
       return undefined;
+  }
+}
+
+/** Map a PR-lookup `RequestFailure` onto the bridge's wire-status vocabulary so
+ *  the CLI client (and a human reading the JSON) sees the true cause instead of
+ *  a blanket `not-found`. Mirrors the `BitbucketPrStatus` keywords the other
+ *  routes already emit, adding `rate-limited` for a 429. The `message` carried
+ *  alongside is the client's own sanitized text — never a token or header. */
+function findPrFailureStatus(failure: RequestFailure): string {
+  switch (failure.kind) {
+    case 'auth':
+      return failure.httpStatus === 403 ? 'forbidden' : 'unauthorized';
+    case 'ratelimit':
+      return 'rate-limited';
+    case 'network':
+      return 'network-error';
+    default:
+      return 'unknown-error';
   }
 }
 
