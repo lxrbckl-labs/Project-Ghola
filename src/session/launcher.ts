@@ -126,12 +126,6 @@ export class SessionLauncher {
     let permFlag = '';
     if (cliCommand.includes('claude')) {
       switch (permissionMode) {
-        case 'acceptEdits':
-          permFlag = ' --permission-mode acceptEdits';
-          break;
-        case 'plan':
-          permFlag = ' --permission-mode plan';
-          break;
         case 'bypassPermissions':
           permFlag = ' --dangerously-skip-permissions';
           break;

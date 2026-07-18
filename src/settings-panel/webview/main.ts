@@ -1621,10 +1621,8 @@ function renderPermissionModePickerDropdown(): HTMLElement {
   }) as HTMLSelectElement;
 
   const options: Array<{ value: string; label: string }> = [
-    { value: 'off', label: 'Off (manual approval)' },
-    { value: 'acceptEdits', label: 'Auto-accept edits' },
-    { value: 'plan', label: 'Plan mode' },
-    { value: 'bypassPermissions', label: 'Bypass all (dangerously-skip-permissions)' },
+    { value: 'off', label: 'Off' },
+    { value: 'bypassPermissions', label: 'Bypass All Permissions' },
   ];
   options.forEach((o) => {
     const opt = el('option') as HTMLOptionElement;
