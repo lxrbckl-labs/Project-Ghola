@@ -20,7 +20,7 @@
         "label": "Reply Instruction",
         "multiline": true,
         "default": "Write a 1-2 sentence professional PR reply explaining why we are declining the requested change (the finding is incorrect, out of scope, or intentionally not being made). No double-dashes.",
-        "description": "Instruction used to compose the reply we post when we are pushing back on a comment rather than making the requested change. Protest replies are the only replies we send: an accepted finding is fixed, pushed, and left for CodeRabbit to auto-resolve without a reply."
+        "description": "Instruction used to compose the reply we post when we are pushing back on a comment rather than making the requested change (the disagree-path counter-comment, drafted for operator approval before posting). Protest replies are the only replies we send: an accepted finding is fixed, pushed, left silent on replies, and then resolved by us once CodeRabbit's re-review adds its green-check confirming the fix."
       },
       "coderabbitReplyPersona": {
         "type": "string",
@@ -41,6 +41,30 @@
         "label": "Flag Falsely-Resolved Comments",
         "default": true,
         "description": "When on, the agent scans PR comments whose body claims the issue is resolved (e.g., 'resolved', 'fixed', 'done') but which Bitbucket still marks as unresolved, and surfaces them for review. It does not auto-resolve anything."
+      },
+      "coderabbitResolveRequiresConfirmation": {
+        "type": "boolean",
+        "label": "CodeRabbit Resolve Requires Confirmation",
+        "default": true,
+        "description": "When enabled, a CodeRabbit-authored comment is only auto-included in a resolve selection (ordinals, resolve all, or a natural-language text filter) when it carries CodeRabbit's own resolution confirmation (green-check plus resolution language such as resolved/addressed/verified/done); a plain textual claim of resolution does not count. Otherwise it is not pre-selected but called out for the operator to confirm before resolving, so the operator keeps final authority. Applies to CodeRabbit-authored comments only — human and other-author comments are unaffected. When off, resolve behaves as before with no CodeRabbit gate."
+      },
+      "driveToZeroCloseout": {
+        "type": "boolean",
+        "label": "Drive To Zero Closeout",
+        "default": true,
+        "description": "When on, at the end of a round-trip (and on demand) the agent runs a closeout accounting pass that enumerates every unresolved comment, buckets each by disposition (CodeRabbit green-check confirmed and resolve-eligible; fix pushed but awaiting re-review; not yet addressed; counter-comment posted or declined; outdated as a pending Phase-2 disposition), and reports the concrete gap to 0 unresolved comments so nothing is silently left behind. It never resolves or posts anything on its own — it reports the tally and routes each bucket through the existing gates."
+      },
+      "resolveDeclinedBotThreads": {
+        "type": "boolean",
+        "label": "Resolve Declined Bot Threads",
+        "default": true,
+        "description": "After we post a counter-comment on (or decline) a CodeRabbit (bot) thread we are pushing back on, resolve that thread. A bot does not need the thread kept open for a reply. Authorship is detected by the comment author display name containing 'coderabbit' (case-insensitive), the same convention the resolve gate uses. When off, declined bot threads are left unresolved."
+      },
+      "resolveDeclinedHumanThreads": {
+        "type": "boolean",
+        "label": "Resolve Declined Human Threads",
+        "default": false,
+        "description": "After we post a counter-comment on (or decline) a human reviewer's thread we are pushing back on, resolve that thread. Off by default: resolving a thread you just pushed back on reads as dismissive to a person, so the thread is left unresolved for the reviewer to respond. When on, declined human threads are resolved like bot threads."
       },
       "pipelineStatusEnabled": {
         "type": "boolean",
