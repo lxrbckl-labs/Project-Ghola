@@ -70,7 +70,7 @@ There is no marketplace. A `git push` updates the source repository only — it 
 
 Active development — modular architecture. Wired surfaces: extension activation, settings webview (General / Modules / Agents: TPM / SWE / QA), module loader with manifest validation, prompt composer (Session Manifest shape), session terminal launcher.
 
-`Ghola: Open Session` opens a terminal (bash on WSL/non-Windows hosts, PowerShell fallback on Windows), cd's into the WSL fast-path directory when `tool.fastpath-check` is enabled, and sends `ghola.sessionCommand` automatically on launch.
+`Ghola: Open Session` opens a terminal (bash on WSL/non-Windows hosts, PowerShell fallback on Windows), cd's into the WSL fast-path directory when `tool.fastpath-check` is enabled, and sends `ghola.sessionCommand` automatically on launch. Sessions launch Claude Code in the permission mode set by `ghola.permissionMode` (default: bypass / `--dangerously-skip-permissions`) so you do not have to press Shift+Tab; change it in the Sessions tab.
 
 ## Build
 

@@ -822,6 +822,7 @@ export class SettingsPanel implements vscode.Disposable {
     const cfg = vscode.workspace.getConfiguration('ghola');
     const cliCommand = cfg.get<string>('cliCommand', 'claude');
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate');
+    const permissionMode = cfg.get<string>('permissionMode', 'bypassPermissions');
     const swe = {
       performanceCores: cfg.get<number>('swe.performanceCores', 2),
       efficiencyCores: cfg.get<number>('swe.efficiencyCores', 1),
@@ -840,6 +841,7 @@ export class SettingsPanel implements vscode.Disposable {
       values,
       cliCommand,
       sessionCommand,
+      permissionMode,
       swe,
       qa,
       aliases,

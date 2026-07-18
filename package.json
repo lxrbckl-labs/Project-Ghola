@@ -2,7 +2,7 @@
   "name": "ghola",
   "displayName": "Ghola",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "icon": "resources/icon-source.png",
   "publisher": "local",
   "engines": {
@@ -111,6 +111,23 @@
           "type": "string",
           "default": "claude",
           "description": "Name of the alias from ghola.cliAliases that the Sessions tab will launch as the CLI command. When non-empty this overrides ghola.cliCommand at session launch — the alias name (not its expansion) is sent to the terminal so the shell's alias lookup resolves it. Leave empty to fall back to ghola.cliCommand for back-compat with users who have not registered any aliases."
+        },
+        "ghola.permissionMode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "acceptEdits",
+            "plan",
+            "bypassPermissions"
+          ],
+          "enumDescriptions": [
+            "Normal manual approval — Claude Code prompts for each action. No launch flag is added.",
+            "Auto-accept file edits and filesystem commands (the Shift+Tab auto-accept mode). Launches with --permission-mode acceptEdits.",
+            "Plan mode — Claude plans without making changes. Launches with --permission-mode plan.",
+            "Skip ALL permission prompts for the session (--dangerously-skip-permissions). Most permissive; a few circuit breakers (e.g. rm -rf /) still fire."
+          ],
+          "default": "bypassPermissions",
+          "description": "Permission mode the Ghola Session launches Claude Code in, so you do not have to press Shift+Tab. Maps to a Claude Code launch flag (see per-value descriptions). Only applied when the resolved CLI command references 'claude'. Defaults to bypassPermissions (--dangerously-skip-permissions)."
         },
         "ghola.swe.performanceCores": {
           "type": "number",

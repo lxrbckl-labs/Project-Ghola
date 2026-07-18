@@ -546,6 +546,7 @@ export type HostToWebviewMessage =
       values: Record<string, unknown>;
       cliCommand: string;
       sessionCommand: string;
+      permissionMode: string;
       swe: { performanceCores: number; efficiencyCores: number; performanceCoresModel: string; efficiencyCoresModel: string };
       qa: { count: number; model: string };
       aliases: CliAlias[];

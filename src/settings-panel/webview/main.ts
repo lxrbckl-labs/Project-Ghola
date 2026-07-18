@@ -164,6 +164,8 @@ interface UIState {
   cliCommand: string;
   /** Value of ghola.sessionCommand VS Code configuration. */
   sessionCommand: string;
+  /** Value of ghola.permissionMode VS Code configuration (permission mode Claude Code launches in). */
+  permissionMode: string;
   /** Current SWE agent counts and model preferences pulled from `ghola.swe.*` VS Code configuration. */
   sweConfig: {
     performanceCores: number;
@@ -373,6 +375,7 @@ const state: UIState = {
   moduleSearch: '',
   cliCommand: 'claude',
   sessionCommand: 'initiate',
+  permissionMode: 'bypassPermissions',
   sweConfig: { performanceCores: 2, efficiencyCores: 1, performanceCoresModel: 'opus', efficiencyCoresModel: 'sonnet' },
   qaConfig: { count: 1, model: 'sonnet' },
   configurations: [],
@@ -566,6 +569,7 @@ function handleMessage(msg: HostToWebviewMessage): void {
       state.settingsValues = msg.values ?? {};
       state.cliCommand = msg.cliCommand ?? 'claude';
       state.sessionCommand = msg.sessionCommand ?? 'initiate';
+      state.permissionMode = msg.permissionMode ?? 'bypassPermissions';
       if (msg.swe) {
         state.sweConfig = {
           performanceCores: msg.swe.performanceCores,
@@ -1045,7 +1049,7 @@ function renderGeneral(wrapper: HTMLElement): void {
   wrapper.appendChild(textEl('h1', 'Session'));
   wrapper.appendChild(textEl('p', 'Configure the command that launches your Ghola agent team, then start a session.', 'subtitle'));
 
-  // Launch row: [Package] [CLI Alias] [Initiation Command] [Configuration] [Play]
+  // Launch row: [CLI Alias] [Initiation Command] [Permission Mode] [Configuration] [Play]
   // Package sits at the far left, Play at the far right, with the three
   // label-above-input fields between them. Built first, then appended to the
   // wrapper directly under the Session description (above the alias editor).
@@ -1079,7 +1083,15 @@ function renderGeneral(wrapper: HTMLElement): void {
   });
   sessionField.appendChild(sessionInp);
 
-  // Column 3 — Configuration dropdown
+  // Column 3 — Permission Mode picker. Persists ghola.permissionMode via the
+  // same updateConfiguration message the Initiation Command / alias picker use;
+  // the launcher reads it to choose the permission mode Claude Code boots in.
+  const permissionField = el('div', { class: 'session-launch-field' });
+  const permissionPicker = renderPermissionModePickerDropdown();
+  permissionPicker.title = 'The permission mode Claude Code launches in for this session.';
+  permissionField.appendChild(permissionPicker);
+
+  // Column 4 — Configuration dropdown
   const configField = el('div', { class: 'session-launch-field session-launch-field--config' });
   const configDropdown = renderConfigDropdown();
   configDropdown.title = 'The module configuration preset applied to this session.';
@@ -1104,6 +1116,7 @@ function renderGeneral(wrapper: HTMLElement): void {
   // the header row above the cover hero.)
   launchRow.appendChild(aliasField);
   launchRow.appendChild(sessionField);
+  launchRow.appendChild(permissionField);
   launchRow.appendChild(configField);
   launchRow.appendChild(sessionBtn);
 
@@ -1587,6 +1600,47 @@ function renderAliasPickerDropdown(): HTMLElement {
       type: 'updateConfiguration',
       section: 'ghola',
       key: 'selectedAlias',
+      value: select.value,
+    });
+  });
+
+  return select;
+}
+
+/**
+ * Permission-mode picker for the launch row. Selecting an option persists
+ * `ghola.permissionMode` via the generic `updateConfiguration` message (the
+ * same mechanism the Initiation Command input and alias picker use); the
+ * launcher reads that setting to choose the permission mode Claude Code boots
+ * in. Option order and labels mirror the enum in package.json.
+ */
+function renderPermissionModePickerDropdown(): HTMLElement {
+  const select = el('select', {
+    class: 'setting-input session-command-input',
+    'aria-label': 'Claude permission mode',
+  }) as HTMLSelectElement;
+
+  const options: Array<{ value: string; label: string }> = [
+    { value: 'off', label: 'Off (manual approval)' },
+    { value: 'acceptEdits', label: 'Auto-accept edits' },
+    { value: 'plan', label: 'Plan mode' },
+    { value: 'bypassPermissions', label: 'Bypass all (dangerously-skip-permissions)' },
+  ];
+  options.forEach((o) => {
+    const opt = el('option') as HTMLOptionElement;
+    opt.value = o.value;
+    opt.textContent = o.label;
+    select.appendChild(opt);
+  });
+
+  select.value = state.permissionMode ?? 'bypassPermissions';
+
+  select.addEventListener('change', () => {
+    state.permissionMode = select.value;
+    vscode.postMessage({
+      type: 'updateConfiguration',
+      section: 'ghola',
+      key: 'permissionMode',
       value: select.value,
     });
   });

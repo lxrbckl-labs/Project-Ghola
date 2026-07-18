@@ -116,6 +116,29 @@ export class SessionLauncher {
     const cliCommand = (selectedAlias !== '' ? selectedAlias : cfg.get<string>('cliCommand', 'claude')).trim();
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate').trim();
 
+    // Permission mode the session launches Claude Code in, so the user does not
+    // have to press Shift+Tab. Read the same way as cliCommand/sessionCommand.
+    // The flag is only handed to the CLI when the resolved cliCommand actually
+    // references `claude` — a user's custom non-claude CLI would not understand
+    // these flags. `permFlag` carries its OWN leading space so it can be spliced
+    // directly after `${cliCommand}` at the emission sites (empty string = no flag).
+    const permissionMode = cfg.get<string>('permissionMode', 'bypassPermissions');
+    let permFlag = '';
+    if (cliCommand.includes('claude')) {
+      switch (permissionMode) {
+        case 'acceptEdits':
+          permFlag = ' --permission-mode acceptEdits';
+          break;
+        case 'plan':
+          permFlag = ' --permission-mode plan';
+          break;
+        case 'bypassPermissions':
+          permFlag = ' --dangerously-skip-permissions';
+          break;
+        // 'off' (and any unexpected value) -> no flag, current manual-approve behavior.
+      }
+    }
+
     // Computed once and reused for both the env block below and the banner,
     // so the effective work dir's version/branch is never read twice.
     const version = this.readExtensionVersion();
@@ -265,9 +288,9 @@ export class SessionLauncher {
     const isBashShell = shellPath === '/bin/bash' || shellPath === '/usr/bin/bash';
     const useArgPrompt = !oneShot && !!cliCommand && isBashShell && !!phaseTwoMessage;
     if (useArgPrompt) {
-      terminal.sendText(`${cliCommand} ${this.shellQuote(phaseTwoMessage!)}`, true);
+      terminal.sendText(`${cliCommand}${permFlag} ${this.shellQuote(phaseTwoMessage!)}`, true);
     } else if (cliCommand) {
-      terminal.sendText(cliCommand, true);
+      terminal.sendText(`${cliCommand}${permFlag}`, true);
       if (phaseTwoMessage) {
         setTimeout(() => {
           terminal.sendText(phaseTwoMessage, true);
