@@ -272,6 +272,15 @@ async function dispatch(
         prId: num(args.prId),
         commentId: num(args.commentId),
       });
+    case '/create-comment':
+      // Standalone, top-level comment: deliberately passes NO `parentId` and no
+      // `inline` anchor (unlike `/reply` above) — either one would thread or
+      // anchor the comment instead of posting it at the top level.
+      return client.createComment({
+        repoSlug: str(args.repoSlug),
+        prId: num(args.prId),
+        body: str(args.body),
+      });
     case '/delete-comment':
       return client.deleteComment({
         repoSlug: str(args.repoSlug),

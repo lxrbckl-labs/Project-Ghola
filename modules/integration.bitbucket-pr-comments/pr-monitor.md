@@ -22,11 +22,12 @@ node "$GHOLA_ROOT/scripts/bb-bridge.mjs" <subcommand> [flags]
 
 The wrapper prints the operation's JSON result to stdout and exits non-zero on failure — loud, never silent. Internally the bridge server authenticates through the AtlassianBridge / `integration.atlassian-suite` credentials exactly as before, so the Bitbucket token still never crosses the agent boundary. The agent also never sees the bridge server's own bearer token: the wrapper reads `GHOLA_BRIDGE_TOKEN` from its environment. Never echo it in chat or logs, and never pass it as a flag — this is the same secrets discipline the module already applies to the Bitbucket token itself.
 
-Seven subcommands are available:
+Eight subcommands are available:
 
 - `find-pr --repo <slug> --branch <name>` — resolves the open PR id for the current branch.
 - `list-comments --repo <slug> --pr <id>` — fetches all PR comments (resolved + unresolved, inline + general); this is the `address comments` snapshot source. Each comment carries: `id`, `parentId` (`null` for top-level thread starters), `kind` (`'inline'`/`'general'`), `author` (`{ displayName, accountId }`), `body`, `inline?` (`{ path, to, from? }`), `resolved`, `createdAt`, `updatedAt`.
 - `reply --repo <slug> --pr <id> --parent <commentId> [--inline-path <p> --inline-to <n> --inline-from <n>]` — posts a reply threaded under an existing comment. The reply body is NOT a flag — it is piped via STDIN (see the heredoc pattern below). Supply the `--inline-*` flags when replying to an inline comment so the reply lands on the same file/line thread; omit them for general comments.
+- `create-comment --repo <slug> --pr <id> --body "<text>"` — posts a general, TOP-LEVEL comment on the PR. There is no `--parent` and it is never inline; this is the only subcommand that can produce a standalone thread starter. Returns the created comment id. See "Comment Verb" below for the approval gate that guards it.
 - `resolve --repo <slug> --pr <id> --comment <id>` — marks a comment thread resolved.
 - `mark-ready --repo <slug> --pr <id>` — marks a DRAFT PR ready for review. This is a Bitbucket write; see "Mark Ready Verb" below for the confirmation gate that guards it.
 - `to-draft --repo <slug> --pr <id>` — flips a READY PR back to draft (the reverse of `mark-ready`). This is a Bitbucket write; see "To Draft Verb" below for the confirmation gate that guards it.
@@ -36,7 +37,7 @@ Repo slug comes from `git remote get-url origin` (strip `.git`, take the last pa
 
 ### Required Bitbucket write permission
 
-The WRITE verbs — `reply`, `resolve`, `mark-ready`, `to-draft`, `delete-comment`, and `create pr` (owned by `integration.atlassian-suite`) — mutate Bitbucket and require the Bitbucket token to carry the `write:pullrequest:bitbucket` scope. The READ verbs — `find-pr`, `list-comments`, and pipeline status — need only the `read:*:bitbucket` scopes (`read:pullrequest:bitbucket`, `read:repository:bitbucket`, `read:workspace:bitbucket`). Scopes are chosen when the Atlassian API token is created and are a property of the token itself — not something this module or the Modules tab can turn on. Bitbucket App Passwords are deprecated (permanently removed 2026-07-28); the only supported credential is an Atlassian API token with scopes, and `integration.atlassian-suite` owns that setup end-to-end. See the 401/403 note in Failure Handling for what to do when a write verb is refused.
+The WRITE verbs — `reply`, `create-comment`, `resolve`, `mark-ready`, `to-draft`, `delete-comment`, and `create pr` (owned by `integration.atlassian-suite`) — mutate Bitbucket and require the Bitbucket token to carry the `write:pullrequest:bitbucket` scope. The READ verbs — `find-pr`, `list-comments`, and pipeline status — need only the `read:*:bitbucket` scopes (`read:pullrequest:bitbucket`, `read:repository:bitbucket`, `read:workspace:bitbucket`). Scopes are chosen when the Atlassian API token is created and are a property of the token itself — not something this module or the Modules tab can turn on. Bitbucket App Passwords are deprecated (permanently removed 2026-07-28); the only supported credential is an Atlassian API token with scopes, and `integration.atlassian-suite` owns that setup end-to-end. See the 401/403 note in Failure Handling for what to do when a write verb is refused.
 
 > PR *creation* is owned by `integration.atlassian-suite` (the `create pr` verb, which uses the same bridge via `bb-bridge.mjs create-pr`). This module handles the post-creation lifecycle only — read/reply/resolve comments and flip a PR between draft and ready.
 
@@ -78,6 +79,8 @@ The user invokes this flow by typing one of:
 - `mark ready` / `ready for review` — marks the current branch's draft PR ready for review via the `mark-ready` bridge subcommand. This is a Bitbucket write; see "Mark Ready Verb" below for the confirmation gate and the `markReadyEnabled` setting that gate it.
 - `to draft` / `back to draft` — flips the current branch's ready PR back to draft via the `to-draft` bridge subcommand (the reverse of `mark ready`). This is a Bitbucket write; see "To Draft Verb" below for the confirmation gate and the `toDraftEnabled` setting that gate it.
 - `resolve <ordinals>` — `resolve 1`, `resolve 1, 3`, `resolve 2-4`, `resolve all`. Resolves comment threads from the current snapshot (same ordinal grammar as `address`/`post`). A natural-language / text-filter phrasing also maps here (e.g. "resolve comments that say 'this has been resolved'"), selecting the snapshot subset whose text matches. This is a Bitbucket write; see "Resolve Ordinals Verb" below for the confirmation gate — and the CodeRabbit resolve-eligibility gate — that guard it.
+- `comment <text>` — posts `<text>` as a STANDALONE, TOP-LEVEL comment on the current branch's PR (not threaded under anything, not inline) via the `create-comment` bridge subcommand. This is a Bitbucket write; see "Comment Verb" below for the approval gate that guards it.
+- `rereview` / `ask CodeRabbit to review again` / `re-review` — documented shorthand for `comment @coderabbitai review`. It resolves to the exact same verb and the exact same gate; the only thing the shorthand saves is typing the body.
 - `delete <ordinals>` — `delete 1`, `delete 1, 3`, `delete 2-4`. Deletes the named comment(s) from the current snapshot (same ordinal grammar as `resolve`); `delete <id>` also accepts a raw comment id. `delete resolved` bulk-deletes every resolved comment on the PR. This is a DESTRUCTIVE, IRREVERSIBLE Bitbucket write; see "Delete Verb" below for the confirmation gate and the `deleteCommentEnabled` setting that gate it.
 
 Ambiguous gestures (`address that one`, `address the rest`) should be confirmed with the user, not guessed. When the user references an ordinal that isn't in the current snapshot, ask whether they meant to refresh the snapshot first.
@@ -418,6 +421,49 @@ If `parameters.deleteCommentEnabled` is false, refuse the trigger in one sentenc
 - **Module enabled, `deleteCommentEnabled` off**: `delete` refuses per the gate-check message above. `address`/`post`/`resolve`/`mark ready`/`to draft` verbs are unaffected.
 - **Module enabled, `deleteCommentEnabled` on (default)**: `delete` works, still gated per-invocation on the explicit `ok` confirmation, for both the per-comment and bulk `delete resolved` paths.
 
+## Comment Verb
+
+`comment <text>` posts a STANDALONE, TOP-LEVEL comment on the PR via the `create-comment` bridge subcommand. Every other write verb in this module operates on an EXISTING thread — `reply` threads under a parent, `resolve` flips a thread's state, `delete` removes one. `comment` is the only verb that starts a new top-level thread of our own, and it exists primarily so bot commands that only work as top-level comments can be issued at all. It is a Bitbucket API write, so it carries the same approval discipline as the `post` verb.
+
+### Grammar
+
+- `comment <text>` — post `<text>` as a general, top-level PR comment. The text is taken verbatim; there is no polish step and no composition step, so what the operator typed is what gets posted.
+- `rereview` / `ask CodeRabbit to review again` / `re-review` — documented shorthand that resolves to `comment @coderabbitai review`. It is nothing more than a canned body for the same verb: same bridge subcommand, same approval gate, same reporting. Do not treat it as a separate capability and do not add flags or ceremony to it.
+
+**Primary use case: asking CodeRabbit for a re-review.** `@coderabbitai review` is CodeRabbit's canonical re-review trigger, and CodeRabbit only picks it up from a TOP-LEVEL PR comment. This verb is the supported way to issue it. Other `@coderabbitai` commands follow the same rule and the same flow.
+
+### Distinction from `reply` (and the workaround that is forbidden)
+
+`reply` is threaded: it REQUIRES a `--parent` comment id and always lands as a child of an existing thread. It therefore CANNOT produce a top-level comment, no matter which parent is chosen. `create-comment` takes no `--parent` and is never inline; it is the only path to a standalone thread starter.
+
+Because of that, **do NOT post a bot command as a reply inside an existing thread** — including, especially, a thread that has already been resolved. Pickup is unreliable (the bot is watching for top-level comments), and it pollutes a cleared thread with a command that does not belong to that conversation, undoing the tidiness the resolve/delete flows exist to produce. If `create-comment` is unavailable or refused, say so plainly and stop; do not improvise a threaded substitute.
+
+### Comment Flow
+
+1. **PR resolution.** Resolve the open PR for the current branch via `find-pr --repo <slug> --branch <name>` (same resolution as the `address`/`post`/`resolve` flows). No matches -> ask the user.
+2. **Approve.** This is an outbound write to a real PR that colleagues and bots will see. When `parameters.requireUserApproval` is true, show the EXACT text to be posted — verbatim, in a block, with the repo slug and PR id — and gate on `ok / revise: <change> / cancel`. Post only on `ok`. When `parameters.requireUserApproval` is false, skip this step and post immediately, exactly as the `post` verb does under the same setting. This verb adds no gate of its own: posting a comment is the same risk class as posting a reply and is covered by the existing setting.
+3. **Execute.** On approval, invoke the bridge ONCE:
+
+   ```bash
+   node "$GHOLA_ROOT/scripts/bb-bridge.mjs" create-comment --repo my-repo --pr 42 --body "@coderabbitai review"
+   ```
+
+   One call per `comment` invocation. No retries on timeout — a retry could double-post a duplicate top-level thread.
+4. **Report.** Report the created comment id back to the user as an audit trail, in the same shape as the `reply`/`resolve`/`delete` post-batch summaries.
+
+### Failure handling
+
+Per-failure behavior follows the taxonomy in "Failure Handling" above — surface the failure loudly, relaying Bitbucket's `error.message` verbatim rather than a generic "failed". Two cases are worth calling out for this verb specifically:
+
+- **403** — the token is valid but lacks the `write:pullrequest:bitbucket` scope, and the surfaced `message` now names that permission cause. The fix is a NEW Atlassian API token with that scope, re-saved via the Atlassian Suite's **Set Bitbucket API Token**; scopes cannot be added to an existing token, and there is no Modules-tab toggle that grants them.
+- **400 at the comment ceiling** — Bitbucket caps a PR at 200 comments, so a create can fail with "By default, you can't create more than 200 comments per pull request." A `comment` is a brand-new comment against that cap, so this verb is exactly the one that trips it. Relay the message and point the user at `delete resolved` — the documented way to free room — rather than retrying.
+
+### Module-Disabled Vs Feature-Disabled
+
+- **`integration.bitbucket-pr-comments` disabled**: `comment` is unavailable (the whole module is off).
+- **Module enabled, `requireUserApproval` on (default)**: `comment` works, gated per-invocation on the explicit `ok` confirmation in step 2 with the exact text shown first.
+- **Module enabled, `requireUserApproval` off**: no approval gate fires — the comment posts immediately, the same scripted-bulk path the `post` verb takes under this setting. There is no separate enable/disable setting for this verb; it is the same capability class as `reply` and rides the same gate.
+
 ## Role-Specific Notes
 
 ### TPM
@@ -430,6 +476,7 @@ If `parameters.deleteCommentEnabled` is false, refuse the trigger in one sentenc
 - For the `to draft` verb: gate on `parameters.toDraftEnabled`, resolve the PR, show intent, require explicit `ok`, then invoke the wrapper's `to-draft` subcommand. Report success or surface the failure loudly per the To Draft Verb section above.
 - For the `resolve <ordinals>` verb (and its `resolve all` and natural-language / text-filter variants — e.g. "resolve comments that say 'this has been resolved'"): resolve the request into a matched set against the current snapshot, apply the CodeRabbit resolve-eligibility gate over that set when `parameters.coderabbitResolveRequiresConfirmation` is true (pre-select only ✅-confirmed CodeRabbit threads plus human/other-author threads; move un-confirmed CodeRabbit threads — including ones whose text merely claims resolution — into a "needs your confirmation" grouping, annotated and called out with "resolve anyway?" rather than dropped), show intent, require explicit `ok`, then invoke the wrapper's `resolve` subcommand once per selected comment id. The operator keeps final authority — the gate changes what is pre-selected and how un-confirmed matches are framed, not whether they can override. Report each resolved thread id back as audit trail per the Resolve Ordinals Verb section above.
 - For the `delete` verb: gate on `parameters.deleteCommentEnabled`. For `delete <ordinals>`/`delete <id>`, select against the current snapshot; for `delete resolved`, run `list-comments` and filter to `resolved === true`. Show intent (the exact comment(s) with id + short text) and state plainly that deletion is permanent and cannot be undone, require explicit `ok`, then invoke the wrapper's `delete-comment` subcommand once per id. Tolerate a `not-found` on an already-tombstoned child id and continue. Report the deleted ids back as audit trail per the Delete Verb section above.
+- For the `comment <text>` verb (and its `rereview` / "ask CodeRabbit to review again" shorthand, which resolves to `comment @coderabbitai review`): resolve the PR, show the EXACT text to be posted and gate per `parameters.requireUserApproval` (the same gate the `post` verb uses — no extra setting), then invoke the wrapper's `create-comment` subcommand once. This is the ONLY verb that produces a top-level comment; `reply` requires a `--parent` and cannot, so never issue a bot command like `@coderabbitai review` as a reply inside an existing (especially resolved) thread. Report the created comment id back as audit trail per the Comment Verb section above.
 - Settings (read from the module's parameters block in the Session Manifest):
   - `parameters.replyInstruction` — feeds the protest-reply composition step (step 7), which drafts the disagree-path counter-comment presented to the operator for approval before posting. Protest replies are the only replies we post: accepted findings are fixed, pushed, left silent on replies, and then resolved by us once CodeRabbit adds its ✅ checkmark confirming the fix. If absent from the Session Manifest, the default applies: `"Write a 1-2 sentence professional PR reply explaining why we are declining the requested change (the finding is incorrect, out of scope, or intentionally not being made). No double-dashes."`
   - `parameters.coderabbitReplyPersona` — optional voice/tone overlay layered onto `parameters.replyInstruction` when the parent comment author is CodeRabbit (and therefore applied only to protest replies). If absent from the Session Manifest, the default applies: empty string (no overlay).

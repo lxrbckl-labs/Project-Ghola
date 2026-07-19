@@ -22,6 +22,7 @@
 //   node scripts/bb-bridge.mjs delete-comment --repo <slug> --pr <n> --comment <id>
 //   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
 //   node scripts/bb-bridge.mjs to-draft      --repo <slug> --pr <id>
+//   node scripts/bb-bridge.mjs create-comment --repo <slug> --pr <id> --body "<text>"
 //   node scripts/bb-bridge.mjs create-pr     --repo <slug> --source <branch> --target <branch> \
 //       --title <title> [--draft]   (description piped via stdin)
 //   node scripts/bb-bridge.mjs reply         --repo <slug> --pr <id> --parent <id> \
@@ -306,6 +307,24 @@ async function cmdReply(flags) {
   await postToBridge('/reply', payload);
 }
 
+// Standalone, TOP-LEVEL PR comment. Deliberately does NOT accept or require
+// --parent (that is cmdReply's job, which threads under an existing comment)
+// and offers no inline file/line anchoring. The body arrives as a --body flag
+// rather than via stdin because the canonical use is a short bot trigger
+// (e.g. `@coderabbitai review`) that a caller wants on one line.
+async function cmdCreateComment(flags) {
+  const usage = 'bb-bridge create-comment --repo <slug> --pr <id> --body "<text>"';
+  const repoSlug = requireFlag(flags, 'repo', usage);
+  const prId = requireNumberFlag(flags, 'pr', usage);
+  const body = requireFlag(flags, 'body', usage);
+  // A whitespace-only body would otherwise post a blank comment (or be rejected
+  // opaquely by Bitbucket); fail explicitly here instead, mirroring cmdGetTicket.
+  if (body.trim() === '') {
+    usageFail(`--body must not be empty. Usage: ${usage}`);
+  }
+  await postToBridge('/create-comment', { repoSlug, prId, body });
+}
+
 async function cmdCreatePr(flags) {
   const usage = 'bb-bridge create-pr --repo <slug> --source <branch> --target <branch> '
     + '--title <title> [--draft]  (description piped via stdin)';
@@ -355,6 +374,8 @@ Usage:
   node scripts/bb-bridge.mjs delete-comment --repo <slug> --pr <n> --comment <id>
   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
   node scripts/bb-bridge.mjs to-draft      --repo <slug> --pr <id>
+  node scripts/bb-bridge.mjs create-comment --repo <slug> --pr <id> --body "<text>"
+                                            (standalone top-level comment; no --parent)
   node scripts/bb-bridge.mjs create-pr     --repo <slug> --source <branch> --target <branch> \\
       --title <title> [--draft]         (description is read from stdin)
   node scripts/bb-bridge.mjs reply         --repo <slug> --pr <id> --parent <id> \\
@@ -380,6 +401,7 @@ async function main() {
     'delete-comment': cmdDeleteComment,
     'mark-ready': cmdMarkReady,
     'to-draft': cmdToDraft,
+    'create-comment': cmdCreateComment,
     'create-pr': cmdCreatePr,
     reply: cmdReply,
     'get-ticket': cmdGetTicket,

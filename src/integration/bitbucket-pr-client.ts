@@ -108,6 +108,19 @@ export interface PrReplyResult {
   retryAfter?: string;
 }
 
+/** Result of creating a STANDALONE, top-level PR comment. Mirrors
+ *  `PrReplyResult` field-for-field — the two operations differ only in whether
+ *  a `parent` is sent, so their result shapes are deliberately identical and
+ *  callers can log the created `commentId` the same way for both. */
+export interface PrCommentCreateResult {
+  status: BitbucketPrStatus;
+  /** Returned by Bitbucket on a successful create. */
+  commentId?: number;
+  message?: string;
+  /** Raw `Retry-After` on a `'rate-limited'` result; carried, never acted on. */
+  retryAfter?: string;
+}
+
 export interface PrResolveResult {
   status: BitbucketPrStatus;
   message?: string;
@@ -349,6 +362,53 @@ export class BitbucketPrClient {
     }
 
     return this.runWithFailover(email, tokens, async (auth): Promise<PrReplyResult> => {
+      const res = await this.request(url, 'POST', auth, payload);
+      if (!res.ok) return { status: res.status, message: res.message, retryAfter: res.retryAfter };
+      const body = res.body as BitbucketComment | undefined;
+      const id = typeof body?.id === 'number' ? body.id : undefined;
+      return { status: 'ok', commentId: id };
+    });
+  }
+
+  /**
+   * `POST /2.0/repositories/{workspace}/{repo_slug}/pullrequests/{pr_id}/comments`
+   * with `{ content: { raw } }` and NOTHING else.
+   *
+   * Creates a STANDALONE, top-level, general (non-inline) PR comment. This is
+   * the exact mirror of `replyToComment` minus the two keys that change where
+   * the comment lands: sending `parent` makes it a threaded reply, sending
+   * `inline` makes it a file/line-anchored comment — so both are deliberately
+   * omitted from the payload here. That top-level placement is what makes
+   * bot-trigger comments (e.g. `@coderabbitai review`) actually fire, since
+   * those bots only read top-level comments. Like the other writes this needs
+   * the token to carry PR write permission (`write:pullrequest:bitbucket`, or
+   * an App Password with "Pull requests: Write") — a 403 here means that scope
+   * is missing, and its message carries Bitbucket's own reason text.
+   */
+  async createComment(args: {
+    repoSlug: string;
+    prId: number;
+    body: string;
+  }): Promise<PrCommentCreateResult> {
+    if (!args.repoSlug || !Number.isFinite(args.prId)) {
+      return { status: 'not-found', message: 'Missing repo or PR id' };
+    }
+    if (!args.body || !args.body.trim()) {
+      return { status: 'unknown-error', message: 'Comment body is empty' };
+    }
+    const { email, workspace, tokens, missing } = await this.readAuthContext();
+    if (missing) return { status: 'unauthorized', message: missing };
+
+    const url =
+      `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
+      `/${encodeURIComponent(args.repoSlug)}/pullrequests/${encodeURIComponent(String(args.prId))}/comments`;
+    // No `parent` key and no `inline` key — including either one is precisely
+    // what would turn this into a threaded reply / inline comment.
+    const payload: { content: { raw: string } } = {
+      content: { raw: args.body },
+    };
+
+    return this.runWithFailover(email, tokens, async (auth): Promise<PrCommentCreateResult> => {
       const res = await this.request(url, 'POST', auth, payload);
       if (!res.ok) return { status: res.status, message: res.message, retryAfter: res.retryAfter };
       const body = res.body as BitbucketComment | undefined;
