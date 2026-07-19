@@ -70,6 +70,70 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
     settings: {
       'tool.lenses': { autoKickReviewOnColleagueBranch: true, autoKickPlanningOnFreshBranch: true },
       'integration.bitbucket-pr-comments': { logCommentsEnabled: true, markReadyEnabled: true, toDraftEnabled: true, deleteCommentEnabled: true },
+      // Ticket Work needs to cut a fresh branch for the ticket it is starting.
+      // Because a keyValue override REPLACES tool.git's default allowedCommands
+      // (it is not merged), we ship the FULL default map here with only
+      // `git branch <name>` and `git switch` flipped to enabled: true - the
+      // create-then-switch pair. `git checkout` is deliberately left disabled:
+      // its `git checkout -- <path>` form discards uncommitted working-tree
+      // edits, and we do not want to grant that side effect just to make a
+      // branch. Every write/destructive command stays off, so Ticket Work can
+      // create and enter a branch but cannot stage, commit, push, or rewrite.
+      // Descriptions are panel-only metadata (never passed to the agent) and
+      // are copied from tool.git's default with its em-dashes rewritten to
+      // ASCII to satisfy the source ASCII rule.
+      'tool.git': {
+        allowedCommands: {
+          'git blame': { value: 'r', enabled: true, description: 'Show who last modified each line of a file and in which commit.' },
+          'git branch': { value: 'r', enabled: true, description: 'List local branches; mark the current branch with an asterisk.' },
+          'git describe': { value: 'r', enabled: true, description: 'Produce a human-readable name for the current commit using the nearest tag.' },
+          'git diff': { value: 'r', enabled: true, description: 'Show changes between commits, branches, working tree, etc.' },
+          'git grep': { value: 'r', enabled: true, description: 'Search tracked files for a pattern; faster than plain grep over the repo.' },
+          'git log': { value: 'r', enabled: true, description: 'Show commit history with messages, authors, and dates.' },
+          'git ls-files': { value: 'r', enabled: true, description: 'List files tracked by the index; useful for scoping searches.' },
+          'git reflog': { value: 'r', enabled: true, description: 'Show the local history of HEAD movements; lifeline for recovering lost commits.' },
+          'git remote': { value: 'r', enabled: true, description: 'List configured remotes and their URLs.' },
+          'git rev-parse': { value: 'r', enabled: true, description: 'Resolve a ref to its full SHA or show repo metadata paths.' },
+          'git shortlog': { value: 'r', enabled: true, description: 'Summarize git log output grouped by author.' },
+          'git show': { value: 'r', enabled: true, description: 'Display a commit, tag, or object along with its diff.' },
+          'git stash list': { value: 'r', enabled: true, description: 'List stashed changesets currently saved on the stash stack.' },
+          'git status': { value: 'r', enabled: true, description: 'Show working tree status: modified, staged, and untracked files.' },
+          'git tag': { value: 'r', enabled: true, description: 'List existing tags in the repository.' },
+          'git add': { value: 'w', enabled: false, description: 'Stage file contents for the next commit.' },
+          'git apply': { value: 'w', enabled: false, description: 'Apply a patch to files and/or the index without committing.' },
+          'git branch <name>': { value: 'w', enabled: true, description: 'Create a new local branch pointing at the current commit.' },
+          'git cherry-pick': { value: 'w', enabled: false, description: 'Apply the changes from existing commits onto the current branch.' },
+          'git checkout': { value: 'w', enabled: false, description: "Switch branches (non-destructive form). Use 'git checkout -- <path>' for file-restore, which is a separate d-category entry." },
+          'git clone': { value: 'w', enabled: false, description: 'Clone a repository into a new directory.' },
+          'git commit': { value: 'w', enabled: false, description: 'Record staged changes to the repository as a new commit.' },
+          'git fetch': { value: 'w', enabled: false, description: 'Download objects and refs from a remote without merging.' },
+          'git init': { value: 'w', enabled: false, description: 'Create an empty Git repository or reinitialize an existing one.' },
+          'git merge': { value: 'w', enabled: false, description: 'Join two or more development histories together into the current branch.' },
+          'git mv': { value: 'w', enabled: false, description: 'Move or rename a tracked file, directory, or symlink.' },
+          'git pull': { value: 'w', enabled: false, description: 'Fetch from a remote and integrate the changes into the current branch.' },
+          'git push': { value: 'w', enabled: false, description: "Update a remote ref using the local ref's commits." },
+          'git rebase': { value: 'w', enabled: false, description: 'Reapply commits on top of another base tip (non-interactive). Rewrites local unpublished commits; recoverable via reflog.' },
+          'git remote add': { value: 'w', enabled: false, description: 'Register a new remote repository under a short name.' },
+          'git reset': { value: 'w', enabled: false, description: 'Move HEAD and optionally update the index; safe modes preserve the working tree.' },
+          'git restore --staged': { value: 'w', enabled: false, description: 'Unstage paths from the index without touching the working tree.' },
+          'git revert': { value: 'w', enabled: false, description: 'Create a new commit that undoes the changes of an existing commit.' },
+          'git rm': { value: 'w', enabled: false, description: 'Remove tracked files from the working tree and the index.' },
+          'git stash pop': { value: 'w', enabled: false, description: 'Apply the latest stash and drop it from the stash stack.' },
+          'git stash push': { value: 'w', enabled: false, description: 'Save the current modified state onto a new stash entry.' },
+          'git switch': { value: 'w', enabled: true, description: 'Switch branches (modern replacement for the branch half of checkout).' },
+          'git tag <name>': { value: 'w', enabled: false, description: 'Create a new tag pointing at the current commit.' },
+          'git branch -D': { value: 'd', enabled: false, description: 'Force-delete a local branch even if it has unmerged commits.' },
+          'git checkout -- <path>': { value: 'd', enabled: false, description: 'Discard working-tree changes for the given path; uncommitted edits are lost.' },
+          'git clean -f': { value: 'd', enabled: false, description: 'Force-delete untracked files from the working tree.' },
+          'git filter-branch': { value: 'd', enabled: false, description: 'Rewrite branch history wholesale by applying filters; deprecated and dangerous.' },
+          'git push --delete': { value: 'd', enabled: false, description: 'Delete a ref on the remote; removes the branch or tag for everyone.' },
+          'git push --force': { value: 'd', enabled: false, description: 'Force-push, overwriting remote history. Use with extreme care.' },
+          'git rebase -i': { value: 'd', enabled: false, description: 'Interactive rebase; reorder, squash, edit, or drop commits in local history.' },
+          'git reset --hard': { value: 'd', enabled: false, description: 'Reset HEAD and working tree; discards all uncommitted changes.' },
+          'git stash clear': { value: 'd', enabled: false, description: 'Delete every stash entry; the entire stash stack is wiped.' },
+          'git stash drop': { value: 'd', enabled: false, description: 'Delete a single stash entry from the stash stack.' },
+        },
+      },
       // A keyValue override REPLACES the module's manifest default rather than
       // deep-merging into it, so this block reproduces tool.npm-suite's FULL
       // default allowedCommands map VERBATIM and then appends the sanctioned

@@ -31,6 +31,36 @@ TPM does the following BEFORE responding to the user's first request:
 7. If the notes file exists, defer to `tool.session-handoff` for the resume surfacing — that module reads the most-recent `## Session Handoff` block and includes a summary in the opening message. This mode does not duplicate that surfacing.
 8. Include the ticket id and summary in the opening message so the user knows the scope: "Ticket Work mode — working on `<TICKET-ID>`: `<summary>`." Combine this with the notes-file message (step 6) and the session-handoff summary (step 7) into a single coherent opening rather than three separate messages.
 
+## Branch creation (user-invoked)
+
+Ticket resolution above runs branch -> ticket key. This section is the inverse direction — ticket key -> branch — and it **does not change the derivation logic above in any way**. It is also **never automatic**: it does not run at session start, it is not part of ticket resolution, and it never fires on its own. It runs only when the operator explicitly asks for it ("create a branch for CMMS-1234", "start CMMS-1234", "branch this off dev"). Session start behaves exactly as it always has.
+
+**Naming convention.** `<prefix>/<KEY>-<slug>`:
+
+- `<prefix>` defaults to `feature`. `bugfix`, `hotfix`, and `release` are the alternatives the operator may request — use one only when asked; never infer the prefix from the ticket's issue type.
+- `<KEY>` is the uppercase Jira key exactly as resolved (`CMMS-2818`).
+- `<slug>` is the Jira summary lowercased, with every run of non-alphanumeric characters collapsed to a single hyphen and leading/trailing hyphens trimmed.
+
+The convention is **round-trip safe by construction**: a branch created this way parses back to the same ticket key under the derivation regex in ticket resolution step 1. Strip the `feature/` prefix, take the last path segment, and `^([A-Za-z]+)-([0-9]+)` matches the key. Worked example — `CMMS-2818` "Automated testing - pick list" becomes `feature/CMMS-2818-automated-testing-pick-list`; strip `feature/`, match the regex, get `CMMS` + `2818` -> `CMMS-2818`. Any name you propose must survive that check before you offer it; if it does not, fix the name, do not offer it.
+
+**Allowlist deference.** Creating or switching a branch is a `tool.git` operation and `tool.git` is authoritative for the mechanics. If the branch create/switch command is not present in the effective `allowedCommands` allowlist, **refuse** per `tool.git`'s allowlist discipline — do not shell out around git, do not substitute an enabled near-neighbor command, do not ask for the branch to be made "some other way". Tell the operator exactly what to fix: which `tool.git` command to enable in the Modules tab (and at which permission level), then stop and wait.
+
+**Confirm before creating.** Never create a branch on the strength of the request alone. Surface intent first and wait for an explicit yes:
+
+- The exact branch name to be created.
+- The base branch it will be created from.
+- The current branch (which may not be the base).
+
+The base is a confirmation point in its own right — do NOT silently branch off whatever happens to be checked out. Name the base you intend to use, name the current branch when they differ, and let the operator redirect (`dev` and `main` are the common bases). If the operator does not name a base and you have no reliable signal, ask rather than assume.
+
+**Preflight checks.** Run these before proposing the command, and surface anything they turn up as part of the confirmation:
+
+- **Branch already exists locally.** Do not create over it and do not mint a `-2` variant. Say it exists and offer to switch to it instead — that is a different command and needs its own confirmation.
+- **Uncommitted working-tree changes.** Switching carries them along. List what is dirty before switching so the operator can commit, stash, or proceed knowingly. Never discard anything to make the switch clean.
+- **Ticket key not resolvable.** If the operator's request does not carry a well-formed key and none can be resolved, ask which ticket the branch is for. Do not guess a key, and do not fabricate a slug from a summary you never pulled — if the summary is unavailable, ask the operator for a short slug instead.
+
+If any preflight is unresolved, stop at the question. The branch is cheap to create later and expensive to create wrong.
+
 ## Cross-ticket discipline (mid-session scope binding)
 
 This is the core behavior of this mode. When the user references a ticket other than the active one — asks to look at it, asks SWE to investigate it, asks for a change there — TPM responds per `parameters.crossTicketStrictness`:
@@ -105,6 +135,8 @@ The body above applies identically to every agent. The notes below are short fra
 ### TPM
 
 You do the ticket resolution at session start — derive the ticket from the branch (or ask, if the branch yields no match), validate the format, pull the ticket by running `scripts/bb-bridge.mjs get-ticket --key <TICKET-ID>` when `parameters.pullOnStart` is true (on a non-zero exit — including a bare `exists:false`, which is often just a bridge-token gap — retry via the Atlassian MCP `getJiraIssue` tool before falling back to the paste-it-yourself ask), resolve the notes file path via `tool.obsidian-notes`, create the file when it does not exist, and include the ticket id plus summary in the opening message. You enforce the cross-ticket policy per `parameters.crossTicketStrictness` for the rest of the session. You delegate the Session Handoff section of the per-ticket notes to `tool.session-handoff` — do NOT write to that section directly even when wrapping up ticket-bound work, because the handoff protocol owns the dated `## Session Handoff (<date>)` blocks and double-writing breaks that contract. On wrap-up, your contribution from this mode is to consolidate SWE and QA returns into the relevant sections (Implementation Notes, Changes Made, Edge Cases, Testing Procedures, QA Findings) before writing; `tool.session-handoff` separately handles the dated handoff block. If the user explicitly disables this mode mid-session by toggling the module off, surface the change once ("Ticket Work disabled — no longer bound to `<TICKET-ID>`.") and proceed under the universal posture.
+
+You also own branch creation per "Branch creation (user-invoked)" above — but only when the operator asks for it. Never create a branch at session start, never as a side effect of ticket resolution, and never without showing the operator the exact branch name, the base branch, and the current branch and getting an explicit yes. If `tool.git`'s allowlist does not carry the branch create/switch command, refuse and name the command to enable in the Modules tab rather than routing around it or delegating the workaround to SWE.
 
 ### SWE
 
