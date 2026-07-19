@@ -31,6 +31,7 @@ import {
   readModuleSettings,
   writeModuleSettings,
   migrateModuleSettingsToGlobal,
+  migrateGitBranchCommandsEnabled,
 } from './state/module-settings';
 import { ModeStatusBarItem, MODE_STATUS_BAR_CONFIG_SECTION } from './status-bar/mode-status-bar';
 
@@ -230,7 +231,18 @@ export function activate(context: vscode.ExtensionContext): void {
   // follow the operator across workspaces and survive preset applies. Idempotent
   // and fire-and-forget: reads use `readModuleSettings`, which merges the legacy
   // fallback until this completes, so correctness never depends on its timing.
-  void migrateModuleSettingsToGlobal(context.globalState, context.workspaceState);
+  // Then flip `git branch <name>` / `git switch` on inside an already-stored
+  // tool.git allowed-commands override, which shadows the manifest default.
+  // CHAINED, not fired independently: both migrations rewrite the same
+  // `ghola.moduleSettings` globalState key, so running them concurrently could
+  // let the legacy fold's stale snapshot clobber the flip. The branch-command
+  // migration never throws, and the `.catch` keeps a failed legacy fold from
+  // both skipping it and surfacing an unhandled rejection.
+  void migrateModuleSettingsToGlobal(context.globalState, context.workspaceState)
+    .catch((err) => {
+      logger.appendLine(`[ghola] module-settings global migration failed (non-fatal): ${err}`);
+    })
+    .then(() => migrateGitBranchCommandsEnabled(context.globalState, context.workspaceState, logger));
 
   const moduleState = new ModuleState(context.workspaceState);
   const loader = new ModuleLoader(moduleState, {
