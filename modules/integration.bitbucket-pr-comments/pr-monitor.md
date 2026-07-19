@@ -415,8 +415,8 @@ If `parameters.deleteCommentEnabled` is false, refuse the trigger in one sentenc
 ### Module-Disabled Vs Feature-Disabled
 
 - **`integration.bitbucket-pr-comments` disabled**: `delete` is unavailable (the whole module is off).
-- **Module enabled, `deleteCommentEnabled` off (default)**: `delete` refuses per the gate-check message above. `address`/`post`/`resolve`/`mark ready`/`to draft` verbs are unaffected.
-- **Module enabled, `deleteCommentEnabled` on**: `delete` works, still gated per-invocation on the explicit `ok` confirmation, for both the per-comment and bulk `delete resolved` paths.
+- **Module enabled, `deleteCommentEnabled` off**: `delete` refuses per the gate-check message above. `address`/`post`/`resolve`/`mark ready`/`to draft` verbs are unaffected.
+- **Module enabled, `deleteCommentEnabled` on (default)**: `delete` works, still gated per-invocation on the explicit `ok` confirmation, for both the per-comment and bulk `delete resolved` paths.
 
 ## Role-Specific Notes
 
@@ -446,7 +446,7 @@ If `parameters.deleteCommentEnabled` is false, refuse the trigger in one sentenc
   - `parameters.requireUserApproval` — when true, present polished comments for approval before posting. If absent from the Session Manifest, the default applies: `true` (the safety gate is on).
   - `parameters.markReadyEnabled` — when false, refuse the `mark ready` verb outright. If absent from the Session Manifest, the default applies: `false` (the verb is disabled — off by default since it's a Bitbucket write).
   - `parameters.toDraftEnabled` — when false, refuse the `to draft` verb outright. If absent from the Session Manifest, the default applies: `false` (the verb is disabled — off by default since it's a Bitbucket write).
-  - `parameters.deleteCommentEnabled` — when false, refuse the `delete` verb (both `delete <ordinals>`/`delete <id>` and `delete resolved`) outright. If absent from the Session Manifest, the default applies: `false` (the verb is disabled — off by default since deletion is a DESTRUCTIVE, IRREVERSIBLE Bitbucket write).
+  - `parameters.deleteCommentEnabled` — when false, refuse the `delete` verb (both `delete <ordinals>`/`delete <id>` and `delete resolved`) outright. If absent from the Session Manifest, the default applies: `true` (the verb is enabled by default; every deletion — per-comment or bulk — still requires an explicit per-delete `ok` confirmation, since deletion remains a DESTRUCTIVE, IRREVERSIBLE Bitbucket write).
 - When `parameters.logCommentsEnabled` is true, fetched comments are appended to `parameters.logFilePath` as JSON lines. Whether your own posted replies are logged too is gated by `parameters.logIncludeReplies`: on (default) logs inbound comments plus posted replies; off logs only inbound comments and skips the reply entries. You do not need to invoke logging explicitly; it happens passively during the address/post workflow.
 
 ### SWE

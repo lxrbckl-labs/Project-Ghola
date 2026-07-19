@@ -1,7 +1,7 @@
 {
   "id": "integration.bitbucket-pr-comments",
   "name": "PR Monitor",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Owns the Bitbucket PR review-comment workflow — addressing inbound comments via the address ordinal grammar, posting Review Mode findings outbound via the post ordinal grammar, resolving comment threads via the resolve ordinal grammar, optionally logging every comment to a persistent JSON file for downstream learning, and reusing Atlassian Suite credentials.",
   "proactive": false,
   "author": "aarbuckle",
@@ -142,8 +142,8 @@
       "deleteCommentEnabled": {
         "type": "boolean",
         "label": "Delete Comment Enabled",
-        "default": false,
-        "description": "Enables the delete verb, which deletes PR comment(s) via the bb-bridge.mjs wrapper's delete-comment subcommand — either specific comments by ordinal/id or, via delete resolved, every resolved comment on the PR. Deletion is DESTRUCTIVE and IRREVERSIBLE on Bitbucket (there is no undo), so it is always behind an explicit user confirmation gate. Its primary use is freeing room under Bitbucket's 200-comment-per-PR cap by clearing resolved comments. Off by default so first-run installs cannot delete comments without opting in."
+        "default": true,
+        "description": "Enables the delete verb, which deletes PR comment(s) via the bb-bridge.mjs wrapper's delete-comment subcommand — either specific comments by ordinal/id or, via delete resolved, every resolved comment on the PR. Deletion is DESTRUCTIVE and IRREVERSIBLE on Bitbucket (there is no undo), so it is always behind an explicit user confirmation gate. Its primary use is freeing room under Bitbucket's 200-comment-per-PR cap by clearing resolved comments. On by default; every deletion still requires explicit per-delete confirmation before it runs."
       }
     }
   }
