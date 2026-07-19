@@ -13,3 +13,9 @@ Last processed Claude version: none (no changelog fold yet)
 - Files touched: modules/integration.bitbucket-pr-comments/manifest.json, modules/integration.bitbucket-pr-comments/pr-monitor.md
 - Rationale: v0.23.1 enabled delete only via the Ticket Work preset override, which does not reach already-configured sessions; flipping the module manifest default to true makes delete available by default in sessions that do not override it, still gated by the mandatory per-delete confirmation. pr-monitor.md default-value docs updated to match.
 - Commit: 9f4e701f39e5e5f0f21376b2b20757f27d2b9444
+
+## 2026-07-19 upgrade: Add ticket branch creation to Ticket Work profile
+- Inspired by: user request (Ticket Work profile could not create a branch from a ticket)
+- Files touched: src/settings-panel/built-in-configurations.ts, modules/mode.ticket-work/ticket-work.md, modules/mode.ticket-work/manifest.json
+- Rationale: Ticket Work shipped no tool.git override so it inherited the read-only manifest default, and mode.ticket-work only derived a ticket key from an existing branch. Added a full-map tool.git allowedCommands override to the Ticket Work preset enabling only "git branch <name>" and "git switch" (48/48 key parity verified; bare "git checkout" left disabled to avoid granting the file-discarding "git checkout -- <path>" form), plus a user-invoked branch-creation workflow with round-trip-safe <prefix>/<KEY>-<slug> naming, allowlist deference, and confirm-before-create. Never automatic; existing branch-to-key derivation unchanged.
+- Commit: 97470746b28e492852af7ef4dfb9ec79228b99f6
