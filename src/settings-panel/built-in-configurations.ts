@@ -69,7 +69,7 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
     ],
     settings: {
       'tool.lenses': { autoKickReviewOnColleagueBranch: true, autoKickPlanningOnFreshBranch: true },
-      'integration.bitbucket-pr-comments': { logCommentsEnabled: true, markReadyEnabled: true, toDraftEnabled: true },
+      'integration.bitbucket-pr-comments': { logCommentsEnabled: true, markReadyEnabled: true, toDraftEnabled: true, deleteCommentEnabled: true },
       // A keyValue override REPLACES the module's manifest default rather than
       // deep-merging into it, so this block reproduces tool.npm-suite's FULL
       // default allowedCommands map VERBATIM and then appends the sanctioned
