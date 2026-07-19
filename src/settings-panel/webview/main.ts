@@ -3924,83 +3924,80 @@ function rerenderAtlassianTokenBlock(): void {
 }
 
 /**
- * Render the Bitbucket MULTI-token list: a labelled header, one row per stored
- * token (label · masked last-4 · Validate · Remove · reorder up/down), and an
- * "Add token" control. Row order is the round-robin failover order. Token values
- * are only ever SENT inbound (Add) — never displayed. Mirrors the single-slot
- * chrome so it sits flush with the Jira slot above.
+ * Render the Bitbucket MULTI-token management table: a labelled header and a
+ * full-width `kv-table` (Label · Value · Actions[Remove]) with a `<tfoot>`
+ * add-row. Row order is the round-robin failover order. Token values are only
+ * ever SENT inbound (Add / Replace) — never displayed. Structured on the same
+ * kv-table scaffolding as `renderAliasEditor` so it reads as a standard
+ * management table rather than the old bespoke flex list.
  */
 function renderBitbucketTokenList(): HTMLElement {
   const tokens = state.atlassianBitbucketTokens;
-  const validation = state.atlassianValidation;
 
-  const container = el('div', { class: 'atlassian-token-slot atlassian-token-list' });
+  const block = el('div', { class: 'bitbucket-token-editor' });
 
-  // Leading key glyph — same credential-field affordance as the Jira slot.
-  const icon = el('span', { class: 'atlassian-token-slot-icon', 'aria-hidden': 'true' });
-  icon.innerHTML = KEY_ICON_SVG;
-  container.appendChild(icon);
-
-  // Body column: header, rows, add control.
-  const body = el('div', { class: 'atlassian-token-list-body' });
-
+  // Section header — reuses the shared slot-label chrome so it matches the
+  // Jira slot's product heading above.
   const header = el('div', { class: 'atlassian-token-slot-label' });
   header.textContent = 'Bitbucket API Tokens';
-  body.appendChild(header);
+  block.appendChild(header);
 
+  const tableWrap = el('div', { class: 'kv-table-wrap' });
+  // `kv-table--full-width` drops the shared 720px ceiling so the token table
+  // spans its settings section (same modifier the alias editor opts into).
+  const table = el('table', { class: 'kv-table kv-table--bitbucket kv-table--full-width' });
+
+  // ── Header row — Value + Label get labels; the actions column stays
+  // unlabelled (same as the kv-table Actions header). ──
+  const thead = el('thead');
+  const headRow = el('tr');
+  const labelHead = el('th');
+  labelHead.textContent = 'Label';
+  headRow.appendChild(labelHead);
+  const valueHead = el('th', { class: 'kv-bb-value-head' });
+  valueHead.textContent = 'Value';
+  headRow.appendChild(valueHead);
+  headRow.appendChild(el('th', { class: 'kv-actions-head kv-bb-actions-head' }));
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = el('tbody');
   if (tokens.length === 0) {
-    const empty = textEl('div', 'No tokens set — add one below.', 'atlassian-token-status');
-    body.appendChild(empty);
+    const emptyRow = el('tr', { class: 'kv-empty-row' });
+    const td = el('td');
+    td.setAttribute('colspan', '3');
+    td.textContent = 'No tokens set. Add one below.';
+    emptyRow.appendChild(td);
+    tbody.appendChild(emptyRow);
   } else {
-    const rows = el('div', { class: 'atlassian-token-rows' });
-    tokens.forEach((tok, index) => {
-      const rowStatus = validation?.bitbucket?.find((b) => b.id === tok.id)?.status;
-      rows.appendChild(renderBitbucketTokenRow(tok, index, tokens.length, rowStatus));
+    tokens.forEach((tok) => {
+      tbody.appendChild(renderBitbucketTokenRow(tok));
     });
-    body.appendChild(rows);
   }
+  table.appendChild(tbody);
 
-  body.appendChild(renderBitbucketAddControl());
-  container.appendChild(body);
-  return container;
+  // Add-row at the bottom — same `<tfoot>` pattern as `renderAliasAddRow`.
+  table.appendChild(renderBitbucketAddRow());
+
+  tableWrap.appendChild(table);
+  block.appendChild(tableWrap);
+  return block;
 }
 
 /**
- * One Bitbucket token row: reorder up/down, editable label, masked last-4,
- * per-row Validate, and a two-step Remove. `index` / `total` gate the reorder
- * arrows at the ends of the list.
+ * One Bitbucket token `kv-row`: editable Label (blur-commits), masked read-only
+ * Value, and an Actions cell holding a two-step Remove.
  */
 function renderBitbucketTokenRow(
   tok: BitbucketTokenStatus,
-  index: number,
-  total: number,
-  validationStatus?: 'ok' | 'failed' | 'skipped',
 ): HTMLElement {
-  const row = el('div', { class: 'atlassian-token-row' });
-
-  // ── Reorder arrows (order = failover priority) ──
-  const reorder = el('div', { class: 'atlassian-token-reorder' });
-  const upBtn = el('button', { class: 'icon-button', type: 'button', title: 'Move up', 'aria-label': 'Move token up' }) as HTMLButtonElement;
-  upBtn.textContent = '▲';
-  upBtn.disabled = index === 0;
-  upBtn.addEventListener('click', () => moveBitbucketToken(index, index - 1));
-  const downBtn = el('button', { class: 'icon-button', type: 'button', title: 'Move down', 'aria-label': 'Move token down' }) as HTMLButtonElement;
-  downBtn.textContent = '▼';
-  downBtn.disabled = index === total - 1;
-  downBtn.addEventListener('click', () => moveBitbucketToken(index, index + 1));
-  reorder.appendChild(upBtn);
-  reorder.appendChild(downBtn);
-  row.appendChild(reorder);
-
-  // ── Validation glyph (per-token) ──
-  const glyph = el('span', { class: `atlassian-token-row-glyph atlassian-validation-glyph-${validationStatus ?? 'none'}` });
-  glyph.textContent = validationStatus === 'ok' ? '✓' : validationStatus === 'failed' ? '✗' : '•';
-  row.appendChild(glyph);
+  const tr = el('tr', { class: 'kv-row' });
 
   // ── Editable label — commits on Enter / blur ──
+  const labelTd = el('td', { class: 'kv-cell kv-cell-key' });
   const labelInput = el('input', {
     type: 'text',
-    class: 'atlassian-token-label-input',
+    class: 'setting-input kv-input',
     value: tok.label,
     'aria-label': 'Token label',
   }) as HTMLInputElement;
@@ -4018,26 +4015,24 @@ function renderBitbucketTokenRow(
     if (ev.key === 'Enter') { ev.preventDefault(); labelInput.blur(); }
   });
   labelInput.addEventListener('blur', commitLabel);
-  row.appendChild(labelInput);
+  labelTd.appendChild(labelInput);
+  tr.appendChild(labelTd);
 
-  // ── Masked last-4 fingerprint ──
-  const masked = textEl('span', tok.last4 ? `●●●●${tok.last4}` : '●●●●●●', 'atlassian-token-status');
-  row.appendChild(masked);
+  // ── Masked last-4 fingerprint — read-only; the secret is never rendered. ──
+  const valueTd = el('td', { class: 'kv-cell kv-cell-value kv-cell-bb-value' });
+  const masked = textEl('span', tok.last4 ? `●●●●${tok.last4}` : '●●●●●●', 'kv-value-readonly kv-bb-masked');
+  valueTd.appendChild(masked);
+  tr.appendChild(valueTd);
 
-  // ── Actions: Validate + Remove (two-step) ──
-  const actions = el('div', { class: 'atlassian-token-actions' });
-
-  const validateBtn = el('button', { class: 'secondary', type: 'button' }) as HTMLButtonElement;
-  validateBtn.textContent = 'Validate';
-  validateBtn.addEventListener('click', () => {
-    vscode.postMessage({ type: 'atlassianValidateBitbucketToken', id: tok.id } as unknown as WebviewToHostMessage);
-  });
-  actions.appendChild(validateBtn);
+  // ── Actions: a two-step Remove. Styled identically to the Add button
+  // (`kv-add-button` shape) but with a red danger fill so it lines up under
+  // the tfoot Add button as the same button, one red, one blue. ──
+  const actionsTd = el('td', { class: 'kv-cell kv-cell-actions kv-cell-bb-actions' });
 
   const confirming = state.atlassianBitbucketRemoveConfirmingId === tok.id;
-  const removeBtn = el('button', { class: 'secondary atlassian-token-clear', type: 'button' }) as HTMLButtonElement;
+  const removeBtn = el('button', { class: 'kv-add-button kv-bb-remove', type: 'button' }) as HTMLButtonElement;
   removeBtn.textContent = confirming ? 'Confirm?' : 'Remove';
-  if (confirming) removeBtn.classList.add('atlassian-token-confirming');
+  if (confirming) removeBtn.classList.add('kv-bb-remove-confirming');
   removeBtn.addEventListener('click', () => {
     if (state.atlassianBitbucketRemoveConfirmingId === tok.id) {
       // Second click — execute the removal.
@@ -4055,51 +4050,59 @@ function renderBitbucketTokenRow(
       }, 2000);
     }
   });
-  actions.appendChild(removeBtn);
-  row.appendChild(actions);
+  actionsTd.appendChild(removeBtn);
+  tr.appendChild(actionsTd);
 
-  return row;
+  return tr;
 }
 
 /**
- * Compute a reordered id list swapping the token at `from` with `to` and send it
- * to the host. Bounds-checked (the arrows are disabled at the ends, this is a
- * belt-and-braces guard). The host re-broadcasts the list, which re-renders.
+ * The "Add token" `<tfoot>` row: an optional Label field, a password-masked
+ * token Value field, and an Add button — cells aligned with the body columns
+ * under `table-layout: fixed` (same pattern as `renderAliasAddRow`). On Add,
+ * the VALUE travels inbound to the host exactly like the single-token Set flow;
+ * the fields are then cleared. Empty token input is a no-op.
  */
-function moveBitbucketToken(from: number, to: number): void {
-  const tokens = state.atlassianBitbucketTokens;
-  if (to < 0 || to >= tokens.length) return;
-  const order = tokens.map((t) => t.id);
-  const [moved] = order.splice(from, 1);
-  order.splice(to, 0, moved);
-  vscode.postMessage({ type: 'atlassianReorderBitbucketTokens', order } as unknown as WebviewToHostMessage);
-}
+function renderBitbucketAddRow(): HTMLElement {
+  const tfoot = el('tfoot', { class: 'kv-add-foot' });
+  const tr = el('tr', { class: 'kv-add-row' });
 
-/**
- * The "Add token" control: an optional label field, a password-masked token
- * field, and an Add button. On Add, the VALUE travels inbound to the host
- * exactly like the single-token Set flow; the fields are then cleared. Empty
- * token input is a no-op.
- */
-function renderBitbucketAddControl(): HTMLElement {
-  const add = el('div', { class: 'atlassian-token-add' });
-
+  // Label input.
+  const labelTd = el('td', { class: 'kv-cell kv-cell-key kv-add-cell' });
+  const labelField = el('div', { class: 'kv-add-field' });
+  const labelLabel = el('label', { class: 'kv-add-label' });
+  labelLabel.textContent = 'Label';
   const labelInput = el('input', {
     type: 'text',
-    class: 'atlassian-token-add-label',
+    class: 'setting-input kv-input',
     placeholder: 'Label (optional)',
     'aria-label': 'New token label',
   }) as HTMLInputElement;
+  labelField.appendChild(labelLabel);
+  labelField.appendChild(labelInput);
+  labelTd.appendChild(labelField);
+  tr.appendChild(labelTd);
 
+  // Token value input (write-only password field).
+  const valueTd = el('td', { class: 'kv-cell kv-cell-value kv-cell-bb-value kv-add-cell' });
+  const valueField = el('div', { class: 'kv-add-field kv-add-field--value' });
+  const valueLabel = el('label', { class: 'kv-add-label' });
+  valueLabel.textContent = 'Token';
   const tokenInput = el('input', {
     type: 'password',
-    class: 'atlassian-token-add-value',
+    class: 'setting-input kv-input',
     placeholder: 'Paste a Bitbucket API token',
     'aria-label': 'New token value',
   }) as HTMLInputElement;
+  valueField.appendChild(valueLabel);
+  valueField.appendChild(tokenInput);
+  valueTd.appendChild(valueField);
+  tr.appendChild(valueTd);
 
-  const addBtn = el('button', { class: 'primary', type: 'button' }) as HTMLButtonElement;
-  addBtn.textContent = 'Add token';
+  // Add button in the Actions column.
+  const actionTd = el('td', { class: 'kv-cell kv-cell-actions kv-cell-bb-actions kv-add-cell kv-add-cell--actions' });
+  const addBtn = el('button', { class: 'primary kv-add-button', type: 'button' }) as HTMLButtonElement;
+  addBtn.textContent = 'Add';
   const submit = (): void => {
     const value = tokenInput.value.trim();
     if (value === '') return;
@@ -4117,11 +4120,11 @@ function renderBitbucketAddControl(): HTMLElement {
   tokenInput.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') { ev.preventDefault(); submit(); }
   });
+  actionTd.appendChild(addBtn);
+  tr.appendChild(actionTd);
 
-  add.appendChild(labelInput);
-  add.appendChild(tokenInput);
-  add.appendChild(addBtn);
-  return add;
+  tfoot.appendChild(tr);
+  return tfoot;
 }
 
 /**

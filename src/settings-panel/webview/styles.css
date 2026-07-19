@@ -1725,118 +1725,75 @@ button.module-row-chevron:focus-visible {
   color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
 }
 
-/* ─── Bitbucket multi-token list ─── Layout only; buttons reuse the global
-   button.primary / .secondary / .icon-button chrome and inputs mirror the
-   existing .field input material (see the .field input rule above). */
+/* ─── Bitbucket multi-token management table ─── Structured on the shared
+   kv-table scaffolding (see the .kv-table rules above), full-width with three
+   columns — Label, a narrow masked Value column, and an Actions column
+   holding the red Remove button — declared here as `.kv-table--bitbucket`
+   modifiers. Buttons reuse the global button.primary / .secondary /
+   .icon-button chrome; inputs reuse .kv-input. */
 
-/* The list container reuses .atlassian-token-slot for its border/background but
-   stacks its body vertically, so align the leading glyph to the top row. */
-.atlassian-token-list {
-  align-items: flex-start;
-}
-
-.atlassian-token-list-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.atlassian-token-rows {
+/* Outer wrapper — a section header stacked above the kv-table. */
+.bitbucket-token-editor {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-/* One token row: [reorder] [glyph] [label input] [last4] … [actions]. */
-.atlassian-token-row {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
+/* Column widths for the Bitbucket table. Under `table-layout: fixed` these
+   live on the header cells. With `kv-table--full-width` the table fills its
+   section, so Value takes a proportional share (grows with the table) and the
+   unconstrained Label column absorbs whatever the fixed columns leave behind;
+   Actions is sized to the button. */
+.kv-table--bitbucket .kv-bb-value-head {
+  width: 38%;
 }
 
-/* Stacked up/down reorder arrows — tight column of two icon-buttons. */
-.atlassian-token-reorder {
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
+.kv-table--bitbucket .kv-bb-actions-head {
+  width: 120px;
 }
 
-.atlassian-token-reorder .icon-button {
-  width: 18px;
-  height: 14px;
-  font-size: 9px;
-  line-height: 1;
+/* Masked read-only Value cell — inherits .kv-value-readonly styling; the span
+   carries the masked last-4 fingerprint and is never editable. */
+.kv-table .kv-cell-bb-value {
+  width: 38%;
 }
 
-.atlassian-token-reorder .icon-button:disabled {
-  opacity: 0.35;
-  cursor: default;
+.kv-bb-masked {
+  font-family: var(--vscode-editor-font-family, monospace);
+  letter-spacing: 0.04em;
 }
 
-/* Per-token validation glyph — colors mirror the validation block glyphs. */
-.atlassian-token-row-glyph {
-  flex-shrink: 0;
-  width: 14px;
-  text-align: center;
-  color: var(--vscode-descriptionForeground);
+/* Actions cell — holds the two-step Remove button, sized to line up under the
+   tfoot Add button (both are `kv-add-button`-shaped, filling the column). */
+.kv-table .kv-cell-bb-actions {
+  width: 120px;
+  text-align: left;
+  vertical-align: middle;
 }
 
-/* Editable label field — mirrors the .field input material (background, border,
-   padding, inherited font) with the shared 3px radius. */
-.atlassian-token-label-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 200px;
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
-  border: 1px solid var(--vscode-input-border, transparent);
-  padding: 4px 8px;
+/* Remove button — identical shape to the Add button (`kv-add-button` supplies
+   height / full width / 3px radius) but a red danger fill instead of primary
+   blue. Mirrors button.primary's padding / font / cursor so the two buttons
+   are the same size, then swaps in the standard VS Code error colour. */
+.kv-bb-remove {
+  background: var(--vscode-errorForeground, #f48771);
+  color: var(--vscode-button-foreground, #ffffff);
+  border: none;
+  padding: 6px 14px;
+  cursor: pointer;
   font: inherit;
-  border-radius: 3px;
 }
 
-.atlassian-token-label-input:focus {
-  outline: 1px solid var(--vscode-focusBorder, #007fd4);
-  outline-offset: -1px;
+.kv-bb-remove:hover {
+  background: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground, #f48771));
 }
 
-/* Add-token control — label + password value + Add button on one wrapping row. */
-.atlassian-token-add {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 2px;
-}
-
-.atlassian-token-add-label,
-.atlassian-token-add-value {
-  background: var(--vscode-input-background);
-  color: var(--vscode-input-foreground);
-  border: 1px solid var(--vscode-input-border, transparent);
-  padding: 4px 8px;
-  font: inherit;
-  border-radius: 3px;
-}
-
-.atlassian-token-add-label {
-  flex: 0 1 140px;
-  min-width: 0;
-}
-
-.atlassian-token-add-value {
-  flex: 1 1 200px;
-  min-width: 0;
-}
-
-.atlassian-token-add-label:focus,
-.atlassian-token-add-value:focus {
-  outline: 1px solid var(--vscode-focusBorder, #007fd4);
-  outline-offset: -1px;
+/* Two-step confirm state — deepens the red so the pending removal reads
+   clearly; the label switches to "Confirm?" in the click handler. */
+.kv-bb-remove.kv-bb-remove-confirming,
+.kv-bb-remove.kv-bb-remove-confirming:hover {
+  background: var(--vscode-inputValidation-errorBorder, #be1100);
+  color: var(--vscode-button-foreground, #ffffff);
 }
 
 /* Helper text below buttons — links styled naturally; text is muted. */
