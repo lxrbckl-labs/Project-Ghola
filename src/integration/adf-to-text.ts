@@ -13,11 +13,13 @@
  *   - Every `unknown` input is narrowed defensively; malformed trees return an
  *     empty string or `{ items: [], source: 'none' }` rather than throwing.
  *
- * Two public functions:
+ * Three public functions:
  *   - `adfToPlainText(adf)` — best-effort flattening for diffing / previewing.
  *   - `adfExtractAcceptanceCriteria(adf, headingMarker)` — heuristic AC list
  *     extractor used by `tool.ac-to-testing` and `mode.ticket-work` to pull
  *     acceptance criteria out of a ticket's description.
+ *   - `plainTextToAdf(text)` — the reverse direction, for the one place Ghola
+ *     WRITES ADF: posting a Jira comment.
  */
 
 /** Narrow internal view of an ADF node. ADF is loosely typed in the wire
@@ -382,6 +384,77 @@ function collectListsAfterHeading(
     }
   }
   return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* plainTextToAdf                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Wrap plain text in a minimal ADF document so it can be POSTed to Jira.
+ * Jira REST v3 refuses a bare string for a comment body — it demands an ADF
+ * `doc` — so this is the adapter that makes `postIssueComment` possible.
+ *
+ * **This is deliberately NOT a markdown renderer, and must not become one.**
+ * The only structure it recognizes is the paragraph break:
+ *
+ *   - A run of one or more blank lines separates PARAGRAPHS.
+ *   - A single newline inside a paragraph becomes an ADF `hardBreak`, so
+ *     intentional line structure (a short list an agent typed with `-`
+ *     prefixes, say) survives visually.
+ *   - Everything else — `**bold**`, `` `code` ``, `#` headings, `-` bullets,
+ *     links — is emitted as LITERAL TEXT and will render as the raw characters
+ *     in Jira.
+ *
+ * That is an accepted, intentional limitation. Comment bodies here are short
+ * prose drafted by an agent and approved verbatim by the operator, so what the
+ * operator reviewed is exactly what Jira shows. Chasing full markdown fidelity
+ * would mean the posted comment could differ from the approved text, which is
+ * a worse failure than unstyled output.
+ *
+ * ADF validity notes (Jira 400s on these, so they are enforced, not stylistic):
+ *   - A `text` node's `text` must be non-empty — empty segments are dropped.
+ *   - A `doc` must have at least one child — an all-whitespace input yields a
+ *     single empty `paragraph` rather than an empty `content` array. Callers
+ *     should reject empty bodies BEFORE calling here; this is only a backstop.
+ *
+ * CRLF is normalized to LF first, since the body typically arrives over stdin
+ * and may come from a Windows-side editor. Never throws.
+ */
+export function plainTextToAdf(text: string): unknown {
+  const normalized = typeof text === 'string' ? text.replace(/\r\n?/g, '\n') : '';
+
+  // Split on runs of blank lines (lines that are empty or whitespace-only).
+  const chunks = normalized
+    .split(/\n[ \t]*\n+/)
+    .map((chunk) => chunk.replace(/[ \t]+$/gm, ''))
+    .filter((chunk) => chunk.trim() !== '');
+
+  const content: unknown[] = [];
+  for (const chunk of chunks) {
+    // Interleave text nodes with hardBreaks so single newlines survive.
+    const lines = chunk.split('\n');
+    const inline: unknown[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (i > 0) {
+        inline.push({ type: 'hardBreak' });
+      }
+      // An empty line inside a paragraph contributes only its hardBreak — an
+      // empty `text` node would make the whole document invalid.
+      if (lines[i] !== '') {
+        inline.push({ type: 'text', text: lines[i] });
+      }
+    }
+    if (inline.length > 0) {
+      content.push({ type: 'paragraph', content: inline });
+    }
+  }
+
+  if (content.length === 0) {
+    content.push({ type: 'paragraph' });
+  }
+
+  return { type: 'doc', version: 1, content };
 }
 
 /** Convert a `bulletList` / `orderedList` node into `AcItem`s. Every

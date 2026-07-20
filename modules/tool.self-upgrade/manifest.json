@@ -3,7 +3,7 @@
   "name": "Self Upgrade",
   "version": "0.1.0",
   "description": "Learns from Claude CLI releases (user-triggered) and folds notably incremental, documented, revertible improvements into Ghola, then bumps the version and commits and pushes the change.",
-  "proactive": false,
+  "proactive": true,
   "category": "workflow",
   "kind": "capability",
   "trigger": "user-request",

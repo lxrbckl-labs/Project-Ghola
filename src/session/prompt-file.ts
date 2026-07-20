@@ -39,3 +39,23 @@ export function resolveAgentPromptFilePath(agent: AgentTarget): string {
 function shortHash(input: string): string {
   return crypto.createHash('sha256').update(input).digest('hex').slice(0, 12);
 }
+
+/**
+ * Generate a fresh per-SESSION identifier, exported by the launcher as
+ * `GHOLA_SESSION_ID`.
+ *
+ * Note the deliberate contrast with `resolveAgentPromptFilePath` above. That
+ * path's hash is derived from the WORKSPACE FOLDER, which is exactly what makes
+ * it stable across reopens — and exactly what makes it useless for telling two
+ * concurrent sessions in the SAME workspace apart, since both resolve to the
+ * identical hash. Anything needing per-run isolation must key on this value
+ * instead, not on the prompt-file suffix.
+ *
+ * Random rather than timestamp-derived so two sessions launched inside the same
+ * millisecond still differ. Four bytes (8 hex chars) is ample: the values only
+ * need to be distinct among the handful of sessions alive at one time, not
+ * globally unique forever.
+ */
+export function newSessionId(): string {
+  return crypto.randomBytes(4).toString('hex');
+}

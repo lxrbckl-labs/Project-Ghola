@@ -1,8 +1,8 @@
 {
   "id": "tool.playwright",
   "name": "Playwright",
-  "version": "0.2.1",
-  "description": "Lets QA and SWE agents write Playwright test specs from testing procedures produced by tool.ac-to-testing, and during ticket work the tester can also generate annotated verification videos and AC walkthrough docs on request; specs live outside the work repo with a shared playwright.config.ts.",
+  "version": "0.4.0",
+  "description": "Lets QA and SWE agents write Playwright test specs from testing procedures produced by tool.ac-to-testing, and during ticket work the tester can also generate annotated verification videos and AC walkthrough docs on request; specs, config, and walkthroughs live outside the work repo under a durable per-repo scope directory, while test-results, the HTML report, videos, and the Edge profile are nested one level deeper under a per-session run directory, so concurrent Playwright sessions in different repos AND in the same repo cannot contaminate each other's output.",
   "proactive": false,
   "category": "utility",
   "kind": "capability",
@@ -18,13 +18,13 @@
       "specsDir": {
         "type": "string",
         "label": "Specs Dir",
-        "description": "Directory under which Playwright specs are written. Per-project subdir is created as needed (e.g. ~/.ghola/tests/CMMS-1234/). Specs persist across sessions for re-running. Customize for projects with team-shared spec locations.",
+        "description": "Root directory under which Playwright specs are written. Inside it the agent creates a per-repo scope dir named <repo-basename>-<12-hex-hash-of-repo-path>, and a per-ticket subdir under that (e.g. ~/.ghola/tests/cmms0-2f44a92693f1/CMMS-1234/). The scope dir holds the durable artifacts shared by every session working that repo: specs, playwright.config.ts, and AC-walkthrough.md. Per-run output is nested one level deeper under runs/<session-id>/ (test-results/, playwright-report/, videos/), keyed on the launcher's GHOLA_SESSION_ID, so two sessions running concurrently in the SAME repo do not overwrite each other. Specs persist across sessions for re-running; run dirs accumulate and are the operator's to prune. Customize for projects with team-shared spec locations.",
         "default": "~/.ghola/tests"
       },
       "configTemplate": {
         "type": "string",
         "label": "Config Template",
-        "description": "Shape of the generated playwright.config.ts. base-url-env emits a config that reads BASE_URL from env (recommended for dev/staging/prod re-use). hardcoded-localhost emits a config with localhost:3000 hardcoded (simpler, single-environment). minimal emits the bare-minimum config and lets the user customize. Default base-url-env matches the standard SWT pattern.",
+        "description": "Shape of the generated per-scope playwright.config.ts. base-url-env emits a config that reads BASE_URL from env and throws when it is unset (recommended for dev/staging/prod re-use). hardcoded-base-url emits a config pinned to an explicit URL you supply at generation time (hardcoded-localhost is a legacy alias for it and no longer defaults to localhost:3000). minimal emits the bare-minimum config and lets the user customize. Every template pins outputDir and the HTML report under runs/<session-id>/, resolved from GHOLA_SESSION_ID at run time rather than baked in, so the one durable config stays correct for every session that uses it. No template ever guesses a base URL: an unset BASE_URL is refused rather than defaulted, so one repo's specs can never be pointed at another repo's live stack. Default base-url-env matches the standard SWT pattern.",
         "default": "base-url-env"
       },
       "autoOfferOnProcedures": {
@@ -54,8 +54,8 @@
       "edgeProfilePath": {
         "type": "string",
         "label": "Edge Profile Path",
-        "description": "Path to the Edge user profile directory used for auth context. Empty defers to the OS-default Edge profile (typically %LOCALAPPDATA%/Microsoft/Edge/User Data on Windows). Customize for users with a dedicated test-only Edge profile. Has no effect when Edge Profile Auth is off.",
-        "default": ""
+        "description": "Path to the Edge user profile directory used for auth context. The <scope> token expands to the per-repo scope name and <session> to the launcher's GHOLA_SESSION_ID, so the default gives every session its own profile and no two concurrent runs contend on the single-writer profile lock. The tradeoff is real: a per-session profile starts empty every session, so you sign in to Azure AD interactively on each session's first headed run. Drop the <session> token (~/.ghola/edge-profiles/<scope>) to sign in just once per repo, at the cost of only one session at a time being able to run Edge specs. Set an explicit path with no tokens (e.g. the OS-default Edge profile, typically %LOCALAPPDATA%/Microsoft/Edge/User Data on Windows) to reuse an existing signed-in profile, at the cost of only one session anywhere being able to use it. Has no effect when Edge Profile Auth is off.",
+        "default": "~/.ghola/edge-profiles/<scope>/<session>"
       },
       "authChannelOverride": {
         "type": "string",

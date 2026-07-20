@@ -1,18 +1,52 @@
 /**
  * Loopback HTTP bridge that lets a CLI agent (running inside the Ghola session
  * terminal) invoke host-side Atlassian operations. It serves both Bitbucket PR
- * ops (via `BitbucketPrClient`) and Jira ticket reads (via the injected
- * `getTicket` fetcher). Neither product's API token ever leaves the extension
+ * ops (via `BitbucketPrClient`) and Jira operations — ticket details via the
+ * injected `getTicket` fetcher and issue comments via `getComments`, both
+ * READ-ONLY, plus exactly ONE Jira write: posting a comment via `postComment`.
+ *
+ * That single write is narrow on purpose. The bridge can add a comment to an
+ * issue and nothing else — no issue creation, no transitions, no field edits,
+ * and no editing or deleting of any existing comment. It is the plumbing for
+ * the `integration.jira-comment-write` module, which is where the actual
+ * authorization lives; agents are forbidden from Jira mutations by their core
+ * hard rules unless that module is enabled. Neither product's
+ * API token ever leaves the extension
  * host: the agent only ever holds a per-session bearer token that authenticates
  * it to THIS server, and the server calls the host-side code on its behalf.
+ *
+ * BRIDGE COORDINATES FILE — why it exists:
+ *   The server binds an EPHEMERAL port and mints a FRESH bearer token on every
+ *   activation, but VS Code can only inject env into a terminal at creation
+ *   time and can never mutate a live terminal's environment. So any
+ *   extension-host restart (window reload, extension update, Remote-WSL
+ *   reconnect, host crash) used to permanently orphan every already-running
+ *   agent terminal: its snapshotted `GHOLA_BRIDGE_URL` / `GHOLA_BRIDGE_TOKEN`
+ *   pointed at a port and token that no longer existed, and every subsequent
+ *   bridge call failed forever with a bare `fetch failed`.
+ *
+ *   The fix is one level of indirection. The extension writes `{ url, token }`
+ *   to a small JSON file at a path derived from the WORKSPACE (not from the
+ *   random port), and rewrites it on every start. The launcher exports that
+ *   PATH as `GHOLA_BRIDGE_FILE`. The path is stable across host restarts, so
+ *   the terminal's snapshotted env stays valid forever and only the file's
+ *   CONTENTS change. `bb-bridge.mjs` re-reads the file on every invocation.
+ *
+ *   The file holds the same loopback capability token the env var already
+ *   carried — this RELOCATES a secret, it does not escalate one. Keep it that
+ *   way: mode 0600, written outside the user's workspace folder (so it can
+ *   never be committed), replaced atomically, never logged, and removed on
+ *   dispose.
  *
  * TOKEN-SECRECY DISCIPLINE — read before extending:
  *   - The per-session bearer token (`token`) authenticates the agent to this
  *     bridge. It is compared with `crypto.timingSafeEqual` and is NEVER written
- *     into any HTTP response body or log line.
+ *     into any HTTP response body or log line. The ONLY place it is persisted
+ *     is the 0600 coordinates file described above.
  *   - The Bitbucket API token is owned entirely by `BitbucketPrClient`, and the
- *     Jira API token is owned entirely by the `getTicket` fetcher; this file
- *     never reads, receives, or forwards either token.
+ *     Jira API token is owned entirely by the `getTicket` / `getComments` /
+ *     `postComment` fetchers; this file never reads, receives, or forwards
+ *     either token.
  *   - Raw upstream (Bitbucket / Jira) response bodies are never echoed here —
  *     only the client's / fetcher's own sanitized typed result shapes are
  *     serialized back.
@@ -24,6 +58,8 @@
 
 import * as http from 'http';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import type * as vscode from 'vscode';
 import type { BitbucketPrClient } from './bitbucket-pr-client';
 import type { RequestFailure } from './atlassian-client';
@@ -51,13 +87,69 @@ export interface GetTicketResult {
  *  token to the extension host and returns only the sanitized shape above. */
 export type GetTicketFn = (key: string) => Promise<GetTicketResult>;
 
+/** One Jira comment on the wire. `body` is PLAIN TEXT — the ADF tree is
+ *  converted host-side (same rule as `GetTicketResult.description`), so the
+ *  agent never sees raw ADF JSON. */
+export interface BridgeIssueComment {
+  author: string;
+  created: string;
+  body: string;
+}
+
+/** Host-side Jira comment fetch result. `exists: false` means the issue was not
+ *  found; `exists: true` with an EMPTY `comments` array means the issue exists
+ *  and has no comments — a success, never to be reported as "not found".
+ *  `error` is set only on a real failure (including a distinct
+ *  `'Jira not configured'`). */
+export interface GetCommentsResult {
+  exists: boolean;
+  comments: BridgeIssueComment[];
+  error?: string;
+}
+
+/** Host-side Jira comment fetcher injected by the extension. Same containment
+ *  contract as `GetTicketFn`: the Jira token never leaves the extension host and
+ *  only the sanitized shape above is serialized back. */
+export type GetCommentsFn = (key: string) => Promise<GetCommentsResult>;
+
+/** Host-side Jira comment POST result. `posted: true` means Jira accepted the
+ *  comment; anything else carries an `error`. Note the deliberately ambiguous
+ *  case: a timeout mid-flight reports `posted: false` with an error even though
+ *  the comment MAY have landed, which is why nothing in this stack retries a
+ *  post — the caller surfaces the error and the operator checks the issue. */
+export interface PostCommentResult {
+  posted: boolean;
+  id?: string;
+  error?: string;
+}
+
+/** Host-side Jira comment POSTer injected by the extension. This is the only
+ *  WRITE the Jira side of this bridge exposes, and it exists to serve the
+ *  `integration.jira-comment-write` module — the module carries the
+ *  authorization, this type is only the plumbing. Same containment contract as
+ *  the read fetchers: the Jira token never leaves the extension host. */
+export type PostCommentFn = (key: string, body: string) => Promise<PostCommentResult>;
+
 /** Handle returned to the caller so it can inject the env and dispose the
  *  server on extension shutdown. */
 export interface BitbucketBridgeHandle {
   url: string;
   token: string;
+  /**
+   * Absolute path of the coordinates file, when the caller asked for one. This
+   * is the value the launcher exports as `GHOLA_BRIDGE_FILE`; it is a PATH, not
+   * a secret, and is safe to log. Undefined when no `coordinatesPath` was
+   * supplied.
+   */
+  coordinatesPath?: string;
   dispose(): void;
 }
+
+/** Mode for the coordinates file: owner read/write only. Set explicitly at
+ *  create time AND re-asserted with `chmod`, because `writeFileSync`'s `mode`
+ *  is masked by the process umask and is ignored entirely when the file already
+ *  exists (e.g. left behind by an older build that wrote it 0644). */
+const COORDINATES_FILE_MODE = 0o600;
 
 /**
  * Start the loopback bridge. Resolves to a handle carrying the bound `url` and
@@ -69,10 +161,21 @@ export interface BitbucketBridgeHandle {
  * the random port (`server.address().port`) is guaranteed known by then. This
  * matters: `listen()` binds asynchronously, so reading `server.address()`
  * synchronously would return `null` and yield a bridge with no usable url.
+ *
+ * `coordinatesPath`, when supplied, is an absolute path OUTSIDE the user's
+ * workspace folder (the caller derives it from `context.storageUri`) where the
+ * live `{ url, token }` is written 0600 and rewritten on every start. See the
+ * BRIDGE COORDINATES FILE note at the top of this file for why. A failure to
+ * write it is logged and otherwise ignored: the bridge still runs and the
+ * legacy env-var path still works, so a read-only storage dir degrades to the
+ * old behavior rather than killing the bridge.
  */
 export function startBitbucketBridge(
   client: BitbucketPrClient,
   getTicket: GetTicketFn,
+  getComments: GetCommentsFn,
+  postComment: PostCommentFn,
+  coordinatesPath?: string,
   logger?: vscode.OutputChannel,
 ): Promise<BitbucketBridgeHandle | null> {
   return new Promise((resolve) => {
@@ -80,7 +183,7 @@ export function startBitbucketBridge(
     const expectedAuth = Buffer.from(`Bearer ${token}`);
 
     const server = http.createServer((req, res) => {
-      handleRequest(req, res, client, getTicket, expectedAuth).catch(() => {
+      handleRequest(req, res, client, getTicket, getComments, postComment, expectedAuth).catch(() => {
         // Defensive: handleRequest already wraps its own body in try/catch, but a
         // failure before/around that (or in the catch itself) must never leak.
         sendJson(res, 500, { status: 'unknown-error', message: 'bridge error' });
@@ -118,19 +221,84 @@ export function startBitbucketBridge(
       const url = `http://127.0.0.1:${address.port}`;
       logger?.appendLine(`[bb-bridge] listening on ${url}`);
 
+      // Rewritten on EVERY start so the file always reflects the live server.
+      // The url is logged above (it is an address, not a secret); the token is
+      // written to the file and nowhere else.
+      if (coordinatesPath) {
+        writeCoordinatesFile(coordinatesPath, url, token, logger);
+      }
+
       resolve({
         url,
         token,
+        coordinatesPath,
         dispose: () => {
           try {
             server.close();
           } catch {
             /* best-effort */
           }
+          // Clean up the runtime file this function created. It is the
+          // extension's own artifact, never a user file. A failed unlink must
+          // not break disposal — a stale file is harmless because every start
+          // rewrites it, and bb-bridge falls back to the env vars if the
+          // contents no longer parse.
+          if (coordinatesPath) {
+            try {
+              fs.unlinkSync(coordinatesPath);
+            } catch {
+              /* best-effort */
+            }
+          }
         },
       });
     });
   });
+}
+
+/**
+ * Write `{ url, token }` to the coordinates file with mode 0600, creating the
+ * containing directory if absent. Returns true on success.
+ *
+ * Written to a sibling temp file and `rename`d into place so the swap is
+ * ATOMIC: an agent invoking `bb-bridge.mjs` at the exact moment the extension
+ * host restarts either reads the whole old file or the whole new one, never a
+ * truncated/absent one (which would silently fall back to the stale env vars —
+ * precisely the bug this file exists to fix). `rename` also replaces a symlink
+ * rather than following it, so a pre-existing symlink at the path cannot
+ * redirect the token somewhere world-readable.
+ *
+ * Never logs the token — only the path and, on failure, the error message.
+ */
+function writeCoordinatesFile(
+  filePath: string,
+  url: string,
+  token: string,
+  logger?: vscode.OutputChannel,
+): boolean {
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(tempPath, JSON.stringify({ url, token }), {
+      encoding: 'utf8',
+      mode: COORDINATES_FILE_MODE,
+    });
+    // `mode` above is masked by the umask, so assert the mode explicitly.
+    fs.chmodSync(tempPath, COORDINATES_FILE_MODE);
+    fs.renameSync(tempPath, filePath);
+    logger?.appendLine(`[bb-bridge] wrote bridge coordinates to ${filePath}`);
+    return true;
+  } catch (err) {
+    // Best-effort cleanup of the temp file so a failed write does not leave a
+    // token-bearing orphan behind.
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      /* best-effort */
+    }
+    logger?.appendLine(`[bb-bridge] could not write bridge coordinates: ${describeError(err)}`);
+    return false;
+  }
 }
 
 /**
@@ -146,6 +314,8 @@ async function handleRequest(
   res: http.ServerResponse,
   client: BitbucketPrClient,
   getTicket: GetTicketFn,
+  getComments: GetCommentsFn,
+  postComment: PostCommentFn,
   expectedAuth: Buffer,
 ): Promise<void> {
   try {
@@ -205,6 +375,57 @@ async function handleRequest(
       return;
     }
 
+    // Jira comment read. Handled here for the same reason as `/get-ticket`: a
+    // missing / non-string / empty `key` is a caller error (400), distinct from
+    // a valid key whose issue does not exist (200 `{ exists: false }`) and
+    // distinct again from an issue that exists with zero comments (200
+    // `{ exists: true, comments: [] }`) — which is a SUCCESS, not an absence.
+    if (route === '/get-comments') {
+      const key = typeof args.key === 'string' ? args.key.trim() : '';
+      if (!key) {
+        sendJson(res, 400, { status: 'unknown-error', message: 'key must be a non-empty string' });
+        return;
+      }
+      // The fetcher owns the Jira token and returns only a sanitized shape (ADF
+      // already flattened to text); no token or raw upstream body is logged here.
+      const comments = await getComments(key);
+      sendJson(res, 200, comments);
+      return;
+    }
+
+    // Jira comment POST — the single Jira WRITE this bridge serves, and the
+    // plumbing behind the `integration.jira-comment-write` module. Reaching
+    // this route is not by itself authorization: the module is what authorizes
+    // an agent to invoke it, and an operator who has not enabled the module has
+    // no workflow that calls the wrapper verb.
+    //
+    // Two distinct caller errors, both 400 because both mean "you sent me
+    // something unusable" rather than "Jira said no":
+    //   - missing / non-string / empty `key`
+    //   - missing / non-string / empty-or-whitespace-only `body` — posting a
+    //     blank comment to a ticket other people read is never the intent, so
+    //     it is refused here rather than forwarded.
+    // A well-formed request that Jira rejects is a 200 with `posted: false`
+    // plus an `error`, keeping "bad call" and "call failed" separable.
+    if (route === '/post-comment') {
+      const key = typeof args.key === 'string' ? args.key.trim() : '';
+      if (!key) {
+        sendJson(res, 400, { status: 'unknown-error', message: 'key must be a non-empty string' });
+        return;
+      }
+      const body = typeof args.body === 'string' ? args.body : '';
+      if (body.trim() === '') {
+        sendJson(res, 400, { status: 'unknown-error', message: 'body must be a non-empty string' });
+        return;
+      }
+      // The poster owns the Jira token and returns only a sanitized shape. The
+      // comment body is NOT logged here: it is operator-approved content, but
+      // this file's contract is that request payloads never reach a log line.
+      const posted = await postComment(key, body);
+      sendJson(res, 200, posted);
+      return;
+    }
+
     const result = await dispatch(route, args, client);
     if (result === undefined) {
       sendJson(res, 404, { status: 'unknown-error', message: 'not found' });
@@ -229,6 +450,16 @@ async function dispatch(
   client: BitbucketPrClient,
 ): Promise<unknown> {
   switch (route) {
+    case '/health':
+      // Pure liveness probe. Reached only AFTER the bearer check in
+      // `handleRequest`, so it is NOT an unauthenticated endpoint — but it
+      // deliberately touches NEITHER Atlassian product: it answers "is this
+      // bridge process alive and is my token still the right one?" without
+      // spending a Jira/Bitbucket API call or requiring any credential to be
+      // configured. That separation is the point: before this route existed,
+      // the only way to test liveness was to make a real API call, so "bridge
+      // is dead" and "Atlassian rejected us" were indistinguishable.
+      return { status: 'ok' };
     case '/find-pr': {
       // `findOpenPrForBranch` returns `PrLookupResult` (`{ prUrl, prTitle?,
       // prId?, prState?, failure? }`) with NO `status` field — a successful

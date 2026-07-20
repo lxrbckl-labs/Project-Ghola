@@ -20,6 +20,14 @@ export const WORKSPACE_STATE_KEYS = {
    * migration would re-run once per workspace.
    */
   GIT_BRANCH_COMMANDS_MIGRATION: 'ghola.migrations.gitBranchCommandsEnabled',
+  /**
+   * One-time marker for the `tool.commit-push` enabled-modules backfill (see
+   * `migrateCommitPushEnabled`). Unlike GIT_BRANCH_COMMANDS_MIGRATION this one
+   * is read from and written to `workspaceState`, because the enabled-modules
+   * list it guards (ENABLED_MODULES) is per-workspace — a global marker would
+   * let the first workspace to activate consume the migration for all of them.
+   */
+  COMMIT_PUSH_BACKFILL_MIGRATION: 'ghola.migrations.commitPushBackfill',
 } as const;
 
 export const SET_CONTEXT_KEYS = {

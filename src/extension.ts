@@ -7,8 +7,9 @@ import { adfToPlainText } from './integration/adf-to-text';
 import { BitbucketPrClient } from './integration/bitbucket-pr-client';
 import { discoverObsidianVault } from './integration/vault-discovery';
 import { startBitbucketBridge } from './integration/bitbucket-bridge-server';
+import type { GetCommentsResult, PostCommentResult } from './integration/bitbucket-bridge-server';
 import { ModuleLoader } from './modules/loader';
-import { ModuleState } from './modules/state';
+import { ModuleState, migrateCommitPushEnabled } from './modules/state';
 import { PromptComposer } from './prompts/composer';
 import { SessionLauncher } from './session/launcher';
 import { BUILT_IN_CONFIGURATIONS, DEFAULT_ENABLED_IDS } from './settings-panel/built-in-configurations';
@@ -529,8 +530,96 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  // Loopback bridge: exposes `bitbucketPrClient` (Bitbucket PR ops) and
-  // `jiraGetTicket` (Jira ticket reads) to the CLI agent over a per-session
+  // Host-side Jira COMMENT fetcher passed into the loopback bridge. Same
+  // containment story as `jiraGetTicket` above: reads the current email +
+  // jiraBase settings and the Jira token via the bridge, builds a fresh
+  // AtlassianClient, and flattens each comment's ADF body to plain text
+  // host-side so the CLI agent only ever sees text. This is a READ — it does
+  // not, and must not, post Jira comments.
+  //
+  // The three outcomes are kept strictly apart, because merging them is exactly
+  // the bug that has misled agents before:
+  //   - issue exists with no comments -> { exists: true, comments: [] } (SUCCESS)
+  //   - issue genuinely absent        -> { exists: false, comments: [] }
+  //   - real failure                  -> `error` set, with 'Jira not configured'
+  //     distinguishing "no credentials" from "no ticket".
+  const jiraGetComments = async (key: string): Promise<GetCommentsResult> => {
+    try {
+      const email = readAtlassianSetting('email');
+      const jiraBase = readAtlassianSetting('jiraBase');
+      const jiraToken = await atlassianBridge.getJiraToken();
+      const client = new AtlassianClient({
+        email,
+        jiraToken,
+        jiraBase,
+        bitbucketWorkspace: '',
+      });
+      const result = await client.getIssueComments(key);
+      if (result.error) {
+        return { exists: result.exists, comments: [], error: result.error };
+      }
+      if (!result.exists) {
+        return { exists: false, comments: [] };
+      }
+      return {
+        exists: true,
+        comments: result.comments.map((c) => ({
+          author: c.author,
+          created: c.created,
+          body: c.body !== undefined ? adfToPlainText(c.body) : '',
+        })),
+      };
+    } catch {
+      // Never surface an internal error (or the token) to the caller.
+      return { exists: false, comments: [], error: 'comment fetch failed' };
+    }
+  };
+
+  // Host-side Jira comment POSTER passed into the loopback bridge. This is the
+  // extension's ONLY Jira write. Same containment story as the readers above —
+  // settings and token are read here, the token never leaves the host, and only
+  // a sanitized result shape goes back to the agent.
+  //
+  // Authorization does NOT live here. Agent cores forbid ticketing-system
+  // mutations outright; the `integration.jira-comment-write` module is what
+  // lifts that for a session, and it requires the operator to approve the exact
+  // comment text before anything is posted. This closure is the plumbing that
+  // module drives, not a licence to post.
+  //
+  // Note the failure contract: `posted: false` with an error can mean the post
+  // definitely failed OR that it timed out ambiguously and may have landed.
+  // Nothing here retries, precisely because of that second case.
+  const jiraPostComment = async (key: string, body: string): Promise<PostCommentResult> => {
+    try {
+      const email = readAtlassianSetting('email');
+      const jiraBase = readAtlassianSetting('jiraBase');
+      const jiraToken = await atlassianBridge.getJiraToken();
+      const client = new AtlassianClient({
+        email,
+        jiraToken,
+        jiraBase,
+        bitbucketWorkspace: '',
+      });
+      const result = await client.postIssueComment(key, body);
+      if (result.error) {
+        return { posted: false, error: result.error };
+      }
+      return {
+        posted: result.posted,
+        ...(result.id !== undefined ? { id: result.id } : {}),
+      };
+    } catch {
+      // Never surface an internal error (or the token) to the caller. The
+      // comment may or may not have been created — say so honestly rather than
+      // implying a clean failure.
+      return { posted: false, error: 'comment post failed (state unconfirmed)' };
+    }
+  };
+
+  // Loopback bridge: exposes `bitbucketPrClient` (Bitbucket PR ops),
+  // `jiraGetTicket` (Jira ticket reads), `jiraGetComments` (Jira comment reads)
+  // and `jiraPostComment` (the single Jira write, gated by the
+  // `integration.jira-comment-write` module) to the CLI agent over a per-session
   // bearer-authenticated HTTP server bound to 127.0.0.1. The Bitbucket and Jira
   // API tokens stay host-side; the agent only receives the loopback URL +
   // bearer token via the session env (wired into the launcher below). When the
@@ -543,11 +632,34 @@ export function activate(context: vscode.ExtensionContext): void {
   // socket completes within a tick, long before the user can click Launch, so
   // `setBridge` runs well before any session starts and the env injects. The
   // token is only ever handed to `setBridge` (terminal env) — never logged.
+  //
+  // The bridge also writes its live `{ url, token }` to a COORDINATES FILE and
+  // the launcher exports that path as GHOLA_BRIDGE_FILE. Location:
+  // `context.storageUri` — VS Code's workspace-scoped storage dir, which lives
+  // under the extension host's own state, NOT inside the user's workspace
+  // folder. That placement is deliberate and load-bearing: the file contains a
+  // bearer token, and a token inside the repo could be committed. We fall back
+  // to `globalStorageUri` (also outside any workspace) for the no-folder-open
+  // case, where `storageUri` is undefined. The path derives from the workspace,
+  // never from the random port, so it is STABLE across host restarts — which is
+  // the entire point: an already-running agent terminal keeps resolving the
+  // live bridge after a reload instead of being orphaned on a dead port.
+  const bridgeStorageUri = context.storageUri ?? context.globalStorageUri;
+  const bridgeCoordinatesPath = bridgeStorageUri
+    ? path.join(bridgeStorageUri.fsPath, 'bridge.json')
+    : undefined;
   void (async () => {
-    const bbBridge = await startBitbucketBridge(bitbucketPrClient, jiraGetTicket, logger);
+    const bbBridge = await startBitbucketBridge(
+      bitbucketPrClient,
+      jiraGetTicket,
+      jiraGetComments,
+      jiraPostComment,
+      bridgeCoordinatesPath,
+      logger,
+    );
     if (bbBridge) {
       context.subscriptions.push({ dispose: () => bbBridge.dispose() });
-      session.setBridge(bbBridge.url, bbBridge.token);
+      session.setBridge(bbBridge.url, bbBridge.token, bbBridge.coordinatesPath);
     }
   })();
 
@@ -677,7 +789,14 @@ export function activate(context: vscode.ExtensionContext): void {
   // preset they last marked as default. The dev-mode openSettings call below
   // intentionally runs after this chain so the panel renders with the applied
   // configuration in place.
-  void loader.discover(resolveModulesDirFn(context)()).then(async (handles) => {
+  // CHAINED ahead of discover(), not fired independently: the backfill rewrites
+  // the same `ghola.enabledModules` workspaceState key that discover() reads at
+  // its start, so racing them would let discover() snapshot the pre-migration
+  // list and leave the button hidden until the next reload. The migration never
+  // throws, so the chain always reaches discover().
+  void migrateCommitPushEnabled(moduleState, context.workspaceState, logger)
+    .then(() => loader.discover(resolveModulesDirFn(context)()))
+    .then(async (handles) => {
     logger.appendLine(`[ghola] discovered ${handles.length} module(s)`);
     await seedBuiltInConfigurations(context, configurationsStore, logger);
     await panel.applyDefaultOnStartup();

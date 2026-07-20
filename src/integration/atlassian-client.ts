@@ -35,10 +35,20 @@ import {
   parseRetryAfterSeconds,
 } from './bitbucket-failover';
 import { resolveBitbucketWorkspace } from './bitbucket-workspace';
+import { plainTextToAdf } from './adf-to-text';
 
 /** Per-request timeout. Long enough to absorb a transient hiccup, short
  *  enough that a wedged network never blocks the extension UI thread.        */
 const REQUEST_TIMEOUT_MS = 8000;
+
+/** Page size for the Jira comment read. Jira caps `maxResults` server-side, so
+ *  this is a request, not a guarantee — the loop follows `startAt` / `total`. */
+const COMMENT_PAGE_SIZE = 100;
+
+/** Hard cap on comment pages fetched per call (100 * 20 = 2000 comments). A
+ *  runaway guard only: no real ticket approaches it, but it keeps a misbehaving
+ *  or paging-ignorant server from spinning the loop forever. */
+const MAX_COMMENT_PAGES = 20;
 
 /** Result shape returned by validation probes. Mirrors the discriminated
  *  union exported from `extension.ts` as `AtlassianValidationResult`. */
@@ -107,6 +117,14 @@ export interface TicketCheckResult {
    *  `{ exists: false }` this method has always returned — that is success, not
    *  a failure. */
   failure?: RequestFailure;
+  /** Set when the probe never ran because a precondition was unmet — an empty
+   *  key, or Jira not being configured at all. Purely ADDITIVE: `exists` is
+   *  still `false` in those cases, so every historical caller that only reads
+   *  `exists` behaves exactly as before. It exists so "no credentials" cannot
+   *  masquerade as "no ticket" — the same distinction `getIssueComments` and
+   *  `getTicketDetails` draw. A request that actually ran and failed reports
+   *  `failure`, not `error`. */
+  error?: string;
 }
 
 /** Per-call return shape for `getTicketDetails`. Extends the `checkTicketExists`
@@ -119,6 +137,46 @@ export interface TicketDetailsResult {
   status?: string;
   summary?: string;
   description?: unknown;
+  error?: string;
+}
+
+/** One Jira issue comment, as returned by `getIssueComments`. `body` is the raw
+ *  ADF JSON tree (opaque here — the consumer in `adf-to-text.ts` walks it), the
+ *  same contract `TicketDetailsResult.description` follows. */
+export interface IssueComment {
+  /** `author.displayName` when Jira sent one; `''` for an anonymous / app
+   *  comment where the field is absent, so the wire shape stays a string. */
+  author: string;
+  /** ISO-8601 creation timestamp verbatim from Jira; `''` when absent. */
+  created: string;
+  /** ADF document tree for the comment body. */
+  body: unknown;
+}
+
+/** Per-call return shape for `getIssueComments`. A found issue with ZERO
+ *  comments is `{ exists: true, comments: [] }` — that is SUCCESS, not a
+ *  failure, and callers must not collapse it into "not found". `error` is set
+ *  ONLY on a real failure (unconfigured Jira, auth, ratelimit, network, or a
+ *  non-404 non-2xx); a genuine 404 is the plain `{ exists: false, comments: [] }`. */
+export interface IssueCommentsResult {
+  exists: boolean;
+  comments: IssueComment[];
+  error?: string;
+}
+
+/** Result shape for `postIssueComment` — the ONE Jira write path in the
+ *  extension, and only reachable when the operator has enabled the
+ *  `integration.jira-comment-write` module.
+ *
+ *  `posted: true` means Jira accepted the comment and returned its id. Any
+ *  other outcome sets `error`, and `posted` is then FALSE-but-uncertain in
+ *  exactly one case worth calling out: a network drop or timeout after the
+ *  request left the host. The comment may or may not exist on the issue. That
+ *  ambiguity is why `postIssueComment` never retries — see the method doc. */
+export interface PostCommentResult {
+  posted: boolean;
+  /** Jira's id for the created comment; present only when `posted` is true. */
+  id?: string;
   error?: string;
 }
 
@@ -181,6 +239,21 @@ interface JiraIssueResponse {
     /** ADF document tree — opaque shape; walked by `adf-to-text.ts`. */
     description?: unknown;
   };
+}
+
+/** Minimal slice of Jira `/issue/<key>/comment` that we read. The page carries
+ *  the comments under a `comments` array plus the standard `startAt` / `total`
+ *  pagination counters. */
+interface JiraCommentResponse {
+  author?: { displayName?: string };
+  created?: string;
+  /** ADF document tree — opaque shape; walked by `adf-to-text.ts`. */
+  body?: unknown;
+}
+interface JiraCommentsPageResponse {
+  comments?: JiraCommentResponse[];
+  startAt?: number;
+  total?: number;
 }
 
 /** Minimal slice of the Bitbucket pull-request search response. `state` and
@@ -307,10 +380,18 @@ export class AtlassianClient {
    * with the status name when present. 404 → missing. Anything else → missing
    * (best-effort; the UI uses URL-builder fallback so a probe failure never
    * blocks the user from clicking through).
+   *
+   * The two preconditions that stop the probe before it ever fires — an empty
+   * key, and Jira not being configured — still return `exists: false`, but now
+   * carry an explanatory `error` so a reader can tell them apart from a real
+   * "this ticket is not in Jira". Same wording as `getIssueComments` and
+   * `getTicketDetails` use for the identical case.
    */
   async checkTicketExists(key: string): Promise<TicketCheckResult> {
-    if (!key) return { exists: false };
-    if (!this.email || !this.jiraToken || !this.jiraBase) return { exists: false };
+    if (!key) return { exists: false, error: 'issue key is required' };
+    if (!this.email || !this.jiraToken || !this.jiraBase) {
+      return { exists: false, error: 'Jira not configured' };
+    }
 
     const url = `${this.jiraBase}/rest/api/3/issue/${encodeURIComponent(key)}?fields=status`;
     const res = await this.request(url, 'jira');
@@ -334,10 +415,22 @@ export class AtlassianClient {
    * walks it). 404 → `{ exists: false }`. Any other failure (auth, network,
    * timeout, non-2xx) → `{ exists: false, error: <sanitized message> }`.
    * Never throws; same security and timeout contract as `checkTicketExists`.
+   *
+   * Three outcomes callers MUST keep distinct — collapsing them is a defect
+   * that has already cost real debugging time (an agent reported "ticket not
+   * found" when the truth was that Jira had never been configured):
+   *   - `{ exists: true, ... }`             — the ticket was fetched.
+   *   - `{ exists: false }` with no `error` — genuine 404, the ticket is not there.
+   *   - any `error`                         — a real failure. An unconfigured
+   *     Jira reports `'Jira not configured'` (the same wording
+   *     `getIssueComments` uses), so "no credentials" never masquerades as
+   *     "no ticket".
    */
   async getTicketDetails(key: string): Promise<TicketDetailsResult> {
-    if (!key) return { exists: false };
-    if (!this.email || !this.jiraToken || !this.jiraBase) return { exists: false };
+    if (!key) return { exists: false, error: 'issue key is required' };
+    if (!this.email || !this.jiraToken || !this.jiraBase) {
+      return { exists: false, error: 'Jira not configured' };
+    }
 
     const url = `${this.jiraBase}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status,description`;
     const res = await this.request(url, 'jira');
@@ -357,6 +450,120 @@ export class AtlassianClient {
       status: typeof status === 'string' ? status : undefined,
       summary: typeof summary === 'string' ? summary : undefined,
       description,
+    };
+  }
+
+  /**
+   * `GET ${jiraBase}/rest/api/3/issue/${key}/comment`. 200 → `{ exists: true }`
+   * with one `IssueComment` per comment in Jira's own (oldest-first) order;
+   * each carries `author`, `created`, and the raw ADF `body` tree (opaque here
+   * — the consumer in `adf-to-text.ts` walks it). 404 → `{ exists: false }`.
+   *
+   * Three cases callers MUST keep distinct, because collapsing them has
+   * historically produced a bogus "ticket not found":
+   *   - `{ exists: true, comments: [] }`  — the issue exists and simply has no
+   *     comments. This is SUCCESS.
+   *   - `{ exists: false }` with no `error` — genuine 404, the issue is not there.
+   *   - any `error` — a real failure (unconfigured Jira, auth, ratelimit,
+   *     network, other non-2xx). Unlike `getTicketDetails`, an unconfigured Jira
+   *     reports `'Jira not configured'` here rather than a bare `exists: false`,
+   *     so "no credentials" never masquerades as "no ticket".
+   *
+   * Paginates over `startAt` / `total` so a long thread is not silently
+   * truncated, with a hard page cap as a runaway guard. Never throws; same
+   * security and timeout contract as `getTicketDetails`.
+   */
+  async getIssueComments(key: string): Promise<IssueCommentsResult> {
+    if (!key) return { exists: false, comments: [], error: 'issue key is required' };
+    if (!this.email || !this.jiraToken || !this.jiraBase) {
+      return { exists: false, comments: [], error: 'Jira not configured' };
+    }
+
+    const base = `${this.jiraBase}/rest/api/3/issue/${encodeURIComponent(key)}/comment`;
+    const comments: IssueComment[] = [];
+    let startAt = 0;
+
+    for (let page = 0; page < MAX_COMMENT_PAGES; page++) {
+      const url = `${base}?startAt=${startAt}&maxResults=${COMMENT_PAGE_SIZE}`;
+      const res = await this.request(url, 'jira');
+      if (!res.ok) {
+        // A 404 means the issue doesn't exist; anything else is a real failure
+        // we forward as a sanitized `error`. Same discriminant `getTicketDetails`
+        // uses — the HTTP status, never a message prefix sniff.
+        if (res.failure.httpStatus === 404) return { exists: false, comments: [] };
+        return { exists: false, comments: [], error: res.failure.message || 'request failed' };
+      }
+
+      const body = res.body as JiraCommentsPageResponse | undefined;
+      const page1 = Array.isArray(body?.comments) ? body.comments : [];
+      for (const raw of page1) {
+        comments.push({
+          author: typeof raw?.author?.displayName === 'string' ? raw.author.displayName : '',
+          created: typeof raw?.created === 'string' ? raw.created : '',
+          body: raw?.body,
+        });
+      }
+
+      // Stop when Jira reports we have them all, or when a page came back empty
+      // (defensive: a server that ignores `startAt` would otherwise loop until
+      // the page cap without ever making progress).
+      const total = typeof body?.total === 'number' ? body.total : undefined;
+      if (page1.length === 0) break;
+      if (total !== undefined && comments.length >= total) break;
+      startAt += page1.length;
+    }
+
+    return { exists: true, comments };
+  }
+
+  /**
+   * `POST ${jiraBase}/rest/api/3/issue/${key}/comment` — add a comment to an
+   * issue. This is the extension's ONLY Jira mutation. Every other Jira path
+   * here is a read, and this one exists solely to serve the
+   * `integration.jira-comment-write` module; with that module disabled nothing
+   * reaches this method.
+   *
+   * `bodyText` is PLAIN TEXT. Jira demands an ADF document, so the text is
+   * wrapped by `plainTextToAdf` — paragraphs on blank lines, no markdown
+   * interpretation (see that function's doc for the deliberate limits).
+   * An empty / whitespace-only body is rejected here rather than posted, since
+   * Jira would either 400 or create a meaningless empty comment.
+   *
+   * **Deliberately NEVER retried.** This calls `requestOnce` directly instead of
+   * `request`, bypassing the transient-retry wrapper the read paths use. A POST
+   * that times out or drops mid-flight is AMBIGUOUS — Jira may well have
+   * created the comment before the connection died — so a retry risks posting
+   * the same comment twice on a ticket other people are reading. One attempt,
+   * then an honest error the operator can check and decide about. Do not
+   * "improve" this by adding a retry.
+   *
+   * Never throws; same timeout and token-leak contract as the read paths.
+   */
+  async postIssueComment(key: string, bodyText: string): Promise<PostCommentResult> {
+    if (!key || !key.trim()) return { posted: false, error: 'issue key is required' };
+    if (typeof bodyText !== 'string' || bodyText.trim() === '') {
+      return { posted: false, error: 'comment body is required' };
+    }
+    if (!this.email || !this.jiraToken || !this.jiraBase) {
+      return { posted: false, error: 'Jira not configured' };
+    }
+
+    const url = `${this.jiraBase}/rest/api/3/issue/${encodeURIComponent(key.trim())}/comment`;
+    const payload = { body: plainTextToAdf(bodyText) };
+
+    // Single attempt, no retry wrapper — see the method doc.
+    const res = await this.requestOnce(url, this.jiraToken, payload);
+    if (!res.ok) {
+      // A 404 here is a missing issue rather than a bad base URL, but it is
+      // still just a failure to post — there is no `exists` channel on this
+      // shape, so it is reported as a plain error with Jira's own status text.
+      return { posted: false, error: res.failure.message || 'request failed' };
+    }
+
+    const body = res.body as { id?: unknown } | undefined;
+    return {
+      posted: true,
+      ...(typeof body?.id === 'string' ? { id: body.id } : {}),
     };
   }
 
@@ -571,10 +778,18 @@ export class AtlassianClient {
    * per call so every retry gets its own 8 s deadline. Same status mapping and
    * token-leak audit as before — the `Authorization` header value is the only
    * place the token appears and is never logged or added to an error payload.
+   *
+   * `jsonBody`, when supplied, switches the verb to POST and sends the value as
+   * a JSON request body. Omitting it keeps the historical GET behavior byte for
+   * byte, so every existing read path is unaffected. Note that the ONLY caller
+   * that passes a body (`postIssueComment`) deliberately calls this method
+   * directly rather than going through `request`, because `request` layers on
+   * transient retries — safe for a GET, a double-post hazard for a POST.
    */
   private async requestOnce(
     url: string,
     token: string,
+    jsonBody?: unknown,
   ): Promise<
     | { ok: true; body: unknown }
     | { ok: false; failure: RequestFailure }
@@ -585,14 +800,16 @@ export class AtlassianClient {
     try {
       const auth = Buffer.from(`${this.email.trim()}:${token.trim()}`).toString('base64');
       const response = await fetch(url, {
-        method: 'GET',
+        method: jsonBody !== undefined ? 'POST' : 'GET',
         headers: {
           // The header value is the only place the token appears in this
           // process after construction — DO NOT add this object to any log
           // or error payload.
           Authorization: `Basic ${auth}`,
           Accept: 'application/json',
+          ...(jsonBody !== undefined ? { 'Content-Type': 'application/json' } : {}),
         },
+        body: jsonBody !== undefined ? JSON.stringify(jsonBody) : undefined,
         signal: controller.signal,
       });
 

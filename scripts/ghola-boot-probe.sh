@@ -8,6 +8,13 @@
 # `detail_file=`. NEVER fails and never prints error text — every probe is
 # guarded and unavailable data degrades to `na`/`none`. No `set -e`.
 #
+# ONE exception to "degrades silently": a bridge that is not reachable now
+# reports `ticket_state=bridge-down` / `pr_state=bridge-down` and an extra
+# `bridge_state=down` field. That is deliberate — a dead bridge and an absent
+# ticket are different problems with different fixes, and collapsing them into
+# the same `unavailable`/`na` is what made a bridge outage invisible at boot.
+# The probe still never blocks: every bridge call is wrapped in `timeout`.
+#
 # Env consumed (exported by the launcher): GHOLA_VERSION, GHOLA_BRANCH,
 # GHOLA_ROOT, GHOLA_TPM_PROMPT_FILE, GHOLA_SWE_PROMPT_FILE, GHOLA_QA_PROMPT_FILE,
 # SWE_PERFORMANCE_CORES, SWE_EFFICIENCY_CORES, QA_AGENT_COUNT,
@@ -21,6 +28,37 @@ emit() { printf '%s=%s\n' "$1" "$2"; }
 
 detail="$(mktemp 2>/dev/null || echo /tmp/ghola-boot-detail.txt)"
 : > "$detail" 2>/dev/null
+
+# ── Bridge liveness plumbing ────────────────────────────────────────────────
+# Both bridge calls below used to send stderr to /dev/null, which threw away the
+# ONLY diagnostic there was: a dead bridge degraded to ticket_state=unavailable /
+# pr_state=na, indistinguishable from "no ticket key in this branch" or "this is
+# not a Bitbucket repo". The operator saw silence and three sessions guessed
+# wrong about why. We now capture stderr and classify it.
+#
+# bb-bridge.mjs stamps every transport-level failure with a stable marker
+# (`bridge-unreachable`, or `bridge-unavailable` when no coordinates exist at
+# all). Those two strings are the contract between that script and this one —
+# changing either requires changing both.
+bridge_err="$(mktemp 2>/dev/null || echo /tmp/ghola-boot-bridge-err.txt)"
+bridge_state=""
+
+# True (exit 0) when the MOST RECENT captured stderr names a bridge-level
+# failure; also latches the sticky `bridge_state` used by the digest. Callers
+# must truncate "$bridge_err" immediately before their bb-bridge call so this
+# only ever judges that call.
+#
+# NOTE: grep reads the FILE directly. It is deliberately NOT fed by a pipe from
+# a producer — `producer | grep -q` makes the producer take SIGPIPE (141) the
+# moment grep exits on its first match, which a `set -o pipefail` caller would
+# promote to a spurious failure. This probe has no `set -e`, but the repo rule
+# stands and this stays pipe-free.
+bridge_down_last() {
+  [ -s "$bridge_err" ] || return 1
+  grep -qE 'bridge-unreachable|bridge-unavailable' "$bridge_err" 2>/dev/null || return 1
+  bridge_state="down"
+  return 0
+}
 
 # 1. version
 version="${GHOLA_VERSION:-}"
@@ -131,7 +169,14 @@ ticket_state="none"; ticket_status=""; ticket_summary=""
 if [ "$non_ticket_mode" = "yes" ]; then
   ticket_state="skipped"
 elif [ -n "$key" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_ROOT/scripts/bb-bridge.mjs" ]; then
-  tj="$(node "$GHOLA_ROOT/scripts/bb-bridge.mjs" get-ticket --key "$key" 2>/dev/null)"
+  # `timeout 8` mirrors the PR probe's guard below. This call previously had NO
+  # outer bound at all, which was survivable only because the client had no
+  # timeout either and a refused connection fails instantly; now that the client
+  # retries reads (worst case ~6.25s against a WEDGED bridge), an explicit
+  # ceiling keeps boot non-blocking. A refused connection still fails in
+  # milliseconds — bb-bridge deliberately does not retry ECONNREFUSED.
+  : > "$bridge_err" 2>/dev/null
+  tj="$(timeout 8 node "$GHOLA_ROOT/scripts/bb-bridge.mjs" get-ticket --key "$key" 2>"$bridge_err")"
   if [ -n "$tj" ]; then
     parsed="$(printf '%s' "$tj" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);if(j&&j.exists===true){process.stdout.write("ok\t"+(j.status||"")+"\t"+(j.summary||""))}else{process.stdout.write("missing\t\t")}}catch(e){process.stdout.write("err\t\t")}})' 2>/dev/null)"
     st="${parsed%%$'\t'*}"; rest="${parsed#*$'\t'}"; ticket_status="${rest%%$'\t'*}"; ticket_summary="${rest#*$'\t'}"
@@ -143,6 +188,11 @@ elif [ -n "$key" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_ROOT/scripts/bb-bridg
   else
     ticket_state="unavailable"
   fi
+  # A bridge-level transport failure is its OWN state. Overriding last means an
+  # unreachable bridge reports `bridge-down` (actionable: relaunch the session)
+  # instead of hiding inside `unavailable`, which reads as "Jira had nothing"
+  # and sends the operator to the wrong place.
+  if bridge_down_last; then ticket_state="bridge-down"; fi
 elif [ -n "$key" ]; then
   ticket_state="unavailable"
 fi
@@ -165,7 +215,17 @@ elif [ -n "$branch" ] && [ -n "$repo" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_
   # (handles both git@host:workspace/repo.git and https://.../workspace/repo.git).
   pr_slug="$(git -C "$repo" remote get-url origin 2>/dev/null | sed -E 's#\.git$##; s#.*[/:]##')"
   if [ -n "$pr_slug" ]; then
-    pj="$(timeout 3 node "$GHOLA_ROOT/scripts/bb-bridge.mjs" find-pr --repo "$pr_slug" --branch "$branch" 2>/dev/null)"
+    : > "$bridge_err" 2>/dev/null
+    # `timeout 7` (was 3): the outer bound must exceed the CLIENT's own worst
+    # case (2 * 3s read timeout + 250ms retry delay ~= 6.25s), otherwise a
+    # WEDGED bridge gets SIGKILLed before bb-bridge can print its
+    # `bridge-unreachable` marker and this probe reports pr_state=na — "we
+    # looked and there is no PR" — for a bridge it never actually reached. That
+    # is the exact silent-misreport this change exists to remove. The common
+    # failure (bridge DOWN, connection refused) still returns in milliseconds
+    # because bb-bridge deliberately does not retry ECONNREFUSED, so the extra
+    # headroom is only ever spent on a genuinely hung host.
+    pj="$(timeout 7 node "$GHOLA_ROOT/scripts/bb-bridge.mjs" find-pr --repo "$pr_slug" --branch "$branch" 2>"$bridge_err")"
     if [ -n "$pj" ]; then
       parsedpr="$(printf '%s' "$pj" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);let st="na",id="",ti="",ur="",au="";if(j&&j.status==="ok"){st=j.prState||"OPEN";id=(j.prId!=null?String(j.prId):"");ti=j.prTitle||"";ur=j.prUrl||"";au=j.prAuthor||""}else if(j&&j.status==="not-found"){st="none"}process.stdout.write(st+"\t"+id+"\t"+ti+"\t"+ur+"\t"+au)}catch(e){process.stdout.write("na\t\t\t\t")}})' 2>/dev/null)"
       if [ -n "$parsedpr" ]; then
@@ -175,6 +235,10 @@ elif [ -n "$branch" ] && [ -n "$repo" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_
         pr_url="${r%%$'\t'*}"; pr_author="${r#*$'\t'}"
       fi
     fi
+    # Same distinction as the ticket probe: a dead bridge is `bridge-down`, not
+    # `na`. `na` means "we looked and there is no PR"; it must not double as
+    # "we could not look".
+    if bridge_down_last; then pr_state="bridge-down"; fi
   fi
 fi
 
@@ -214,6 +278,11 @@ emit branch "${branch:-none}"
 emit mode "$mode"; [ -n "$base" ] && emit base "$base"; [ -n "$ahead" ] && emit ahead "$ahead"
 emit ticket_key "${key:-none}"
 emit ticket_state "$ticket_state"
+# Emitted ONLY when a bridge call actually failed at the transport level, so the
+# digest's shape is unchanged for every healthy session. Its presence is the
+# banner's cue to say "the Ghola bridge is down — relaunch the session" rather
+# than silently reporting no ticket and no PR.
+[ -n "$bridge_state" ] && emit bridge_state "$bridge_state"
 [ -n "$ticket_status" ] && emit ticket_status "$ticket_status"
 [ -n "$ticket_summary" ] && emit ticket_summary "$ticket_summary"
 emit pr_state "$pr_state"

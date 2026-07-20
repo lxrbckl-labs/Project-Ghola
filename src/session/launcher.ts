@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
 import type { ModuleHandle } from '../modules/handle';
 import { readModuleSettings } from '../state/module-settings';
-import { resolveAgentPromptFilePath } from './prompt-file';
+import { newSessionId, resolveAgentPromptFilePath } from './prompt-file';
 
 /**
  * Milliseconds to wait between launching the CLI binary and sending the
@@ -83,13 +83,27 @@ export class SessionLauncher {
   private bridgeToken?: string;
 
   /**
+   * Path of the bridge COORDINATES FILE — a 0600 JSON file, outside the
+   * workspace, holding the live `{ url, token }`. This path (not a secret; the
+   * file's contents are) is what makes a session survive an extension-host
+   * restart: `bridgeUrl` / `bridgeToken` are snapshotted into the terminal env
+   * at creation and VS Code can never mutate a live terminal's environment, so
+   * a reload that rotates the port + token orphans the terminal forever. The
+   * coordinates PATH is derived from the workspace, so it is stable across
+   * restarts; only the file's contents change, and `bb-bridge.mjs` re-reads it
+   * on every invocation.
+   */
+  private bridgeFile?: string;
+
+  /**
    * Supply the bridge coordinates after construction. Called once at activation
    * only when the bridge bound successfully; if never called, launches proceed
    * with no bridge env and the CLI-side module fails loud.
    */
-  setBridge(url: string, token: string): void {
+  setBridge(url: string, token: string, coordinatesFile?: string): void {
     this.bridgeUrl = url;
     this.bridgeToken = token;
+    this.bridgeFile = coordinatesFile;
   }
 
   async launch(options?: LaunchOptions): Promise<void> {
@@ -194,6 +208,15 @@ export class SessionLauncher {
       // the ticket-key Jira pull and ticket-notes lookup in non-ticket modes
       // (support, cd). Mirrors the banner's Mode row.
       GHOLA_MODE: sessionMode,
+      // Fresh identifier per LAUNCH, so two sessions opened concurrently in the
+      // SAME repo hold different values. Modules that produce per-run output key
+      // on this to keep concurrent runs apart: `tool.playwright` nests each
+      // run's test-results/, playwright-report/, videos/, and Edge profile under
+      // it. Deliberately NOT derived from the workspace path — that is what the
+      // composed-prompt-file suffix does, and it is identical for every session
+      // in a workspace, which is precisely the collision this closes. See
+      // `newSessionId` in prompt-file.ts.
+      GHOLA_SESSION_ID: newSessionId(),
       SWE_PERFORMANCE_CORES: String(perfCores),
       SWE_EFFICIENCY_CORES: String(effCores),
       SWE_AGENT_COUNT: String(perfCores + effCores),
@@ -213,6 +236,14 @@ export class SessionLauncher {
 
     // Bridge coordinates go into the terminal env ONLY (never the banner, a log
     // line, or any sendText). The token is a per-session secret; keep it here.
+    //
+    // GHOLA_BRIDGE_FILE is the PREFERRED channel and is what bb-bridge.mjs reads
+    // first: the path is stable across extension-host restarts, so a terminal
+    // launched today keeps working after tomorrow's window reload rotates the
+    // bridge's port and token. GHOLA_BRIDGE_URL / GHOLA_BRIDGE_TOKEN are kept
+    // alongside it, unchanged, as the backward-compatible fallback for terminals
+    // launched before the coordinates file existed — do not remove them.
+    if (this.bridgeFile) env.GHOLA_BRIDGE_FILE = this.bridgeFile;
     if (this.bridgeUrl) env.GHOLA_BRIDGE_URL = this.bridgeUrl;
     if (this.bridgeToken) env.GHOLA_BRIDGE_TOKEN = this.bridgeToken;
     if (!oneShot) {
