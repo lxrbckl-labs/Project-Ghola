@@ -190,6 +190,87 @@ const RETRYABLE_ROUTES = new Set([
 const READ_TIMEOUT_MS = 3000;
 const MUTATION_TIMEOUT_MS = 30000;
 
+// SLOW READS — routes whose host-side work is a PAGINATED WALK, not a single
+// upstream call, and which therefore must NOT be judged by READ_TIMEOUT_MS.
+//
+// This existed as a latent defect for as long as list-comments has: every read
+// shared the 3s bound, but /health answers without touching Atlassian and
+// /find-pr, /get-ticket and /get-comments are ONE upstream request each (~300ms),
+// while /list-comments walks up to 20 pages of the Bitbucket comments API back to
+// back — each page with its own 8s host-side timeout and its own transient-retry
+// budget. On a small PR the walk is one page and finishes inside 3s, so the bug
+// stayed invisible; on a large PR (hundreds of CodeRabbit comments, 4+ pages) the
+// walk legitimately needs 10s+ and the CLIENT gave up at 3s while the host was
+// still working correctly. The host then finished into a closed socket and the
+// operator was told the bridge was "unreachable" — see describeTransport.
+//
+// SIZING — the value must stay comfortably ABOVE the host's WORST CASE, not
+// above its nominal budget, or the client still loses the race it was widened to
+// win. Both paginated walks bound themselves with a 45s wall clock
+// (COMMENT_WALK_BUDGET_MS, defined identically in bitbucket-pr-client.ts and
+// atlassian-client.ts), but that deadline is checked BEFORE each page, so the
+// true ceiling is 45s plus one final page running its full retry budget
+// (4 attempts x 8s + 9s of backoff = 41s) — about 86s.
+//
+// 120s leaves ~34s of genuine headroom over that 86s. The earlier 90s cleared it
+// by only 4s, which is not a margin, it is a coincidence. This costs nothing in
+// the normal case: it is a CEILING, not a wait, and a healthy walk returns in
+// about a second. If either COMMENT_WALK_BUDGET_MS or the per-request retry
+// budget grows, redo this arithmetic.
+const SLOW_READ_TIMEOUT_MS = 120000;
+
+// Routes whose host-side work is a PAGINATED WALK. Both comment reads paginate
+// and both were previously judged at READ_TIMEOUT_MS: `/list-comments` is the
+// one that visibly broke, and `/get-comments` carries the identical defect over
+// Jira's startAt/total pagination (up to 20 pages) — it simply had not met a
+// long enough Jira thread yet. They are listed together deliberately: these two
+// fail the same way at the same scale and should be reasoned about as one class.
+const SLOW_READ_ROUTES = new Set(['/list-comments', '/get-comments']);
+
+// Escape hatch for a pathologically large PR or a slow link. Clamped to a sane
+// range so a typo like `5` (ms) cannot make every call fail instantly. Not a
+// flag: this is an operator knob, and the flag surface here is reserved for
+// request arguments.
+//
+// READS ONLY — this is a safety boundary, not a convenience. The override is
+// meant to be exported into a shell for the duration of some work on a big PR,
+// and an env var that lives in a shell profile applies to every later command in
+// that session. Letting it widen MUTATION_TIMEOUT_MS would mean an operator who
+// set it once to get `list-comments` to finish had silently also given every
+// subsequent comment POST a five-minute deadline — stretching the exact window
+// in which a write's outcome is unknowable, on the exact routes where that
+// ambiguity is most expensive. Writes therefore stay pinned at
+// MUTATION_TIMEOUT_MS and cannot be widened from the environment at all.
+const TIMEOUT_ENV_VAR = 'GHOLA_BRIDGE_TIMEOUT_MS';
+const MIN_TIMEOUT_MS = 1000;
+const MAX_TIMEOUT_MS = 600000;
+
+// Resolves the per-attempt timeout for a route: the route's own default,
+// overridable from the environment for READ routes only. An unusable override
+// warns (so a typo is not silently ignored) and falls back rather than failing
+// the call.
+function timeoutForRoute(routePath) {
+  const isRead = RETRYABLE_ROUTES.has(routePath);
+  if (!isRead) {
+    // Mutation: fixed, non-overridable. Deliberately returns BEFORE consulting
+    // the env var, so setting it cannot affect a write even by accident.
+    return MUTATION_TIMEOUT_MS;
+  }
+
+  const base = SLOW_READ_ROUTES.has(routePath) ? SLOW_READ_TIMEOUT_MS : READ_TIMEOUT_MS;
+  const raw = process.env[TIMEOUT_ENV_VAR];
+  if (raw === undefined || raw === '') return base;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < MIN_TIMEOUT_MS || parsed > MAX_TIMEOUT_MS) {
+    console.error(
+      `bb-bridge: ignoring ${TIMEOUT_ENV_VAR}='${raw}' — must be a number between `
+      + `${MIN_TIMEOUT_MS} and ${MAX_TIMEOUT_MS} (ms); using the ${base}ms default for ${routePath}.`,
+    );
+    return base;
+  }
+  return parsed;
+}
+
 // Pause between the first attempt and the single retry, for retryable routes.
 const RETRY_DELAY_MS = 250;
 
@@ -200,6 +281,25 @@ const RETRY_DELAY_MS = 250;
 // Changing these strings requires updating that probe's grep.
 const MARKER_UNREACHABLE = 'bridge-unreachable';
 const MARKER_UNAVAILABLE = 'bridge-unavailable';
+
+// A FOURTH, deliberately DISTINCT classification: the bridge was alive, accepted
+// the connection, and is (as far as we know) still working — we simply stopped
+// waiting. This is NOT a bridge-unreachable condition and must never carry that
+// marker, because "unreachable" tells the operator to relaunch the session,
+// which is useless advice when the bridge is healthy and the real answer is
+// "the PR is big, allow more time".
+//
+// Emitting `bridge-unreachable` here is precisely what made this class of
+// failure recur: `list-comments` on a large PR reported the bridge as dead while
+// `health` and `find-pr` answered instantly on the same bridge and the same
+// token, an obvious contradiction that sent debugging in the wrong direction
+// more than once.
+//
+// SAFE TO ADD: scripts/ghola-boot-probe.sh greps only for the two markers above,
+// and only ever calls `get-ticket` and `find-pr` — neither is a slow route — so
+// this marker cannot appear on the boot path and cannot change the probe's
+// classification. Do NOT use it for a fast route.
+const MARKER_TIMEOUT = 'bridge-timeout';
 
 // Resolves the bridge address + bearer token per the precedence documented at
 // the top of this file. Fails loud + fast (exit 2) if the bridge isn't wired up
@@ -281,6 +381,21 @@ function transportDetail(err) {
 // deliberately EXCLUDED: nothing is listening on that port, and a retry a
 // quarter-second later will be refused identically — retrying it would only add
 // latency to the boot probe's fast-fail path.
+// True for the codes that mean "we hit our own deadline", as distinct from "the
+// connection broke". Kept separate from isRetryableTransport because the two
+// answer different questions: this one asks whether WE gave up, not whether a
+// replay could help.
+function isTimeoutTransport(err) {
+  switch (transportCode(err)) {
+    case 'ETIMEDOUT':
+    case 'UND_ERR_HEADERS_TIMEOUT':
+    case 'UND_ERR_BODY_TIMEOUT':
+      return true;
+    default:
+      return false;
+  }
+}
+
 function isRetryableTransport(err) {
   switch (transportCode(err)) {
     case 'ECONNRESET':
@@ -302,8 +417,56 @@ function isRetryableTransport(err) {
 //
 // `url` is a loopback address (http://127.0.0.1:PORT) and is safe to print. The
 // bearer token is NEVER interpolated here, on any branch.
-function describeTransport(url, routePath, err) {
+function describeTransport(url, routePath, err, timeoutMs) {
   const code = transportCode(err);
+
+  // Handled BEFORE the switch so a slow route can never fall into the
+  // ETIMEDOUT branch below, which speaks in "the host may be wedged" terms that
+  // are simply wrong here: we know this route paginates, and we know the bridge
+  // was answering when we opened the connection.
+  // A MUTATION that exceeded the client deadline is the most dangerous message
+  // in this file to get wrong. The request reached a live bridge and was
+  // forwarded upstream; we stopped listening, but the write may well have
+  // landed. The generic ETIMEDOUT branch below would call this
+  // `bridge-unreachable` and advise relaunching the session — advice that is
+  // both wrong (the bridge is fine) and unsafe, because the natural next step
+  // after "relaunch and retry" is to re-run the write and duplicate it.
+  //
+  // This is the client-side mirror of the host-side `'indeterminate'` status,
+  // and it exists because the client can give up BEFORE the host ever produces
+  // that status. Both must say the same thing: check first, then decide.
+  if (!RETRYABLE_ROUTES.has(routePath) && isTimeoutTransport(err)) {
+    const secs = Math.round(timeoutMs / 1000);
+    return `${MARKER_TIMEOUT}: ${routePath} did not answer within ${secs}s (${code}).\n`
+      + 'This is a WRITE and its outcome is UNKNOWN — the bridge is alive and the request was\n'
+      + 'forwarded to Atlassian, so it may or may not have been applied.\n'
+      + 'DO NOT simply re-run this command: if the write did land, a retry duplicates it.\n'
+      + 'Fix: check the pull request (or issue) in Atlassian first. Act only on what you see there.';
+  }
+
+  if (SLOW_READ_ROUTES.has(routePath) && isTimeoutTransport(err)) {
+    const secs = Math.round(timeoutMs / 1000);
+    // Name the RIGHT product. `/get-comments` reads Jira and `/list-comments`
+    // reads Bitbucket; a message that confidently names the wrong system sends
+    // the reader to check the wrong place, which is the same misattribution
+    // failure as calling a healthy bridge unreachable, just quieter.
+    const src = routePath === '/get-comments'
+      ? { api: 'Jira comments API', scale: 'an issue with a long comment thread' }
+      : { api: 'Bitbucket comments API', scale: 'a PR with a large number of comments (CodeRabbit-heavy reviews especially)' };
+    return `${MARKER_TIMEOUT}: ${routePath} did not finish within ${secs}s (${code}).\n`
+      + `This is NOT a dead bridge — the connection was accepted, and this route walks the\n`
+      + `${src.api} page by page, so ${src.scale}\n`
+      + 'can legitimately outrun the deadline. The host very likely completed the work after\n'
+      + 'this client stopped waiting.\n'
+      + 'Fix: re-run with a longer deadline by prefixing it to THIS ONE command:\n'
+      + `  ${TIMEOUT_ENV_VAR}=300000 node scripts/bb-bridge.mjs ${routePath.slice(1)} ...\n`
+      + 'Prefer the prefix over `export`. The override affects read routes only — writes are\n'
+      + 'pinned to their own fixed deadline and cannot be widened this way — but an exported\n'
+      + 'value silently outlives the command you set it for.\n'
+      + 'Confirm the bridge is healthy first with `bb-bridge health` — if that succeeds, the\n'
+      + 'bridge is fine and relaunching the session will NOT help.';
+  }
+
   switch (code) {
     case 'ECONNREFUSED':
       return `${MARKER_UNREACHABLE}: nothing is listening at ${url} (ECONNREFUSED).\n`
@@ -361,6 +524,21 @@ function printJson(obj) {
   console.log(JSON.stringify(obj, null, 2));
 }
 
+// Surfaces a PARTIAL read on stderr. A truncated result exits 0 — it is a
+// success and must stay one — but that means the only trace of its
+// incompleteness is a field in a JSON blob the reader may well skim. Both
+// paginated reads (/list-comments, /get-comments) can truncate, and both route
+// through here, so the warning is identical for either. Says WARNING, never
+// "error": the data is usable and the caller should proceed with it, just
+// knowingly.
+function warnIfTruncated(parsed) {
+  if (!parsed || parsed.truncated !== true) return;
+  const detail = typeof parsed.message === 'string' && parsed.message
+    ? parsed.message
+    : 'the fetch stopped early, so this is only part of the thread.';
+  console.error(`bb-bridge: WARNING — PARTIAL RESULT. ${detail}`);
+}
+
 // POSTs `body` to `<resolved bridge url>${routePath}` with the bearer token and
 // returns the parsed JSON response. Never returns on a bridge-level failure
 // (network error, or non-2xx HTTP) — those print + exit(1) directly per the
@@ -374,8 +552,9 @@ async function callBridge(routePath, body) {
   // no call site can accidentally opt a mutation into being replayed. See
   // RETRYABLE_ROUTES.
   const retryable = RETRYABLE_ROUTES.has(routePath);
-  const timeoutMs = retryable ? READ_TIMEOUT_MS : MUTATION_TIMEOUT_MS;
+  const timeoutMs = timeoutForRoute(routePath);
   const maxAttempts = retryable ? 2 : 1;
+  const slow = SLOW_READ_ROUTES.has(routePath);
 
   const payload = JSON.stringify(body);
   let res;
@@ -394,13 +573,21 @@ async function callBridge(routePath, body) {
     } catch (err) {
       // One retry, and only for a route that is safe to replay AND a code that
       // could plausibly succeed on replay.
-      if (attempt < maxAttempts && isRetryableTransport(err)) {
+      //
+      // A DEADLINE EXCEEDED on a slow route is deliberately excluded: unlike a
+      // reset socket, it is not a blip. It means the host's paginated walk
+      // genuinely needed longer than we allowed, and replaying it just makes the
+      // host redo the identical work against a second copy of the same deadline
+      // — doubling the wait to reach the same failure. Fail once, and tell the
+      // operator which knob to turn.
+      const deadlineExceeded = isTimeoutTransport(err);
+      if (attempt < maxAttempts && isRetryableTransport(err) && !(slow && deadlineExceeded)) {
         await sleep(RETRY_DELAY_MS);
         continue;
       }
       // Transport-level failure. The message names the specific cause and the
       // remedy; the token is never interpolated into it on any branch.
-      console.error(`bb-bridge: ${describeTransport(url, routePath, err)}`);
+      console.error(`bb-bridge: ${describeTransport(url, routePath, err, timeoutMs)}`);
       process.exit(1);
     }
   }
@@ -415,7 +602,7 @@ async function callBridge(routePath, body) {
   try {
     text = await res.text();
   } catch (err) {
-    console.error(`bb-bridge: ${describeTransport(url, routePath, err)}`);
+    console.error(`bb-bridge: ${describeTransport(url, routePath, err, timeoutMs)}`);
     process.exit(1);
   }
 
@@ -445,11 +632,27 @@ async function postToBridge(routePath, body) {
   const parsed = await callBridge(routePath, body);
   printJson(parsed);
   if (parsed && parsed.status === 'ok') {
+    warnIfTruncated(parsed);
     process.exit(0);
-  } else {
-    console.error(`bb-bridge: ${routePath} did not return status 'ok'`);
+  }
+  // `indeterminate` means a WRITE ended without a definitive answer from
+  // Bitbucket — it may or may not have been applied. It exits 1 like any other
+  // non-ok status (it is emphatically not a success), but it must never be
+  // reported with the generic line below: "did not return status 'ok'" reads as
+  // "it failed", and acting on that by re-running the command is precisely how
+  // a duplicate comment gets posted. Say the honest thing instead.
+  if (parsed && parsed.status === 'indeterminate') {
+    const detail = typeof parsed.message === 'string' && parsed.message ? parsed.message : '';
+    console.error(
+      `bb-bridge: ${routePath} returned an INDETERMINATE result — the write may or may not have been applied.\n`
+      + (detail ? `bb-bridge: ${detail}\n` : '')
+      + 'bb-bridge: DO NOT simply re-run this command. Check the pull request in Bitbucket first;\n'
+      + 'bb-bridge: if the change is already there, the write succeeded and a retry would duplicate it.',
+    );
     process.exit(1);
   }
+  console.error(`bb-bridge: ${routePath} did not return status 'ok'`);
+  process.exit(1);
 }
 
 // Same shape as postToBridge, but for endpoints (get-ticket) whose success
@@ -484,6 +687,7 @@ async function postToBridgeList(routePath, body, listKey) {
   const parsed = await callBridge(routePath, body);
   printJson(parsed);
   if (parsed && parsed.exists === true) {
+    warnIfTruncated(parsed);
     process.exit(0);
   }
   const reason = (parsed && typeof parsed.error === 'string' && parsed.error)
@@ -755,6 +959,19 @@ Exit codes: 0 ok, 1 bridge-level failure, 2 usage error (env/args).
 Read verbs (health, get-ticket, get-comments, find-pr, list-comments) get one
 automatic retry on a transient transport error. Write verbs NEVER retry: a
 timeout on a write is ambiguous and a replay could double-post.
+
+Timeouts: most reads are bounded at 3s (one upstream call, so anything slower
+means a wedged bridge). The two PAGINATED reads — list-comments (Bitbucket) and
+get-comments (Jira) — get 120s, because each walks its API page by page and a
+long thread legitimately needs longer. Writes are pinned at 30s and cannot be
+widened. Override the read budgets with GHOLA_BRIDGE_TIMEOUT_MS (1000-600000 ms);
+prefer prefixing it to one command over exporting it.
+
+A list-comments deadline is reported as 'bridge-timeout', NOT
+'bridge-unreachable' — the bridge is alive and the fix is more time, not a
+session relaunch. A large PR may also come back as a successful PARTIAL result:
+status 'ok' with truncated: true and a message saying how many of how many
+comments were fetched. Treat that as real data, not as a failure.
 `;
 
 async function main() {

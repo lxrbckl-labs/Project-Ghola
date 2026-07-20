@@ -44,6 +44,65 @@ import {
  *  cannot hang the extension UI thread. */
 const REQUEST_TIMEOUT_MS = 8000;
 
+/** HTTP methods that CHANGE server state. Membership here is what makes a
+ *  request's ambiguous failures `'indeterminate'` instead of a retryable
+ *  `'network-error'`. Keyed on the METHOD rather than on the calling verb so a
+ *  mixed operation is classified correctly per hop: `markPrReady` / `markPrDraft`
+ *  issue a GET and then a PUT inside a single failover attempt, and only the PUT
+ *  is unsafe to replay — the GET keeps its cheap retry. */
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'DELETE']);
+
+/** Node/undici error codes that prove the request NEVER REACHED Bitbucket.
+ *  Each one fails during DNS resolution or the TCP/TLS connect, i.e. before a
+ *  single byte of the HTTP request could be written, so no write can possibly
+ *  have been applied and a replay is provably safe even for a mutation.
+ *
+ *  Deliberately NARROW. Codes that can occur AFTER the request is on the wire
+ *  are excluded on purpose — `ECONNRESET` and `EPIPE` most notably, since a peer
+ *  that resets the connection while we wait for the response may well have
+ *  processed the write first. When in doubt a code is left out: the cost of
+ *  omitting a safe code is one avoidable manual check, while the cost of
+ *  wrongly including an unsafe one is a duplicate comment on a live PR. */
+const PREFLIGHT_ERROR_CODES = new Set([
+  'ENOTFOUND',      // DNS: host never resolved.
+  'EAI_AGAIN',      // DNS: temporary resolution failure.
+  'ECONNREFUSED',   // TCP: connect actively refused, no session established.
+  'EHOSTUNREACH',   // Routing: no path to host.
+  'ENETUNREACH',    // Routing: no path to network.
+]);
+
+/** True when `err` is a connect/DNS-phase failure per `PREFLIGHT_ERROR_CODES`.
+ *  Mirrors the code-extraction shape used in `scripts/bb-bridge.mjs`: undici
+ *  wraps the real socket error, so the useful code lives on `err.cause.code`
+ *  rather than `err.code`, and a dual-stack ("happy eyeballs") connect failure
+ *  arrives as an AggregateError whose SUB-errors carry the codes while the
+ *  AggregateError itself has none. Defaults to FALSE (i.e. treat as unsafe) for
+ *  anything it cannot positively identify. */
+function isPreflightFailure(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const cause = (err as { cause?: unknown }).cause;
+
+  if (typeof cause === 'object' && cause !== null) {
+    const code = (cause as { code?: unknown }).code;
+    if (typeof code === 'string') return PREFLIGHT_ERROR_CODES.has(code);
+    const sub = (cause as { errors?: unknown }).errors;
+    if (Array.isArray(sub)) {
+      // EVERY leg must be a pre-flight failure. If even one arm of a dual-stack
+      // attempt got far enough to fail some other way, the request may have
+      // landed and the whole thing is unsafe to replay.
+      const codes = sub
+        .map((e) => (typeof e === 'object' && e !== null && typeof (e as { code?: unknown }).code === 'string'
+          ? (e as { code: string }).code
+          : ''))
+        .filter(Boolean);
+      return codes.length > 0 && codes.every((c) => PREFLIGHT_ERROR_CODES.has(c));
+    }
+  }
+
+  const own = (err as { code?: unknown }).code;
+  return typeof own === 'string' && PREFLIGHT_ERROR_CODES.has(own);
+}
+
 /** Bitbucket Cloud REST v2 base. Duplicated as a local constant rather than
  *  re-exported from `atlassian-client.ts` so the two clients evolve
  *  independently if the API ever forks (e.g. v3, server vs cloud). */
@@ -53,10 +112,34 @@ const BITBUCKET_BASE_URL = 'https://api.bitbucket.org/2.0';
  *  hit we still return `status: 'ok'` but flag truncation via `message`. */
 const COMMENT_PAGE_CAP = 200;
 
+/** Hard cap on the number of pages the comment walk may fetch, independent of
+ *  `COMMENT_PAGE_CAP`. The comment cap alone does NOT bound the walk: deleted
+ *  tombstones and comments that fail `normalizeComment` are skipped WITHOUT
+ *  counting toward it, so a PR carrying thousands of deleted/bot-churned
+ *  comments could walk arbitrarily many pages while `comments.length` crawls.
+ *  At `pagelen=50` a full 200-comment result needs 4 pages; 20 leaves ample
+ *  headroom for tombstone-heavy PRs while still terminating. */
+const MAX_COMMENT_PAGES = 20;
+
+/** Wall-clock budget for the ENTIRE paginated comment walk. Each page has its
+ *  own 8 s `REQUEST_TIMEOUT_MS` and its own transient-retry budget, so without
+ *  a walk-level bound the worst case multiplies out to minutes — far past any
+ *  client's patience, which is exactly the failure this bound exists to stop.
+ *  On expiry we return the pages we DID get as a successful, flagged-partial
+ *  result rather than failing the whole call. */
+const COMMENT_WALK_BUDGET_MS = 45000;
+
 /** Discriminator carried on every result shape returned by this client.
  *  `'rate-limited'` maps a 429 distinctly (Phase 0 noted 429s previously fell
  *  into `'unknown-error'`), keeping this client's taxonomy consistent with
- *  `atlassian-client.ts`'s `RequestFailure` `'ratelimit'` kind. */
+ *  `atlassian-client.ts`'s `RequestFailure` `'ratelimit'` kind.
+ *
+ *  `'indeterminate'` is NOT a failure keyword like the others — it is the
+ *  explicit ABSENCE of knowledge. It means a MUTATING request (POST/PUT/DELETE)
+ *  ended without a definitive answer from Bitbucket, so the write may or may not
+ *  have been applied. It exists to stop this client from doing the one thing
+ *  that is never safe in that situation: quietly replaying the write. Treat it
+ *  as "go look at the PR", never as "it failed". */
 export type BitbucketPrStatus =
   | 'ok'
   | 'unauthorized'
@@ -64,6 +147,7 @@ export type BitbucketPrStatus =
   | 'not-found'
   | 'rate-limited'
   | 'network-error'
+  | 'indeterminate'
   | 'unknown-error';
 
 /** Normalized PR comment shape exposed to callers. Drops Bitbucket-internal
@@ -94,6 +178,16 @@ export interface PrCommentListResult {
   comments: PrComment[];
   /** Sanitized, user-facing string. Also set on `'ok'` when truncation occurs. */
   message?: string;
+  /** True when the walk stopped early (comment cap, page cap, or time budget)
+   *  and `comments` is therefore a PREFIX of the PR's comments, not all of
+   *  them. Always present on `'ok'` so a caller can branch on it without
+   *  string-matching `message`. */
+  truncated?: boolean;
+  /** Bitbucket's own total comment count for this PR when the API reported it
+   *  (`size`), so a caller can render an honest "N of M fetched". Undefined
+   *  when Bitbucket omitted it — never guessed. Note this counts deleted
+   *  tombstones too, so it can exceed the number of usable comments. */
+  totalAvailable?: number;
   /** Raw `Retry-After` header value carried verbatim on a `'rate-limited'`
    *  (429) result. Carried, never acted on — a later phase may honor it. */
   retryAfter?: string;
@@ -197,6 +291,9 @@ interface BitbucketComment {
 interface BitbucketCommentListResponse {
   values?: BitbucketComment[];
   next?: string;
+  /** Bitbucket's total match count for the query (all pages). Optional: the
+   *  API omits it on some paginated endpoints, so every read is guarded. */
+  size?: number;
 }
 
 /** Minimal slice of `GET /pullrequests/{id}` we read for the ready flip —
@@ -287,30 +384,74 @@ export class BitbucketPrClient {
       let nextUrl: string | undefined =
         `${BITBUCKET_BASE_URL}/repositories/${encodeURIComponent(workspace)}` +
         `/${encodeURIComponent(repoSlug)}/pullrequests/${encodeURIComponent(String(prId))}/comments?pagelen=50`;
-      let truncated = false;
+      // Three independent stop conditions, each recorded separately so the
+      // returned message names the ACTUAL reason the walk ended. Reporting
+      // "hit the 200-comment cap" when we really ran out of time would send a
+      // reader looking at the wrong knob.
+      let stopReason: 'comment-cap' | 'page-cap' | 'time-budget' | undefined;
+      let totalAvailable: number | undefined;
+      let pages = 0;
+      const deadline = Date.now() + COMMENT_WALK_BUDGET_MS;
 
       while (nextUrl) {
+        // Checked BEFORE issuing the request, not after: starting a page we
+        // know we are out of time for would overshoot the budget by a further
+        // REQUEST_TIMEOUT_MS plus its retry budget.
+        if (pages > 0 && Date.now() >= deadline) {
+          stopReason = 'time-budget';
+          break;
+        }
+        if (pages >= MAX_COMMENT_PAGES) {
+          stopReason = 'page-cap';
+          break;
+        }
         const res = await this.request(nextUrl, 'GET', auth);
         if (!res.ok) return { status: res.status, comments: [], message: res.message, retryAfter: res.retryAfter };
+        pages++;
         const body = res.body as BitbucketCommentListResponse | undefined;
+        // Bitbucket repeats `size` on every page; take it from the first page
+        // that reports it so an honest "N of M" survives a partial walk.
+        if (totalAvailable === undefined && typeof body?.size === 'number' && Number.isFinite(body.size)) {
+          totalAvailable = body.size;
+        }
         const values = Array.isArray(body?.values) ? body!.values : [];
         for (const raw of values) {
           if (raw?.deleted === true) continue;
           const normalized = this.normalizeComment(raw);
           if (normalized) comments.push(normalized);
           if (comments.length >= COMMENT_PAGE_CAP) {
-            truncated = true;
+            stopReason = 'comment-cap';
             break;
           }
         }
-        if (truncated) break;
+        if (stopReason) break;
         nextUrl = typeof body?.next === 'string' ? body.next : undefined;
       }
 
-      const result: PrCommentListResult = { status: 'ok', comments };
-      if (truncated) {
-        result.message = `Truncated at ${COMMENT_PAGE_CAP} comments — older comments omitted`;
+      const result: PrCommentListResult = { status: 'ok', comments, truncated: stopReason !== undefined };
+      if (stopReason) {
+        const scope = totalAvailable !== undefined
+          ? `${comments.length} of ~${totalAvailable} comments fetched`
+          : `${comments.length} comments fetched`;
+        const why = stopReason === 'comment-cap'
+          ? `hit the ${COMMENT_PAGE_CAP}-comment cap`
+          : stopReason === 'page-cap'
+            ? `hit the ${MAX_COMMENT_PAGES}-page cap`
+            : `ran out of the ${Math.round(COMMENT_WALK_BUDGET_MS / 1000)}s fetch budget after ${pages} page(s)`;
+        // Kept character-for-character parallel with the truncation message in
+        // `atlassian-client.ts` — same template, same `N of ~M` scope phrasing,
+        // same trailing sentence — so the two comment reads speak one dialect.
+        //
+        // The trailing sentence deliberately does NOT claim WHICH comments were
+        // dropped. An earlier revision of this line asserted "Newest comments
+        // are included; older ones were omitted", which was an assumption about
+        // Bitbucket's default comment ordering that had never been verified
+        // against the API. A confident claim about which half of the data the
+        // operator is missing is worse than no claim at all, because it is
+        // acted upon. If the ordering is ever established, say it then.
+        result.message = `Partial result — ${scope}; ${why}. The remaining comments were omitted.`;
       }
+      if (totalAvailable !== undefined) result.totalAvailable = totalAvailable;
       return result;
     });
   }
@@ -710,7 +851,19 @@ export class BitbucketPrClient {
     return withBitbucketFailover(
       tokens,
       (token) => run(this.buildAuthHeader(email, token)),
-      (result) => result.status !== 'ok',
+      // `'indeterminate'` is reported as NOT-a-failure so the loop stops and
+      // returns it verbatim. That is deliberate and is the second half of the
+      // double-post fix: token rotation exists to answer "is this token
+      // allowed?", which is the right question for a 401/403 and the WRONG one
+      // for a write that may already have landed. Rotating here would replay the
+      // entire operation — including, for `markPrReady` / `markPrDraft`, the
+      // full-object PUT — against a live PR we have no confirmation about.
+      //
+      // Saying "not a failure" does NOT claim success: the caller still receives
+      // `status: 'indeterminate'` plus its check-the-PR message and must surface
+      // it. The only side effect is that the shared cursor sticks on this token,
+      // which is harmless — the token's validity was never in question.
+      (result) => result.status !== 'ok' && result.status !== 'indeterminate',
     );
   }
 
@@ -788,16 +941,33 @@ export class BitbucketPrClient {
     // can rotate on auth as before. `httpStatus` on the failure lets us tell a
     // retryable 5xx apart from a non-retryable 4xx that also maps to
     // `'unknown-error'`. The auth header is never logged during a retry.
+    const mutating = MUTATING_METHODS.has(method);
+
     return withTransientRetry(
       () => this.requestOnce(url, method, auth, jsonBody),
       (r) => {
         if (r.ok) return { retry: false };
         if (r.status === 'rate-limited') {
+          // Retried even for a mutation, and safely so: a 429 is a DEFINITIVE
+          // response in which Bitbucket declined to process the request at all.
+          // Nothing was applied, so a replay cannot duplicate anything.
           const secs = parseRetryAfterSeconds(r.retryAfter);
           return { retry: true, retryAfterMs: secs !== undefined ? secs * 1000 : undefined };
         }
+        // `'indeterminate'` is only ever produced for a mutation, and is the one
+        // status that must NEVER be replayed — that replay is the double-post.
+        if (r.status === 'indeterminate') return { retry: false };
+        // A surviving `'network-error'` on a mutation has already been proven
+        // pre-flight by `requestOnce`, so it is safe to replay; on a read it is
+        // safe by definition.
         if (r.status === 'network-error') return { retry: true };
-        if (typeof r.httpStatus === 'number' && r.httpStatus >= 500) return { retry: true };
+        if (typeof r.httpStatus === 'number' && r.httpStatus >= 500) {
+          // A 5xx on a READ is a transient server blip worth retrying. On a
+          // MUTATION it is ambiguous in exactly the way a timeout is: a 500 can
+          // follow a partially-applied write, and a 502/503/504 from a gateway
+          // says nothing about whether the origin processed it. Do not replay.
+          return { retry: !mutating };
+        }
         return { retry: false };
       },
     );
@@ -870,10 +1040,31 @@ export class BitbucketPrClient {
         return result;
       }
       if (!response.ok) {
+        // A 5xx on a MUTATION is ambiguous in the same way a timeout is: a 500
+        // can follow a partially-applied write, and a 502/503/504 from a gateway
+        // reports the GATEWAY's view while saying nothing about whether the
+        // origin processed the request. Mapping it to `'indeterminate'` here —
+        // rather than only suppressing the retry in the classifier — is what
+        // also stops `runWithFailover` from rotating tokens and replaying the
+        // whole operation. A 5xx on a READ stays `'unknown-error'` and keeps its
+        // ordinary transient retry.
+        if (MUTATING_METHODS.has(method) && response.status >= 500) {
+          return {
+            ok: false,
+            status: 'indeterminate',
+            httpStatus: response.status,
+            message: this.describeHttpError(
+              `${response.status} ${response.statusText || 'request failed'} — this write may or may not have been applied. `
+              + 'CHECK THE PULL REQUEST before retrying',
+              text,
+            ),
+          };
+        }
         // Generic non-2xx (e.g. the 200-comments-per-PR cap comes back as a
-        // 400, or a transient 5xx). Surface status + statusText enriched with
-        // Bitbucket's own reason, never the request headers or token. The raw
-        // `httpStatus` lets the retry classifier retry a 5xx but not a 4xx.
+        // 400, or a transient 5xx on a read). Surface status + statusText
+        // enriched with Bitbucket's own reason, never the request headers or
+        // token. The raw `httpStatus` lets the retry classifier retry a 5xx but
+        // not a 4xx.
         return {
           ok: false,
           status: 'unknown-error',
@@ -904,10 +1095,41 @@ export class BitbucketPrClient {
       const aborted =
         (err instanceof Error && err.name === 'AbortError') ||
         controller.signal.aborted;
-      if (aborted) {
-        return { ok: false, status: 'network-error', message: 'Request timed out — try again' };
+
+      // For a READ, every transport failure is equivalent: nothing changed
+      // server-side, so a replay is free and the message can say "try again".
+      // For a MUTATION the distinction is the whole ballgame — see
+      // `isPreflightFailure`. A connect-phase failure provably never delivered
+      // the request, so it stays a retryable `network-error`; ANYTHING else
+      // (most importantly a timeout, where the request WAS delivered and we
+      // simply never heard back) is `'indeterminate'` and must not be replayed.
+      if (!MUTATING_METHODS.has(method)) {
+        return {
+          ok: false,
+          status: 'network-error',
+          message: aborted ? 'Request timed out — try again' : 'Network error — try again',
+        };
       }
-      return { ok: false, status: 'network-error', message: 'Network error — try again' };
+
+      if (!aborted && isPreflightFailure(err)) {
+        return {
+          ok: false,
+          status: 'network-error',
+          message: 'Could not reach Bitbucket — the request was never sent, so nothing was changed. Safe to retry.',
+        };
+      }
+
+      return {
+        ok: false,
+        status: 'indeterminate',
+        message: aborted
+          ? `No response from Bitbucket within ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s. `
+            + 'The request WAS sent, so this write may or may not have been applied. '
+            + 'CHECK THE PULL REQUEST before retrying — retrying blindly can duplicate it.'
+          : 'The connection to Bitbucket failed after the request was sent. '
+            + 'This write may or may not have been applied. '
+            + 'CHECK THE PULL REQUEST before retrying — retrying blindly can duplicate it.',
+      };
     } finally {
       clearTimeout(timer);
     }

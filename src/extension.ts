@@ -561,6 +561,18 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!result.exists) {
         return { exists: false, comments: [] };
       }
+      // Truncation metadata is carried through EXPLICITLY. This projection
+      // rebuilds the result from scratch (deliberately — it is what keeps raw
+      // ADF and any future internal field from reaching the agent), but that
+      // same property means any field not named here is silently dropped. The
+      // host walk can stop early on its page cap or its time budget, and until
+      // these three were forwarded a partial thread arrived looking exactly like
+      // a complete one: no flag, no note, no way for the caller to know. A
+      // partial answer indistinguishable from a whole one is the worst failure
+      // shape available, because nothing looks wrong.
+      //
+      // Spread-conditional rather than unconditional so the wire shape is
+      // unchanged for the overwhelmingly common complete read.
       return {
         exists: true,
         comments: result.comments.map((c) => ({
@@ -568,6 +580,9 @@ export function activate(context: vscode.ExtensionContext): void {
           created: c.created,
           body: c.body !== undefined ? adfToPlainText(c.body) : '',
         })),
+        ...(result.truncated === true ? { truncated: true } : {}),
+        ...(result.message !== undefined ? { message: result.message } : {}),
+        ...(result.totalAvailable !== undefined ? { totalAvailable: result.totalAvailable } : {}),
       };
     } catch {
       // Never surface an internal error (or the token) to the caller.

@@ -50,6 +50,21 @@ const COMMENT_PAGE_SIZE = 100;
  *  or paging-ignorant server from spinning the loop forever. */
 const MAX_COMMENT_PAGES = 20;
 
+/** Wall-clock budget for the ENTIRE Jira comment pagination walk.
+ *
+ *  The page cap ALONE does not bound this walk in time. Each page is a
+ *  `request()` call carrying its own transient-retry budget — up to 4 attempts
+ *  at `REQUEST_TIMEOUT_MS` plus `MAX_TOTAL_RETRY_WAIT_MS` of backoff, ~41 s in
+ *  the worst case — so 20 pages multiplies out to roughly 13.7 MINUTES. No
+ *  client would ever wait that long, which is precisely how a healthy-but-slow
+ *  read gets misreported as a dead bridge.
+ *
+ *  Mirrors `COMMENT_WALK_BUDGET_MS` in `bitbucket-pr-client.ts` and is
+ *  deliberately the same 45 s: the two comment walks should fail the same way at
+ *  the same scale, so an operator learns ONE model. On expiry we return the
+ *  pages already fetched, flagged `truncated`, rather than failing the call. */
+const COMMENT_WALK_BUDGET_MS = 45000;
+
 /** Result shape returned by validation probes. Mirrors the discriminated
  *  union exported from `extension.ts` as `AtlassianValidationResult`. */
 export interface ProbeResult {
@@ -162,6 +177,20 @@ export interface IssueCommentsResult {
   exists: boolean;
   comments: IssueComment[];
   error?: string;
+  /** Non-fatal, user-facing note on an OTHERWISE SUCCESSFUL read — currently
+   *  only truncation. Kept separate from `error` so a partial-but-usable result
+   *  is never mistaken for a failed one. Mirrors `PrCommentListResult.message`. */
+  message?: string;
+  /** True when the pagination walk stopped early (page cap or time budget), so
+   *  `comments` is a PREFIX of the issue's comments rather than all of them.
+   *  Before this existed the walk could silently hit `MAX_COMMENT_PAGES` and
+   *  return a partial thread that every caller read as complete — a partial
+   *  answer indistinguishable from a whole one is the worst kind of failure,
+   *  because nothing looks wrong. Mirrors `PrCommentListResult.truncated`. */
+  truncated?: boolean;
+  /** Jira's own `total` for the thread when it reported one, so a caller can
+   *  render an honest "N of M fetched". Undefined when absent — never guessed. */
+  totalAvailable?: number;
 }
 
 /** Result shape for `postIssueComment` — the ONE Jira write path in the
@@ -482,8 +511,19 @@ export class AtlassianClient {
     const base = `${this.jiraBase}/rest/api/3/issue/${encodeURIComponent(key)}/comment`;
     const comments: IssueComment[] = [];
     let startAt = 0;
+    let stopReason: 'page-cap' | 'time-budget' | undefined;
+    let totalAvailable: number | undefined;
+    let pagesFetched = 0;
+    const deadline = Date.now() + COMMENT_WALK_BUDGET_MS;
 
     for (let page = 0; page < MAX_COMMENT_PAGES; page++) {
+      // Checked BEFORE issuing the request: starting a page we already know we
+      // are out of time for would overshoot the budget by that page's full
+      // worst case (~41 s) instead of returning promptly with what we have.
+      if (page > 0 && Date.now() >= deadline) {
+        stopReason = 'time-budget';
+        break;
+      }
       const url = `${base}?startAt=${startAt}&maxResults=${COMMENT_PAGE_SIZE}`;
       const res = await this.request(url, 'jira');
       if (!res.ok) {
@@ -508,12 +548,42 @@ export class AtlassianClient {
       // (defensive: a server that ignores `startAt` would otherwise loop until
       // the page cap without ever making progress).
       const total = typeof body?.total === 'number' ? body.total : undefined;
+      if (totalAvailable === undefined && total !== undefined) totalAvailable = total;
+      pagesFetched++;
       if (page1.length === 0) break;
       if (total !== undefined && comments.length >= total) break;
       startAt += page1.length;
+      // Falling out of the loop having exhausted every iteration means the cap
+      // stopped us mid-thread — distinct from the two clean breaks above, which
+      // both mean we genuinely reached the end.
+      if (page === MAX_COMMENT_PAGES - 1) stopReason = 'page-cap';
     }
 
-    return { exists: true, comments };
+    const result: IssueCommentsResult = { exists: true, comments };
+    if (stopReason) {
+      result.truncated = true;
+      // Kept character-for-character parallel with the truncation message in
+      // `bitbucket-pr-client.ts`: same `Partial result — <scope>; <why>.`
+      // template, same `N of ~M` scope phrasing, same trailing sentence. An
+      // operator hitting the cap on a Jira thread and on a PR should read the
+      // same sentence, not two dialects of the same fact.
+      //
+      // The `~` is honest for both: the total is read from the FIRST page, and a
+      // thread someone is actively commenting on can grow underneath a walk that
+      // is still in progress.
+      const scope = totalAvailable !== undefined
+        ? `${comments.length} of ~${totalAvailable} comments fetched`
+        : `${comments.length} comments fetched`;
+      const why = stopReason === 'page-cap'
+        ? `hit the ${MAX_COMMENT_PAGES}-page cap`
+        : `ran out of the ${Math.round(COMMENT_WALK_BUDGET_MS / 1000)}s fetch budget after ${pagesFetched} page(s)`;
+      // Deliberately `message`, NOT `error`. This is a SUCCESSFUL partial read,
+      // and `error` is the failure channel every consumer of this shape checks —
+      // populating it here would flip a usable result into an apparent failure.
+      result.message = `Partial result — ${scope}; ${why}. The remaining comments were omitted.`;
+    }
+    if (totalAvailable !== undefined) result.totalAvailable = totalAvailable;
+    return result;
   }
 
   /**
@@ -875,6 +945,40 @@ export class AtlassianClient {
       const aborted =
         (err instanceof Error && err.name === 'AbortError') ||
         controller.signal.aborted;
+
+      // A body means this was the POST (see the `jsonBody` note on this method):
+      // the ONE Jira mutation, `postIssueComment`. Its outcome after a timeout
+      // or a mid-flight drop is INDETERMINATE — Jira may have created the
+      // comment before we stopped listening.
+      //
+      // No machine will replay it: `postIssueComment` calls this method directly
+      // to stay out of `withTransientRetry`, and Jira's single token never
+      // touches `withBitbucketFailover`. The remaining risk is the HUMAN, and it
+      // was this message: "try again" is the one instruction guaranteed to
+      // produce the duplicate that all that care was taken to prevent. It is
+      // worse here than anywhere else, because `integration.jira-comment-write`
+      // has the operator approve the exact text first — so re-running feels
+      // pre-authorized and the second comment is indistinguishable from the
+      // first.
+      //
+      // Reads are untouched and keep their "try again" wording byte for byte: a
+      // GET that timed out changed nothing and is genuinely safe to repeat.
+      if (jsonBody !== undefined) {
+        return {
+          ok: false,
+          failure: {
+            kind: 'network',
+            message: aborted
+              ? `No response from Jira within ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s. `
+                + 'The request WAS sent, so the comment may or may not have been posted. '
+                + 'CHECK THE ISSUE before retrying — retrying blindly can post it twice.'
+              : 'The connection to Jira failed after the request was sent. '
+                + 'The comment may or may not have been posted. '
+                + 'CHECK THE ISSUE before retrying — retrying blindly can post it twice.',
+          },
+        };
+      }
+
       if (aborted) {
         return {
           ok: false,

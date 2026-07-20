@@ -2634,6 +2634,9 @@ export class SettingsPanel implements vscode.Disposable {
       this.logger?.appendLine(
         `[panel] feedback update failed (${id}): ${(err as Error).message}`,
       );
+      vscode.window.showErrorMessage(
+        `Failed to update feedback entry: ${(err as Error).message}`,
+      );
       // Degrade gracefully — re-broadcast whatever read succeeds.
       const fallback = await this.readFeedback();
       this.post({ type: 'feedbackLoaded', entries: fallback });
@@ -2653,6 +2656,9 @@ export class SettingsPanel implements vscode.Disposable {
     } catch (err) {
       this.logger?.appendLine(
         `[panel] feedback delete failed (${id}): ${(err as Error).message}`,
+      );
+      vscode.window.showErrorMessage(
+        `Failed to delete feedback entry: ${(err as Error).message}`,
       );
       const fallback = await this.readFeedback();
       this.post({ type: 'feedbackLoaded', entries: fallback });

@@ -105,6 +105,19 @@ export interface GetCommentsResult {
   exists: boolean;
   comments: BridgeIssueComment[];
   error?: string;
+  /** Non-fatal note on an OTHERWISE SUCCESSFUL read — currently only
+   *  truncation. Deliberately NOT `error`: a partial-but-usable comment list is
+   *  a result, not a failure, and populating `error` would make every consumer
+   *  that checks it treat a usable answer as a broken one. */
+  message?: string;
+  /** True when the host's pagination walk stopped early (page cap or time
+   *  budget), so `comments` is a PREFIX of the thread rather than all of it.
+   *  Same field name and meaning as `PrCommentListResult.truncated` on the
+   *  Bitbucket side, so both comment reads report truncation identically. */
+  truncated?: boolean;
+  /** The API-reported total for the thread when one was available, so a caller
+   *  can render an honest "N of ~M". Undefined when absent — never guessed. */
+  totalAvailable?: number;
 }
 
 /** Host-side Jira comment fetcher injected by the extension. Same containment
