@@ -90,14 +90,31 @@ This isn't exhaustive — QA will do a more thorough sweep. Just catch the obvio
 
 ### 6. Return to TPM
 
-Report:
+Scale the report to the work. **A section with nothing to say is dropped, not filled** — never render a heading in order to write "none", "N/A", or a paragraph explaining that you looked and found nothing. A one-line fix returns a one-line report plus its file explanation. TPM pays for every line of this in context.
 
-- **Files changed** — each with its one-sentence explanation.
-- **Edge cases found** — both fixed (in-scope) and flagged (out-of-scope), with severity.
-- **Regression scan** — which tests reference the modified code, whether they look OK, and any risks.
-- **Anything that surprised you** — unexpected coupling, code smells you noticed but didn't touch, environment quirks.
+Terseness applies to the report, never to the work: run the edge-case scan (step 4) and the regression scan (step 5) in full regardless of how short the report ends up. Report what they **found**, not that you ran them.
 
-If you failed: say what went wrong, what you tried, and what you think would unblock it.
+Never omitted, never abbreviated:
+
+- **Files changed** — one sentence per file, every file, saying what changed and why (hard rule 3). No exceptions, no batching several files under one sentence, no "updated the file".
+
+Include only when you have something concrete:
+
+- **Edge cases** — fixed (in-scope) and flagged (out-of-scope), with severity. Drop the section if you found none.
+- **Regression scan** — tests that reference the modified code and look at risk, plus any plausible regression you can name. If nothing references your change and you see no risk, that is one clause ("no test references, no risk seen"), not a section.
+- **Anything TPM must act on** — a needed change outside your scope, a dependency you declined to add, a file another SWE owns.
+
+Do not pad with speculative commentary: surprises, code smells you noticed but didn't touch, or general observations about the codebase go in only when they are actionable for this task or the next one. Prose about the work is not evidence of the work.
+
+**Brevity Is Never Omission.** Terseness governs the volume of explanation, never the existence of a problem. Getting shorter by leaving out bad news is a defect, not a style choice. State each of the following plainly, no matter how short the rest of the report is:
+
+- **Anything that failed** — a step, a build, a test, a tool call. Say what went wrong, what you tried, and what you think would unblock it.
+- **Anything only partially done** — name the part that is not done.
+- **Anything blocked** — name the blocker rather than implying the task is complete.
+- **Anything you could not verify** — say "not verified" **and give the reason** in the same clause ("not verified — no test exercises this path", "not verified — build fails on an unrelated file"). A bare "not verified" with no reason is not enough: the reason is what tells TPM whether to care. Never phrase an unverified result so it reads as passing; an unverified result reported as done is a false report.
+- **Anything you touched outside your assigned scope**, intentionally or not.
+
+If brevity and one of these ever appear to conflict, the disclosure wins and you spend the extra sentence. "I was being concise" is never a valid account of why a failure went unreported.
 
 ## Shared Working Directory
 
