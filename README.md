@@ -35,7 +35,7 @@ After installing, reload VS Code (`Ctrl+Shift+P` -> "Developer: Reload Window").
 
 ### In-app update (easy path)
 
-Open the Settings Panel, go to the **Session** tab, and click **Update Extension**. You can also run `Ghola: Update Extension` from the command palette. This runs `scripts/reinstall.sh`, which fetches the upstream remote, compares the installed version against the remote `package.json`, skips if already up to date, otherwise `git pull --ff-only`, rebuilds, repackages, and reinstalls — then offers to reload the window.
+Open the Settings Panel, go to the **Session** tab, and click **Update Extension**. You can also run `Ghola: Update Extension` from the command palette. This runs `scripts/reinstall.sh`, which fetches the upstream remote, compares the installed version against the remote `VERSION` file, skips if already up to date, otherwise `git pull --ff-only`, rebuilds, repackages, and reinstalls — then offers to reload the window.
 
 Prerequisites for in-app update:
 
@@ -55,14 +55,16 @@ npm run install-local
 
 ### How updates propagate
 
-There is no marketplace. A `git push` updates the source repository only — it does not touch anyone's already-installed extension. Agent instructions (the `prompts/cores/*.md` and module `.md` files) are snapshotted into the VSIX at package time and read from the installed copy at session-compose time. To receive instruction or code changes, use the in-app **Update Extension** button or run `git pull` then `npm run install-local` manually. Updates are detected by version number — maintainers must bump `version` in `package.json` on meaningful changes for the in-app updater (and users) to see that a newer build is available.
+There is no marketplace. A `git push` updates the source repository only — it does not touch anyone's already-installed extension. Agent instructions (the `prompts/cores/*.md` and module `.md` files) are snapshotted into the VSIX at package time and read from the installed copy at session-compose time. To receive instruction or code changes, use the in-app **Update Extension** button or run `git pull` then `npm run install-local` manually. Updates are detected by version number, and the `VERSION` file at the repo root is the **single source of truth** for it — maintainers bump `VERSION` on meaningful changes for the in-app updater (and users) to see that a newer build is available. `scripts/reinstall.sh` reads `VERSION` at the upstream ref, and `Ghola: Update Extension` reads the `VERSION` file shipped inside the installed extension; `package.json` is no longer consulted for versioning.
+
+**Do not hand-edit the `version` field in `package.json` or `package-lock.json`.** The `.githooks/pre-commit` hook rewrites both of those fields *from* `VERSION` and stages them, so a manual bump there is silently overwritten back to the old `VERSION` at commit time: the commit lands with no version change, no updater ever sees the release, and the diff looks like nothing happened. Bump `VERSION` and let the hook sync the other two.
 
 ## Troubleshooting
 
 - **`code` not found.** The `install-local` and update scripts use the `code` CLI to install the VSIX. If it is missing, install it via **Shell Command: Install 'code' command in PATH** (see Installation), or use the `npm run package` + Install-from-VSIX fallback.
 - **Extension installs but never activates ("stuck on loading").** On a corporate or proxied network, watch the `npm ci` output for esbuild / native-binary download failures: a partial install leaves the build with no compiled output, so the packaged `.vsix` has no entry point. Re-run the install on a working network so the build actually produces `dist/extension.js`.
 - **`vsce` warnings during `npm run package`.** Packaging warnings (e.g. missing repository field) are non-fatal — the `ghola.vsix` still installs.
-- **Update reports "already up to date" but you expected changes.** Updates are keyed on the `version` in `package.json`; a maintainer must bump it for the updater to act. See [How updates propagate](#how-updates-propagate).
+- **Update reports "already up to date" but you expected changes.** Updates are keyed on the `VERSION` file at the repo root; a maintainer must bump `VERSION` — not `package.json`, whose version field the pre-commit hook overwrites from `VERSION` — for the updater to act. See [How updates propagate](#how-updates-propagate).
 - **In-app update fails to find the repo** (error: `Ghola: could not locate a Project-Ghola git checkout to update from. Set "ghola.repoPath" to the absolute path of your clone.`). When running an installed VSIX, set `ghola.repoPath` to the absolute path of your clone (see [In-app update](#in-app-update-easy-path)). Under Remote-WSL, set it in the **Machine / Remote [WSL] settings** (`~/.vscode-server/data/Machine/settings.json`), not User settings, since there is no WSL-side User settings file.
 - **Changes not visible after an update.** Reload the window (`Ctrl+Shift+P` -> "Developer: Reload Window") — the update prompt offers this for you on success.
 
@@ -107,9 +109,9 @@ When the user clicks **Ghola: Open Session** (the play button), the following pi
 
 1. **Compose.** The prompt composer walks every enabled module and builds the TPM prompt: core files from `prompts/cores/` first, then a Session Manifest block listing each enabled module's `id`, `contentPath`, and `parameters` (setting values from the Modules tab, substituted at compose time). Proactive modules are annotated `[proactive — consult at session start]` in the manifest. Disabled modules are omitted entirely — the agent never sees them.
 
-2. **Write.** The composed prompt is written to a deterministic temp file. Its path is exported as `$GHOLA_TPM_PROMPT_FILE` in the terminal environment so the CLI can read it. SWE and QA prompts are composed the same way and available for subagent dispatch.
+2. **Write.** The composed prompt is written to a temp file whose name carries a hash of the workspace folder path **plus a random per-extension-host token**, so two windows or profiles on the same folder never overwrite each other's prompts. The path is therefore **not deterministic across launches**: a window reload mints a new token and so a new path. Nothing may re-derive it — its path is exported as `$GHOLA_TPM_PROMPT_FILE` in the terminal environment and every consumer reads it from there. SWE and QA prompts are composed the same way and available for subagent dispatch.
 
-3. **Launch.** A terminal opens (bash on WSL, PowerShell on Windows), cd'd into the WSL fast-path directory when `tool.fastpath-check` is enabled. The configured CLI command (default: `claude`) starts, and after a short delay the configured session command (default: `initiate`) is sent as user input.
+3. **Launch.** A terminal opens (bash on WSL, PowerShell on Windows), cd'd into the WSL fast-path directory when `tool.fastpath-check` is enabled. The configured CLI command (default: `claude`) starts with the configured session command (default: `initiate`) appended as its **positional prompt argument**, so the CLI submits the trigger word as turn 1 with no boot-delay race. That is the normal path on bash and PowerShell. The older behavior — start the CLI bare, then send the session command as user input after a short delay — remains as the fallback for one-shot dispatch and for a session configured with no CLI command.
 
 4. **Boot.** The CLI reads `$GHOLA_TPM_PROMPT_FILE`, adopts the TPM role, and executes its startup sequence — consulting proactive modules, resolving session context, and greeting the user.
 
@@ -125,4 +127,4 @@ The Modules tab is effectively the brain editor: toggling a module on adds it to
 - `src/prompts/composer.ts` — composes the system prompt for an agent target from enabled modules.
 - `src/settings-panel/` — webview host and webview UI.
 - `src/session/launcher.ts` — opens a terminal in the editor area with a session banner.
-- `src/session/prompt-file.ts` — writes the composed prompt to a temp file and exposes its path to the session environment.
+- `src/session/prompt-file.ts` — resolves the temp-file path of each agent's composed prompt (and mints per-session ids); it is the single resolver both the writer and the launcher call, so they agree on one path. The actual write is done by `writeAllAgentPromptFiles` in `src/settings-panel/host.ts`; the launcher exposes the paths to the session environment.

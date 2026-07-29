@@ -18,7 +18,7 @@
         "label": "Posture",
         "default": "autonomous",
         "options": ["autonomous", "ask"],
-        "description": "How TPM handles a qualifying transient API failure. autonomous (default): TPM checks Claude status and retries automatically, narrating each step as it goes. ask: TPM reports the failure and the status result, then waits for the user to approve before redeploying. Per the preamble's parameter-authority rule this value is authoritative over any looser default."
+        "description": "How TPM handles a qualifying transient API failure. autonomous (default): TPM checks Claude status and retries automatically, posting one line per attempt as it goes. ask: TPM reports the failure and the status result, then waits for the user to approve before redeploying. Per the preamble's parameter-authority rule this value is authoritative over any looser default."
       },
       "maxRetries": {
         "type": "number",

@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises';
+import { readFileSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -247,7 +248,7 @@ const STATUSLINE_VERSION_FILENAME = 'VERSION';
  * CHANGES.
  *
  * Why staging exists at all: the renderer ships inside the VSIX, but the
- * installed extension directory is version-pinned (`local.ghola-0.24.1/...`), so
+ * installed extension directory is version-pinned (`local.ghola-<version>/...`), so
  * a `statusLine.command` aimed there silently breaks on every version bump — the
  * footer just loses its Ghola tag and nothing says why. Pointing at the repo
  * checkout is no better: there is no Windows checkout of Project-Ghola (see
@@ -356,10 +357,37 @@ async function stageStatuslineRenderer(
   }
 }
 
+/**
+ * Resolve THIS extension's own version for the activation log line.
+ *
+ * The `VERSION` file at the extension root is the single source of truth for
+ * Ghola's version: `scripts/reinstall.sh` keys the update check on it, the
+ * `Ghola: Update Extension` command reads the shipped copy of it, and
+ * `.githooks/pre-commit` rewrites `package.json`'s version FROM it. Reading the
+ * same file here is what keeps the first line an operator sees in the output
+ * channel from disagreeing with what the updater compares. `package.json` (via
+ * the VS Code manifest) is the fallback only because the hook keeps it in sync;
+ * `'unknown'` is the last resort. Same resolution order as the installed-version
+ * read in `src/commands/updateExtension.ts`.
+ *
+ * Synchronous and never-throwing on purpose: it feeds one log line at the very
+ * top of `activate`, so it must not be able to fail or defer activation.
+ */
+function readActivationVersion(context: vscode.ExtensionContext): string {
+  try {
+    const fileVersion = readFileSync(path.join(context.extensionPath, 'VERSION'), 'utf8').trim();
+    if (fileVersion) return fileVersion;
+  } catch {
+    // Unreadable or absent (e.g. a partial build) — fall through to the manifest.
+  }
+  const manifestVersion: unknown = context.extension?.packageJSON?.version;
+  return typeof manifestVersion === 'string' && manifestVersion ? manifestVersion : 'unknown';
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const logger = vscode.window.createOutputChannel('Ghola');
   context.subscriptions.push(logger);
-  logger.appendLine('[ghola] activating v0.0.1');
+  logger.appendLine(`[ghola] activating v${readActivationVersion(context)}`);
 
   // Migrate any legacy per-workspace module settings into the global store so
   // field values (Atlassian email, vault path, personas, instructions, etc.)

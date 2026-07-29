@@ -46,10 +46,21 @@ Retired modules (do not recreate): `reference.hello-ghola`, `tool.wsl-migrate`,
 5. `PromptFragment.section` and `order` fields are **retired** — do not add them
    to manifests or types.
 6. Use ASCII quotes (`'` and `"`) in TypeScript / JavaScript source — never smart quotes (U+2018, U+2019, U+201C, U+201D); smart quotes break esbuild parsing. Verify with: `grep -rPn '[\x{2018}\x{2019}\x{201C}\x{201D}]' --include="*.ts" --include="*.json" src/ modules/`
-7. Shell scripts here run under `set -euo pipefail`. Do NOT pipe a producer into
-   an early-exiting consumer (`grep -q`, `head`, etc.): the consumer exits on
-   the first match, the producer receives SIGPIPE (exit 141), and `pipefail`
-   promotes that to a spurious pipeline failure. Capture the producer's output
-   first (`out="$(cmd)"; grep -q ... <<<"$out"`) or use a full-reading consumer
-   (`grep -c`). This caused a false "bad build" error in `scripts/reinstall.sh`'s
-   VSIX verifier (fixed in v0.18.4).
+7. Shell-script `set` options are **per-file — check the top of the script you
+   are editing**; they are not uniform across the tree:
+   - `scripts/reinstall.sh` — `set -euo pipefail`.
+   - `.githooks/pre-commit`, `.githooks/post-commit` — `set -uo pipefail`
+     (deliberately no `-e`: a hook must not abort a commit on a probe failure).
+   - `scripts/ghola-boot-probe.sh`, `scripts/ghola-statusline.sh` — **neither**,
+     and their headers say so. Their never-fail contract depends on having no
+     `set -e`. Do not "fix" that.
+
+   In any script with `pipefail` (that is all of the above except the last two),
+   do NOT pipe a producer into an early-exiting consumer (`grep -q`, `head`,
+   etc.): the consumer exits on the first match, the producer receives SIGPIPE
+   (exit 141), and `pipefail` promotes that to a spurious pipeline failure.
+   Capture the producer's output first (`out="$(cmd)"; grep -q ... <<<"$out"`)
+   or use a full-reading consumer (`grep -c`). This caused a false "bad build"
+   error in `scripts/reinstall.sh`'s VSIX verifier (fixed in v0.18.4). Prefer
+   the safe form even in the no-`set` scripts — it costs nothing and keeps the
+   pattern uniform if `pipefail` is ever added.
