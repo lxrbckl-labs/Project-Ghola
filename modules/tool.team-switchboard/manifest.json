@@ -17,7 +17,7 @@
         "type": "path",
         "label": "Comms root directory",
         "default": "",
-        "description": "Absolute path to the shared _AgentComms/ directory. Leave empty to derive <obsidian-vault-root>/_AgentComms/ at runtime. ALL teams must point at the same absolute location for cross-team messaging to work — if even one team uses a different path, its messages land in an isolated subtree no other team will see."
+        "description": "Absolute path to the shared _AgentComms/ directory. Leave empty to derive <obsidian-vault-root>/_AgentComms/ at runtime, resolving the vault root from tool.obsidian-notes' Vault Path first and the GHOLA_VAULT environment variable second; the derived location sits inside the vault exception tool.cwd-discipline already seeds, whereas a path set here pointing outside the vault needs its own Allowed Exception Paths entry. ALL teams must point at the same absolute location for cross-team messaging to work — if even one team uses a different path, its messages land in an isolated subtree no other team will see."
       },
       "teamName": {
         "type": "string",
