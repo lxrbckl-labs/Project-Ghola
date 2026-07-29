@@ -74,16 +74,37 @@ const NO_IDENTITY_PREFIX = 'Ghola:';
  * authority is `_AgentComms/_Switchboard.md`, not this string.
  */
 function describeIdentity(identity: TeamIdentity): string {
+  // An explicit override is the whole story: it is used verbatim, so describing
+  // a strip or a qualifier would describe machinery that did not run. Name the
+  // setting so the operator knows where the value came from, and disclose the
+  // name they are overriding so a stale override is visible rather than silent.
+  if (identity.overridden) {
+    return (
+      `Ghola team: ${identity.name} — set explicitly by the Team Switchboard ` +
+      `'teamName' setting, used verbatim (auto-derived would be '${identity.teamName}').`
+    );
+  }
+  // Say WHICH directory named the team. The repo root is the usual answer and is
+  // what the roster records; the workspace folder appears only when no '.git'
+  // was found at or above it.
+  const source =
+    identity.rootSource === 'git-root'
+      ? `git repository root '${identity.basename}'`
+      : `workspace folder '${identity.basename}' (no '.git' found above it)`;
   // Only claim the strip when it actually happened — a bare `cmms2`, and a
   // basename of exactly `Project-` (which keeps its name rather than strip to
   // nothing), must not be described as having had a prefix removed.
   const origin =
-    identity.basename === identity.teamName
-      ? `workspace folder '${identity.basename}'`
-      : `workspace folder '${identity.basename}', leading 'Project-' stripped`;
-  const qualifier = identity.qualified
-    ? `'@${identity.environment}' marks this host, because the WSL clone holds the unqualified name`
-    : 'this WSL host holds the unqualified name';
+    identity.basename === identity.teamName ? source : `${source}, leading 'Project-' stripped`;
+  // Three cases, not two: WSL is the incumbent and renders bare; another host
+  // normally gains '@env'; and a host whose derived name ALREADY ends in a legal
+  // qualifier keeps it rather than doubling it.
+  const qualifier =
+    identity.environment === 'wsl'
+      ? 'this WSL host holds the unqualified name'
+      : identity.qualified
+        ? `'@${identity.environment}' marks this host, because the WSL clone holds the unqualified name`
+        : "the name already carries its own '@' qualifier, so none was appended";
   const multiRoot =
     identity.folderCount > 1
       ? ` Multi-root workspace (${identity.folderCount} folders): the identity comes from the first.`
@@ -119,6 +140,15 @@ export class ModeStatusBarItem implements vscode.Disposable {
      * class never invents its own war-detection path.
      */
     private readonly getWarMode: () => boolean,
+    /**
+     * Resolves the operator's `tool.team-switchboard::teamName` override, which
+     * the module doc calls "the canonical team name for this session". Injected
+     * for exactly the reason `getWarMode` is: the value lives in the
+     * `globalState` Memento, reachable only via `readModuleSettings`, and
+     * neither this class nor the pure `team-identity` module should reach into
+     * extension state. `undefined` (or the empty default) means auto-derive.
+     */
+    private readonly getTeamNameOverride: () => string | undefined,
   ) {
     // Left alignment with a priority that places it near the workspace/branch
     // context on the left cluster. Higher priority = further left.
@@ -147,9 +177,13 @@ export class ModeStatusBarItem implements vscode.Disposable {
 
     // `workspaceFolders` is `undefined` with no folder open and may hold several
     // in a multi-root workspace; `resolveTeamIdentity` owns the first-folder
-    // decision and returns `undefined` when there is nothing to derive from.
+    // decision, the walk up to the git repository root that actually names the
+    // team, and returns `undefined` when there is nothing to derive from.
     const folders = vscode.workspace.workspaceFolders ?? [];
-    const identity = resolveTeamIdentity(folders.map((folder) => folder.uri.fsPath));
+    const identity = resolveTeamIdentity(
+      folders.map((folder) => folder.uri.fsPath),
+      { teamNameOverride: this.getTeamNameOverride() },
+    );
 
     // War Mode gets a distinct flame icon so it stands out at a glance; other
     // sessions use the org icon. The `+ war` suffix is already in `modeLabel`.

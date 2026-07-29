@@ -723,9 +723,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const moduleSettingsEmitter = new vscode.EventEmitter<void>();
   context.subscriptions.push(moduleSettingsEmitter);
 
-  // ───── Ghola mode / War Mode status-bar item ─────────────────────────
-  // A native status-bar indicator showing the current session modality and
-  // War-Mode flag (e.g. `Ghola: ticket-work + war`). War Mode is NOT a
+  // ───── Ghola identity / mode / War Mode status-bar item ──────────────
+  // A native status-bar indicator showing this window's Team Switchboard
+  // identity plus the current session modality and War-Mode flag (e.g.
+  // `cmms2@win · Ticket Work + War`). War Mode is NOT a
   // loader-toggleable module — its source of truth is the `mode.war::enabled`
   // module-setting (an Agents configuration), exactly as the launcher/banner/
   // composer read it — so we resolve it from the flattened MODULE_SETTINGS
@@ -734,7 +735,18 @@ export function activate(context: vscode.ExtensionContext): void {
     const flat = readModuleSettings(context.globalState, context.workspaceState);
     return flat['mode.war::enabled'] === true;
   };
-  const modeStatusBar = new ModeStatusBarItem(loader, readWarMode);
+  // The Team Switchboard `teamName` override, resolved from the same flattened
+  // store for the same reason: a non-empty value is, per that module's doc, "the
+  // canonical team name for this session", so the status bar must honour it or
+  // it will disagree with the roster row the agent actually registers. Read
+  // defensively — the stored value is `unknown`, and only a string can be a
+  // name. The `moduleSettingsEmitter` refresh below already covers the save.
+  const readTeamNameOverride = (): string | undefined => {
+    const flat = readModuleSettings(context.globalState, context.workspaceState);
+    const value = flat['tool.team-switchboard::teamName'];
+    return typeof value === 'string' ? value : undefined;
+  };
+  const modeStatusBar = new ModeStatusBarItem(loader, readWarMode, readTeamNameOverride);
   context.subscriptions.push(modeStatusBar);
   // Refresh on: module enable/disable (loader), module-settings save (covers
   // the mode.war::enabled War-Mode toggle), and the statusBar.enabled config
