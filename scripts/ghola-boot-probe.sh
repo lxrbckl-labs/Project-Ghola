@@ -20,14 +20,12 @@
 # SWE_PERFORMANCE_CORES, SWE_EFFICIENCY_CORES, QA_AGENT_COUNT,
 # SWE_PERFORMANCE_MODEL, SWE_EFFICIENCY_MODEL, QA_MODEL, and optional GHOLA_VAULT.
 #
-# STRICTLY READ-ONLY except for its own temp `detail` file under /tmp. It never
+# STRICTLY READ-ONLY except for its own temp `detail` file (under /tmp, or under
+# `%TEMP%` on a native-Windows session — see the detail-file block below). It never
 # writes to the work repo or the Obsidian vault — note-file creation and any
 # vault writes remain TPM's job via the obsidian-notes module, AFTER this probe.
 
 emit() { printf '%s=%s\n' "$1" "$2"; }
-
-detail="$(mktemp 2>/dev/null || echo /tmp/ghola-boot-detail.txt)"
-: > "$detail" 2>/dev/null
 
 # ── Bridge liveness plumbing ────────────────────────────────────────────────
 # Both bridge calls below used to send stderr to /dev/null, which threw away the
@@ -36,10 +34,21 @@ detail="$(mktemp 2>/dev/null || echo /tmp/ghola-boot-detail.txt)"
 # not a Bitbucket repo". The operator saw silence and three sessions guessed
 # wrong about why. We now capture stderr and classify it.
 #
-# bb-bridge.mjs stamps every transport-level failure with a stable marker
-# (`bridge-unreachable`, or `bridge-unavailable` when no coordinates exist at
-# all). Those two strings are the contract between that script and this one —
-# changing either requires changing both.
+# bb-bridge.mjs stamps every transport-level failure with a stable marker:
+# `bridge-unreachable` (transport is dead), `bridge-unavailable` (no coordinates
+# exist at all), or `bridge-timeout` (the bridge answered the connection and is
+# healthy — WE stopped waiting, because the upstream is throttling the host and
+# it is deliberately backing off). Those THREE strings are the contract between
+# that script and this one — changing any of them requires changing both.
+#
+# The third marker is not a variant of the first two and must never be folded
+# into them. `bridge-unreachable`/`bridge-unavailable` mean RELAUNCH THE SESSION;
+# `bridge-timeout` means the bridge is fine, the lookup is simply UNANSWERED, and
+# relaunching fixes nothing. Both differ again from a plain `na`/`notfound`, which
+# is a lookup that DID complete and found nothing.
+# Unlike `detail` below, this path is NEVER emitted — only this script's own bash
+# opens it — so its MSYS-vs-Win32 form is irrelevant and plain `mktemp` is correct
+# here on every platform. Do not "fix" it to match the detail file.
 bridge_err="$(mktemp 2>/dev/null || echo /tmp/ghola-boot-bridge-err.txt)"
 bridge_state=""
 
@@ -59,6 +68,200 @@ bridge_down_last() {
   bridge_state="down"
   return 0
 }
+
+# True (exit 0) when the MOST RECENT captured stderr says the bridge was ALIVE
+# and we stopped waiting — bb-bridge's `bridge-timeout` marker, which it emits on
+# `get-ticket`/`find-pr` when the host is mid-backoff against a rate-limiting
+# (HTTP 429) or 5xx upstream. Same per-call discipline as `bridge_down_last`: the
+# caller must truncate "$bridge_err" immediately before its bb-bridge call, and
+# grep reads the FILE directly, never through a pipe (see the note above).
+#
+# This is a THIRD verdict, not a softer `down`. The state it latches is
+# `upstream-slow`, and the only correct reading of it is "we could not look";
+# the bridge is healthy, so relaunching the session is the WRONG advice, and the
+# result is an UNKNOWN, never an absence. Collapsing it into `unavailable`/`na`
+# is what made a throttled boot lookup read as "no ticket" / "no PR".
+#
+# `down` deliberately outranks `upstream-slow` on the STICKY `bridge_state`: that
+# field latches across both bridge calls, and if one call found the transport dead
+# then "relaunch the session" is real, actionable advice that a later slow call
+# must not overwrite. The per-call return value is unaffected — the call site that
+# saw the timeout still reports its own `bridge-slow` state.
+bridge_slow_last() {
+  [ -s "$bridge_err" ] || return 1
+  grep -qE 'bridge-timeout' "$bridge_err" 2>/dev/null || return 1
+  [ "$bridge_state" = "down" ] || bridge_state="upstream-slow"
+  return 0
+}
+
+# ── Platform detection + path translation ───────────────────────────────────
+# The probe runs under WSL today, but a native-Windows session runs it under
+# Git-for-Windows bash, where every path the probe DERIVES from strings resolves
+# to nothing. `work_repo` survives only because it is produced by `git rev-parse`,
+# whose Windows build emits `C:/...` on its own. `$GHOLA_VAULT` does not: the
+# launcher hands it over in WSL `/mnt/c/...` form, and on native Windows that
+# silently fails every `-f`/`-d` test below, which reports `notes_exists=no` and
+# a confident "fresh session" on a ticket that has thousands of lines of notes.
+#
+# `translate_path` is deliberately PURE BASH — no `cygpath`, no `wslpath`, no
+# subprocess of any kind. `cygpath -m /mnt/c/Users/x` returns
+# `<msys-root-drive>:/mnt/c/Users/x`: a syntactically perfect, plausible-looking,
+# NONEXISTENT path. `/mnt/<letter>` is a WSL mount-table remap, not a path
+# format, and cygpath knows nothing about WSL's mount table. A pure `case` also
+# cannot write to stderr and cannot depend on PATH, both of which this
+# never-fails/never-prints probe requires.
+#
+# Windows-form output is ALWAYS `C:/...`, never MSYS `/c/...`. The digest has two
+# consumers with different path grammars: bash (accepts either form) and the
+# agent's Read/Write tools (accept only `C:/` or `C:\`). `C:/` is the unique form
+# that satisfies both.
+#
+# KEEP IN SYNC with `toNativeHostPath` in `src/session/host-path.ts` and its
+# hand-maintained mirror in `scripts/ghola.mjs` — the same rule set, three times,
+# because none of the three can import from either of the others. That instruction
+# is no longer enforced by comment alone: `scripts/ghola-path-parity.mjs` extracts
+# `translate_path` (anchored on its header, so renaming it fails the checker
+# loudly), sources it in a subshell, drives all three over one shared case table
+# under every forced `shell_os`, and exits non-zero on any drift. Run it after
+# touching this function. Two differences remain and are AGREED, recorded here and
+# in the same words in both JS copies:
+#
+# KEEP-IN-SYNC EXCEPTION 1 — the bare re-slash is UNGATED here and GATED in JS.
+# Step 1 below re-slashes unconditionally and this function returns the re-slashed
+# string even when no platform arm fired, so `C:\Users\x` comes back as
+# `C:/Users/x`; the JS pair treats the bare re-slash as a translation like any
+# other and returns it only if `existsSync` confirms it, otherwise handing back the
+# operator's original spelling. Deliberate on both sides: a backslash is a LEGAL
+# POSIX filename character, so the JS copies refuse to re-slash unverified, while
+# this function must normalize before matching (a glob cannot match through `\`)
+# and its own callers — blocks 8a/8b — adopt its output only after `-d`. Both
+# spellings name the same directory to every Win32 consumer, so the difference is
+# cosmetic; the parity checker neutralizes the JS gate and sees the transforms
+# agree.
+#
+# KEEP-IN-SYNC EXCEPTION 2 — this function models THREE platforms and makes `unix`
+# the identity so a plain Linux or macOS host is never rewritten; both JS copies
+# model TWO (`win32` vs everything else) and therefore apply the WSL rule on
+# darwin and on non-WSL Linux. Accepted rather than reconciled: a WSL detector in
+# JS would be a FOURTH copy of a rule set whose duplication is already the problem,
+# and JS's `existsSync` gate neutralizes the difference on any host with no
+# `/mnt/<letter>` tree. Residual: a plain-Linux host that really mounts `/mnt/c`
+# would see the JS pair adopt `C:/Users/x` -> `/mnt/c/Users/x` where this function
+# keeps `C:/Users/x`. Neither supported host (WSL, native Windows) is affected, and
+# the JS side only adopts a path it has CONFIRMED exists, so the worst case is a
+# disagreement about a real directory rather than a fabricated one.
+
+# Echoes `windows` (Git Bash / MSYS / Cygwin), `wsl`, or `unix`. Anything
+# unrecognized degrades to `unix`, whose translation is the identity, so a plain
+# Linux or macOS host is never rewritten. The detector is deliberately NOT "does
+# /mnt/c exist": that is false on plain Linux and macOS too, and false on a WSL
+# install with a custom `automount.root`. `grep` reads /proc/version as a FILE,
+# never through a pipe — same reason as `bridge_down_last` above.
+shell_platform() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) printf '%s' "windows"; return 0 ;;
+  esac
+  if [ -r /proc/version ] && grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then
+    printf '%s' "wsl"; return 0
+  fi
+  printf '%s' "unix"
+}
+shell_os="$(shell_platform)"
+
+# Rewrite $1 into the CURRENT platform's path form; echoes the input unchanged
+# when no rule applies. Every drive-letter pattern matches exactly ONE character
+# followed by `/` or end-of-string, so `/mnt/wsl`, `/mnt/host`, `/mnt/cdrom` and
+# a legitimately-named Linux `/mnt/data` disk are all left alone (a glob like
+# `/mnt/[a-zA-Z]*` would wrongly capture every one of them). `${d^^}`/`${d,,}`
+# are bash 4+ and are only ever reached on the windows/wsl branches, where the
+# shell is Git-for-Windows bash 5 or WSL bash 5.
+translate_path() {
+  # Step 1, unconditional and on EVERY platform: `\` -> `/`. A native-Windows
+  # Detect Vault stores a backslash path (vault-discovery.ts builds it with
+  # path.join), so a `/mnt/`-only rewrite would miss the likeliest real input.
+  local p="${1//\\//}"
+  case "$shell_os" in
+    windows)
+      case "$p" in
+        //*) ;;                                   # UNC `//server/share` — passthrough
+        [a-zA-Z]:|[a-zA-Z]:/*) ;;                 # already `C:` / `C:/...` — nothing to do
+        [a-zA-Z]:*) ;;                            # drive-RELATIVE `C:foo` — ambiguous, refuse
+        /mnt/[a-zA-Z]|/mnt/[a-zA-Z]/*)            # WSL mount -> `C:/...`
+          local d="${p:5:1}" r="${p#/mnt/?}"
+          p="${d^^}:${r:-/}" ;;                   # `${r:-/}` keeps `/mnt/c/` from becoming `C://`
+        /[a-zA-Z]|/[a-zA-Z]/*)                    # MSYS `/c/...` -> `C:/...`
+          local d="${p:1:1}" r="${p#/?}"
+          p="${d^^}:${r:-/}" ;;
+      esac ;;
+    wsl)
+      case "$p" in
+        //*) ;;                                   # UNC — passthrough
+        [a-zA-Z]:|[a-zA-Z]:/*)                    # `C:` / `C:/...` -> `/mnt/c/...`
+          local d="${p%%:*}" r="${p#?:}"
+          d="${d,,}"; p="/mnt/${d}${r:-/}" ;;
+        [a-zA-Z]:*) ;;                            # drive-relative `C:foo` — refuse
+        /[a-zA-Z]|/[a-zA-Z]/*)                    # MSYS `/c/...` -> `/mnt/c/...`
+          local d="${p:1:1}" r="${p#/?}"
+          d="${d,,}"; p="/mnt/${d}${r:-/}" ;;
+      esac ;;
+    *) ;;                                         # unix: identity beyond step 1
+  esac
+  printf '%s' "$p"
+}
+
+# ── Detail file (the bulky-output overflow named by `detail_file=`) ──────────
+# Created HERE, after the platform block, and not at the top of the script:
+# choosing its location needs `shell_os` and `translate_path`.
+#
+# The problem this solves is the same silent degradation as the vault path, one
+# field over. `mktemp` under Git Bash returns an MSYS path (`/tmp/tmp.XXXXXXXX`),
+# the digest emits it as `detail_file=`, and TPM opens that path with its Read
+# tool — a Win32-API consumer that knows nothing about the MSYS mount table. If
+# the open fails, EVERY native-Windows boot silently loses the handoff block.
+#
+# `translate_path` cannot rescue this and deliberately does not try: MSYS `/tmp`
+# is a mount-table entry (`<git-root>/tmp` on some installs, the `usertemp`
+# mapping of `%TEMP%` on others), so its Win32 form is NOT derivable from the
+# string `/tmp/...`. The drive-letter patterns above match exactly ONE character,
+# so `/tmp/...` falls straight through unchanged — correctly, because translating
+# it would mean inventing a path. Emitting an unverified translation is the one
+# thing worse than emitting the MSYS form.
+#
+# So on windows we do not translate; we CREATE the file somewhere whose Win32
+# form is already known — `%TEMP%`/`%TMP%`, which Git Bash inherits from the
+# Windows environment in `C:\...` form — and emit that verified path. If no such
+# directory can be confirmed we fall back to plain `mktemp` AND emit
+# `detail_file_form=msys`, so the consumer can react (translate it itself, or skip
+# the read and say so) instead of failing blind. Nothing here runs off the windows
+# branch, so wsl/unix keep the original single `mktemp` byte for byte.
+detail=""; detail_form=""
+if [ "$shell_os" = "windows" ]; then
+  for t in "$TEMP" "$TMP" "$TMPDIR"; do
+    [ -n "$t" ] || continue
+    td="$(translate_path "$t")"
+    # ONLY a drive-letter-rooted directory is usable. Anything still in POSIX form
+    # after translation (`/tmp`, `/var/tmp`) is exactly the unknowable case above,
+    # so it is skipped rather than guessed at.
+    case "$td" in [a-zA-Z]:/*) ;; *) continue ;; esac
+    [ -d "$td" ] || continue
+    detail="$(mktemp "${td%/}/ghola-boot-detail.XXXXXX" 2>/dev/null)"
+    # mktemp echoes back the template it was handed, so this is already `C:/...`;
+    # re-canonicalize anyway (cheap, and survives a mktemp that normalizes form)
+    # and require the file to actually EXIST before trusting the path — the same
+    # try-then-verify discipline the vault gate uses. Any miss clears `detail` and
+    # tries the next candidate.
+    if [ -n "$detail" ]; then
+      detail="$(translate_path "$detail")"
+      case "$detail" in [a-zA-Z]:/*) [ -f "$detail" ] && break ;; esac
+    fi
+    detail=""
+  done
+  [ -z "$detail" ] && detail_form="msys"
+fi
+if [ -z "$detail" ]; then
+  detail="$(mktemp 2>/dev/null || echo /tmp/ghola-boot-detail.txt)"
+fi
+: > "$detail" 2>/dev/null
 
 # 1. version
 version="${GHOLA_VERSION:-}"
@@ -175,8 +378,20 @@ elif [ -n "$key" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_ROOT/scripts/bb-bridg
   # retries reads (worst case ~6.25s against a WEDGED bridge), an explicit
   # ceiling keeps boot non-blocking. A refused connection still fails in
   # milliseconds — bb-bridge deliberately does not retry ECONNREFUSED.
+  #
+  # `GHOLA_BRIDGE_TIMEOUT_MS=6000` is a CLIENT-SIDE CEILING, not a wait: bb-bridge
+  # judges `/get-ticket` at its 87s retry-budget tier, which the outer `timeout 8`
+  # would SIGTERM at 8s — killing the process before it could print its own
+  # truthful `bridge-timeout` message, leaving an EMPTY stderr and sending this
+  # probe to `unavailable` ("Jira had nothing") for a lookup nothing answered.
+  # Overriding it to 6000 puts bb-bridge's deadline INSIDE the outer bound so the
+  # marker always gets written. 6000-inside-8 clears with room to spare because
+  # bb-bridge does NOT replay a deadline on this route (see `noReplayOnDeadline`
+  # in bb-bridge.mjs) — one attempt, so the override IS the worst case. The
+  # override changes nothing for a healthy call, which returns in well under a
+  # second, and the boot budget is unchanged: the outer `timeout 8` still governs.
   : > "$bridge_err" 2>/dev/null
-  tj="$(timeout 8 node "$GHOLA_ROOT/scripts/bb-bridge.mjs" get-ticket --key "$key" 2>"$bridge_err")"
+  tj="$(GHOLA_BRIDGE_TIMEOUT_MS=6000 timeout 8 node "$GHOLA_ROOT/scripts/bb-bridge.mjs" get-ticket --key "$key" 2>"$bridge_err")"
   if [ -n "$tj" ]; then
     parsed="$(printf '%s' "$tj" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);if(j&&j.exists===true){process.stdout.write("ok\t"+(j.status||"")+"\t"+(j.summary||""))}else{process.stdout.write("missing\t\t")}}catch(e){process.stdout.write("err\t\t")}})' 2>/dev/null)"
     st="${parsed%%$'\t'*}"; rest="${parsed#*$'\t'}"; ticket_status="${rest%%$'\t'*}"; ticket_summary="${rest#*$'\t'}"
@@ -193,6 +408,12 @@ elif [ -n "$key" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_ROOT/scripts/bb-bridg
   # instead of hiding inside `unavailable`, which reads as "Jira had nothing"
   # and sends the operator to the wrong place.
   if bridge_down_last; then ticket_state="bridge-down"; fi
+  # And a THROTTLED-but-healthy bridge is its own state again, checked after
+  # `bridge_down_last` so the dead-transport verdict is never softened. `unavailable`
+  # would read as "Jira answered and had nothing"; `bridge-down` would wrongly tell
+  # the operator to relaunch. Neither is true here: we could not look, the bridge is
+  # fine, and the ticket's existence is UNKNOWN.
+  if bridge_slow_last; then ticket_state="bridge-slow"; fi
 elif [ -n "$key" ]; then
   ticket_state="unavailable"
 fi
@@ -225,7 +446,18 @@ elif [ -n "$branch" ] && [ -n "$repo" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_
     # failure (bridge DOWN, connection refused) still returns in milliseconds
     # because bb-bridge deliberately does not retry ECONNREFUSED, so the extra
     # headroom is only ever spent on a genuinely hung host.
-    pj="$(timeout 7 node "$GHOLA_ROOT/scripts/bb-bridge.mjs" find-pr --repo "$pr_slug" --branch "$branch" 2>"$bridge_err")"
+    #
+    # `GHOLA_BRIDGE_TIMEOUT_MS=5000` is the same client-side CEILING the get-ticket
+    # call above applies, for the same reason: bb-bridge judges `/find-pr` at its
+    # 87s retry-budget tier (two upstream queries x the host's 41s retry budget),
+    # so the outer `timeout 7` would SIGTERM it long before it could print its own
+    # `bridge-timeout` message — and an empty stderr degrades to `pr_state=na`,
+    # i.e. "we looked and there is no PR", about a lookup that was never answered.
+    # 5000-inside-7 clears because bb-bridge does NOT replay a deadline on this
+    # route, so one attempt at 5s is its whole worst case. A healthy find-pr is
+    # unaffected (well under a second) and the boot budget is unchanged — the
+    # outer `timeout 7` is still the bound.
+    pj="$(GHOLA_BRIDGE_TIMEOUT_MS=5000 timeout 7 node "$GHOLA_ROOT/scripts/bb-bridge.mjs" find-pr --repo "$pr_slug" --branch "$branch" 2>"$bridge_err")"
     if [ -n "$pj" ]; then
       parsedpr="$(printf '%s' "$pj" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);let st="na",id="",ti="",ur="",au="";if(j&&j.status==="ok"){st=j.prState||"OPEN";id=(j.prId!=null?String(j.prId):"");ti=j.prTitle||"";ur=j.prUrl||"";au=j.prAuthor||""}else if(j&&j.status==="not-found"){st="none"}process.stdout.write(st+"\t"+id+"\t"+ti+"\t"+ur+"\t"+au)}catch(e){process.stdout.write("na\t\t\t\t")}})' 2>/dev/null)"
       if [ -n "$parsedpr" ]; then
@@ -239,15 +471,114 @@ elif [ -n "$branch" ] && [ -n "$repo" ] && [ -n "$GHOLA_ROOT" ] && [ -f "$GHOLA_
     # `na`. `na` means "we looked and there is no PR"; it must not double as
     # "we could not look".
     if bridge_down_last; then pr_state="bridge-down"; fi
+    # Third verdict, checked after the dead-transport one so it can never soften
+    # it. A throttled `find-pr` told us NOTHING about whether a PR exists, so it
+    # must not land on `na` ("we looked, there is none") and must not land on
+    # `bridge-down` (whose fix, relaunching, is wrong for a healthy bridge).
+    if bridge_slow_last; then pr_state="bridge-slow"; fi
   fi
 fi
 
 # 8. vault + notes (READ-ONLY: probe never creates the notes file)
 vault="${GHOLA_VAULT:-}"
 if [ -z "$vault" ]; then
-  for c in "/mnt/c/Users/${USER}/Documents/Obsidian"/* "$HOME/Documents/Obsidian"/*; do
-    [ -d "$c" ] && vault="$c" && break
-  done
+  # Fallback scan when Detect Vault never stored a path. This used to be a single
+  # two-glob `for` and was WSL-only in two ways: the `/mnt/c/...` arm can never
+  # match on native Windows, and `$USER` is normally UNSET under Git Bash (which
+  # sets `USERNAME`), so that arm degraded to the literal
+  # `/mnt/c/Users//Documents/Obsidian/*` — harmless only because this script has
+  # no `set -u`. Candidates are now built into an ordered list so a missing input
+  # DROPS its candidate instead of producing a nonsense glob.
+  #
+  # The first two entries are the original two, in the original order, so a WSL or
+  # plain-Linux scan probes exactly what it always did. The windows-only entries
+  # are appended after them and are unreachable off that platform. Any candidate
+  # they resolve is still adopted only when it passes `-d` (unchanged), and the
+  # canonicalization gate at 8b below puts it in `C:/...` form.
+  vault_user="${USER:-${USERNAME:-}}"
+  vault_roots=()
+  [ -n "$vault_user" ] && vault_roots+=("/mnt/c/Users/${vault_user}/Documents/Obsidian")
+  [ -n "$HOME" ] && vault_roots+=("$HOME/Documents/Obsidian")
+  if [ "$shell_os" = "windows" ]; then
+    # `%USERPROFILE%` is the authoritative Windows user-profile location and Git
+    # Bash inherits it in `C:\...` form, so translate it (step 1 of translate_path
+    # alone fixes the backslashes; a glob cannot match through `\`). `$HOME` above
+    # is often the same directory in MSYS form — a duplicate candidate is harmless
+    # because the first `-d` hit wins and both name the same folder.
+    [ -n "$USERPROFILE" ] && vault_roots+=("$(translate_path "$USERPROFILE")/Documents/Obsidian")
+    # Last resort when neither HOME nor USERPROFILE is usable: compose the
+    # standard profile path from the username directly.
+    [ -n "$vault_user" ] && vault_roots+=("C:/Users/${vault_user}/Documents/Obsidian")
+  fi
+  # Guarded expansion: an empty array is only safe to expand unquoted-in-a-loop on
+  # newer bash, and this probe must never error on any host.
+  if [ "${#vault_roots[@]}" -gt 0 ]; then
+    for r in "${vault_roots[@]}"; do
+      for c in "$r"/*; do
+        [ -d "$c" ] && vault="$c" && break
+      done
+      [ -n "$vault" ] && break
+    done
+  fi
+fi
+# 8a. Platform-form repair for the resolved vault path — TRY THE STORED VALUE
+# FIRST, ADOPT THE TRANSLATION ONLY IF IT EXISTS. The stored value is translated
+# ONLY when it FAILS `-d`, and the translation is adopted ONLY when it PASSES
+# `-d`. On a WSL session — i.e. every session that has ever run — the stored
+# `/mnt/c/...` path passes `-d` on the first test, so this block does nothing and
+# the digest is byte-identical: the change is a provable no-op there. If NEITHER
+# form resolves we keep the stored value untouched, leave notes_exists=no, and
+# say so via `vault_state=unresolved` rather than emitting a path we invented.
+vault_translated=""; vault_state=""; vault_canonicalized=""
+if [ -n "$vault" ] && [ ! -d "$vault" ]; then
+  vt="$(translate_path "$vault")"
+  if [ "$vt" != "$vault" ] && [ -d "$vt" ]; then
+    # `vault_translated` carries the platform form we translated INTO (a token,
+    # never a path — the resolved path is `vault` itself), and the consumer
+    # contract in `modules/tool.session-bootstrap/session-bootstrap.md` declares
+    # its vocabulary as `<windows|wsl>`. `unix` is REACHABLE here and must not be
+    # emitted: the unix arm of `translate_path` performs no platform rewrite at
+    # all, so the only way `vt` can differ from `vault` on that platform is step
+    # 1's unconditional `\` -> `/` re-slash — i.e. a stored path spelled with
+    # backslashes on a plain Linux/macOS host. That is a spelling repair, not a
+    # translation INTO a platform form, so there is no honest token for it and the
+    # field stays absent rather than inventing a third value the contract does not
+    # define. The recovered path is still ADOPTED: discarding a vault that
+    # resolves would be strictly worse than emitting one unexplained field fewer.
+    vault="$vt"
+    case "$shell_os" in windows|wsl) vault_translated="$shell_os" ;; esac
+  else
+    vault_state="unresolved"
+  fi
+fi
+# 8b. Windows-only FORM CANONICALIZATION — a separate rule from 8a's recovery, and
+# it fires on a path that ALREADY RESOLVES. Under Git Bash the 8a gate never runs
+# for the commonest native-Windows case: `$HOME` is `/c/Users/<u>`, so the fallback
+# scan (and a `$HOME`-derived stored setting) yields `/c/Users/<u>/Documents/...`,
+# which PASSES `-d` in MSYS bash. 8a therefore sees a healthy path and leaves the
+# MSYS form in place — and MSYS form is accepted by bash but REJECTED by the
+# agent's Read/Write tools, which need `C:/...` or `C:\...`. That is the same class
+# of silent failure 8a exists to prevent, reached by a different route, so the
+# digest must not emit it.
+#
+# Gated on `[ -d "$vault" ]`, which makes it mutually exclusive with 8a's outcome:
+# an unresolved vault is left exactly as 8a left it, and a path 8a already
+# rewrote is already `C:/...` so `translate_path` returns it unchanged. The
+# rewrite is still adopted only when it PASSES `-d`, so a form change can never
+# turn a working path into a broken one. `shell_os` is checked first, so this
+# block is unreachable — not merely inert — on wsl and unix.
+#
+# It sets `vault_canonicalized`, NOT `vault_translated`. The two facts are
+# different and a consumer must be able to tell them apart: `vault_translated`
+# means THE STORED SETTING WAS WRONG (it did not exist as stored and had to be
+# recovered), which is worth surfacing to the operator; canonicalization means the
+# setting was fine and only its spelling changed. Reusing `vault_translated` here
+# would report a healthy Windows session as a misconfigured one on every boot.
+if [ "$shell_os" = "windows" ] && [ -n "$vault" ] && [ -d "$vault" ]; then
+  vc="$(translate_path "$vault")"
+  if [ "$vc" != "$vault" ] && [ -d "$vc" ]; then
+    vault="$vc"; vault_canonicalized="$shell_os"
+  fi
 fi
 notes_exists="no"; notes_file=""; handoff_date=""
 # The ticket-notes lookup is gated on mode: in a non-ticket mode (support, cd)
@@ -280,8 +611,17 @@ emit ticket_key "${key:-none}"
 emit ticket_state "$ticket_state"
 # Emitted ONLY when a bridge call actually failed at the transport level, so the
 # digest's shape is unchanged for every healthy session. Its presence is the
-# banner's cue to say "the Ghola bridge is down — relaunch the session" rather
-# than silently reporting no ticket and no PR.
+# banner's cue to explain the bridge rather than silently reporting no ticket and
+# no PR. TWO values, with OPPOSITE remedies — a consumer must not treat the mere
+# presence of this field as "the bridge is down":
+#   down          — the transport is dead (`bridge-unreachable`/`bridge-unavailable`).
+#                   Say "the Ghola bridge is down — relaunch the session".
+#   upstream-slow — the bridge is ALIVE and healthy; the upstream (Jira/Bitbucket)
+#                   is throttling it and it is deliberately backing off, so the
+#                   lookup went UNANSWERED. Do NOT advise a relaunch (it fixes
+#                   nothing and discards session context) and do NOT report the
+#                   ticket or PR as absent — nothing was ruled out.
+# `down` wins when both occur in one boot; see `bridge_slow_last`.
 [ -n "$bridge_state" ] && emit bridge_state "$bridge_state"
 [ -n "$ticket_status" ] && emit ticket_status "$ticket_status"
 [ -n "$ticket_summary" ] && emit ticket_summary "$ticket_summary"
@@ -291,7 +631,41 @@ emit pr_state "$pr_state"
 [ -n "$pr_url" ] && emit pr_url "$pr_url"
 [ -n "$pr_author" ] && emit pr_author "$pr_author"
 emit vault "${vault:-none}"
+# Both fields follow the `bridge_state` precedent above: emitted ONLY when the
+# abnormal condition actually occurred, so the digest's shape is unchanged for
+# every healthy session. `vault_translated=<windows|wsl>` says the stored vault
+# path did not exist in the form it was stored and was rewritten into that
+# platform's form (the rewritten path IS `vault`); `vault_state=unresolved` says
+# neither form exists, so `vault` is the unusable stored value and every
+# notes/handoff field below is absent for that reason and not because the ticket
+# is new. `vault_translated` is constrained at block 8a to exactly the two tokens
+# the module contract documents — it never carries `unix`; see the note there.
+# `vault_canonicalized=windows` is the THIRD such field and follows the same
+# emitted-only-when-abnormal rule: it says the vault path resolved fine but was in
+# MSYS `/c/...` form and has been respelled as `C:/...` so the agent's Read/Write
+# tools can open it. It is NOT a misconfiguration signal — unlike
+# `vault_translated`, the stored setting was correct — so a consumer should render
+# the notes line entirely normally and, at most, explain why the path shown differs
+# from the setting. It never appears on wsl or unix.
+[ -n "$vault_translated" ] && emit vault_translated "$vault_translated"
+[ -n "$vault_canonicalized" ] && emit vault_canonicalized "$vault_canonicalized"
+[ -n "$vault_state" ] && emit vault_state "$vault_state"
 emit notes_file "${notes_file:-none}"
 emit notes_exists "$notes_exists"
 [ -n "$handoff_date" ] && emit handoff_date "$handoff_date"
 emit detail_file "$detail"
+# Emitted ONLY when the detail file's path could not be put in a form the reader is
+# known to accept — i.e. a native-Windows session where no `%TEMP%`-derived
+# directory could be confirmed, leaving an MSYS `/tmp/...` path that a Win32-API
+# Read may not be able to open. Absent everywhere else, so the digest's shape is
+# unchanged for wsl, unix, and a healthy Windows session. A consumer seeing it
+# should treat a failed detail read as EXPECTED (and say the handoff block could
+# not be read) rather than concluding there was no handoff.
+[ -n "$detail_form" ] && emit detail_file_form "$detail_form"
+
+# Explicit success. This probe must NEVER report failure, and without this line the
+# script's exit status is whatever the LAST conditional emit evaluated to: an
+# ABSENT optional field (`[ -n "" ]` -> 1) would make a perfectly healthy boot look
+# like a failed command to the caller. Any future trailing `[ ... ] && emit` has the
+# same hazard, so the guard belongs here rather than in the emit order.
+exit 0

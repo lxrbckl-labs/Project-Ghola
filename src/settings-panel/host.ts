@@ -10,6 +10,7 @@ import type { AtlassianBridge } from '../extension';
 import type { ModuleLoader } from '../modules/loader';
 import type { PromptComposer } from '../prompts/composer';
 import { syncAliasFile, validateAlias, type CliAlias } from '../session/alias-sync';
+import { resolveLedgerRoot } from '../session/host-path';
 import { resolveAgentPromptFilePath } from '../session/prompt-file';
 import { readModuleSettings, writeModuleSettings } from '../state/module-settings';
 import type { ConfigurationsStore } from './configurations-store';
@@ -1009,11 +1010,16 @@ export class SettingsPanel implements vscode.Disposable {
    * Compose the TPM, SWE, and QA prompts with the current settings and write
    * each to a workspace-scoped temp-file location so the launched terminal
    * can read them via the `$GHOLA_TPM_PROMPT_FILE`, `$GHOLA_SWE_PROMPT_FILE`,
-   * and `$GHOLA_QA_PROMPT_FILE` env vars. Filenames are derived from a hash
-   * of the workspace folder path (see `resolveAgentPromptFilePath`) so
-   * concurrent Ghola sessions in different VS Code windows cannot collide.
-   * Within a single workspace the paths are stable across launches — repeated
-   * invocations overwrite the previous prompts cleanly.
+   * and `$GHOLA_QA_PROMPT_FILE` env vars.
+   *
+   * Filenames carry TWO suffix groups (see `resolveAgentPromptFilePath`): a hash
+   * of the workspace folder path, so concurrent sessions in different VS Code
+   * windows cannot collide, AND a per-EXTENSION-HOST-INSTANCE token, so two
+   * windows or profiles on the SAME folder cannot either. The paths are therefore
+   * stable for the life of this extension host — not across launches in general:
+   * a window reload mints a new instance token and so a new set of paths. Within
+   * one host, repeated invocations overwrite the previous prompts cleanly, which
+   * is safe only because a single host hosts at most one live session terminal.
    *
    * Fail-closed: if any write fails the caller should abort the launch so a
    * terminal never opens against partial state.
@@ -1229,27 +1235,21 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
-   * Resolve the War Mode ledger root GLOBALLY, with the SAME precedence the
-   * `ghola` CLI (`scripts/ghola.mjs` resolveLedgerRoot) and the session launcher
-   * (`SessionLauncher.resolveLedgerRoot`) use, so all three surfaces always agree:
-   *   1. GHOLA_LEDGER_ROOT env (non-empty)                 -> used verbatim.
-   *   2. Else the `tool.obsidian-notes` `vaultPath` setting -> <vault>/_Gholas.
-   *   3. Else                                               -> <homedir>/.ghola/ledger.
-   * NEVER resolves under the open work repo — no `.ghola/` is read from or
-   * written to the workspace. Returns just the root path (the vault provenance
-   * is not needed by the host).
+   * Resolve the War Mode ledger root GLOBALLY, by delegating to the SHARED
+   * resolver in `src/session/host-path.ts` — the same call the session launcher
+   * (the ledger's writer, via the env it exports to the CLI) and the
+   * activation-time ledger watchers make, so the precedence and the host-path
+   * normalization can never drift between them. See that module for the
+   * precedence table and for why translating the path matters on win32.
+   *
+   * This wrapper exists only to bind the panel's state + log prefix and to drop
+   * the vault provenance, which the host does not need. NEVER resolves under the
+   * open work repo — no `.ghola/` is read from or written to the workspace.
    */
   private resolveLedgerRoot(): string {
-    const envRoot = process.env.GHOLA_LEDGER_ROOT;
-    if (typeof envRoot === 'string' && envRoot.trim() !== '') {
-      return envRoot.trim();
-    }
-    const flat = readModuleSettings(this.context.globalState, this.context.workspaceState);
-    const vaultSetting = flat['tool.obsidian-notes::vaultPath'];
-    if (typeof vaultSetting === 'string' && vaultSetting.trim() !== '') {
-      return path.join(vaultSetting.trim(), '_Gholas');
-    }
-    return path.join(os.homedir(), '.ghola', 'ledger');
+    return resolveLedgerRoot(this.context.globalState, this.context.workspaceState, (m) =>
+      this.logger?.appendLine(`[panel] ${m}`),
+    ).root;
   }
 
   /**

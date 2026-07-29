@@ -1,3 +1,4 @@
+import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -11,6 +12,7 @@ import type { GetCommentsResult, PostCommentResult } from './integration/bitbuck
 import { ModuleLoader } from './modules/loader';
 import { ModuleState, migrateCommitPushEnabled } from './modules/state';
 import { PromptComposer } from './prompts/composer';
+import { resolveLedgerRoot } from './session/host-path';
 import { SessionLauncher } from './session/launcher';
 import { BUILT_IN_CONFIGURATIONS, DEFAULT_ENABLED_IDS } from './settings-panel/built-in-configurations';
 import { ConfigurationsStore } from './settings-panel/configurations-store';
@@ -200,26 +202,158 @@ export interface AtlassianBridge {
 }
 
 /**
- * Resolve the War Mode ledger root GLOBALLY, with the SAME precedence the
- * `ghola` CLI (`scripts/ghola.mjs` resolveLedgerRoot), the session launcher, and
- * `SettingsPanel.resolveLedgerRoot` use, so every surface agrees:
- *   1. GHOLA_LEDGER_ROOT env (non-empty)                 -> used verbatim.
- *   2. Else the `tool.obsidian-notes` `vaultPath` setting -> <vault>/_Gholas.
- *   3. Else                                               -> <homedir>/.ghola/ledger.
+ * Resolve the War Mode ledger root GLOBALLY for the activation-time ledger
+ * watchers, by delegating to the SHARED resolver in `src/session/host-path.ts` —
+ * the same call `SettingsPanel.resolveLedgerRoot` (the War Room's reader) and
+ * `SessionLauncher` (which exports the root to the CLI, the ledger's writer)
+ * make. Sharing one implementation is what keeps the WATCHED location and the
+ * WRITTEN location identical; when they were open-coded separately the watchers
+ * ended up on a fabricated `C:\mnt\c\...` root on win32 and the War Room simply
+ * never refreshed. See that module for the precedence table.
+ *
  * NEVER resolves under the open work repo — no `.ghola/` is read from or written
  * to the workspace. Never throws.
  */
-function resolveLedgerRoot(context: vscode.ExtensionContext): string {
-  const envRoot = process.env.GHOLA_LEDGER_ROOT;
-  if (typeof envRoot === 'string' && envRoot.trim() !== '') {
-    return envRoot.trim();
+function resolveWatchedLedgerRoot(
+  context: vscode.ExtensionContext,
+  logger: vscode.OutputChannel,
+): string {
+  return resolveLedgerRoot(context.globalState, context.workspaceState, (m) =>
+    logger.appendLine(`[ghola] ${m}`),
+  ).root;
+}
+
+/**
+ * Directory the Claude Code statusline renderer is staged into, and the two
+ * files that live there. `<homedir>/.ghola/` is already established Ghola GLOBAL
+ * state (it holds `usage-state.json` and, in the no-vault case, `ledger/`), so
+ * the renderer gets its own subdirectory inside it rather than being sprinkled
+ * across that shared root.
+ *
+ * `VERSION` is staged BESIDE the renderer deliberately: the renderer resolves
+ * its version relative to its OWN location, and its second candidate is
+ * `<scriptDir>/VERSION` precisely so this flat two-file layout works (the repo /
+ * installed-extension candidate `<scriptDir>/../VERSION` is tried first, so the
+ * in-repo behavior is untouched). It doubles as the staging VERSION STAMP.
+ */
+const STATUSLINE_STAGE_DIRNAME = 'statusline';
+const STATUSLINE_RENDERER_FILENAME = 'ghola-statusline.mjs';
+const STATUSLINE_VERSION_FILENAME = 'VERSION';
+
+/**
+ * Copy the Node statusline renderer (`scripts/ghola-statusline.mjs`) plus a
+ * version stamp into `<homedir>/.ghola/statusline/` so the operator's
+ * `~/.claude/settings.json` can point `statusLine.command` at a path that NEVER
+ * CHANGES.
+ *
+ * Why staging exists at all: the renderer ships inside the VSIX, but the
+ * installed extension directory is version-pinned (`local.ghola-0.24.1/...`), so
+ * a `statusLine.command` aimed there silently breaks on every version bump — the
+ * footer just loses its Ghola tag and nothing says why. Pointing at the repo
+ * checkout is no better: there is no Windows checkout of Project-Ghola (see
+ * CLAUDE.md), which is half the reason the tag has only ever appeared on WSL.
+ *
+ * ── Why this cannot degrade startup ──────────────────────────────────────
+ *   - The caller invokes it fire-and-forget (`void`); nothing awaits it and no
+ *     later activation step reads its result.
+ *   - The ENTIRE body is inside one try/catch, so the returned promise never
+ *     rejects — there is no unhandled rejection to surface even in the worst case.
+ *   - Every filesystem call is awaited (`fs/promises`), so the synchronous part
+ *     of `activate` is never blocked on disk I/O.
+ *   - On ANY failure it logs one non-fatal line and returns. A missing staged
+ *     renderer costs the operator a statusline segment, never an extension.
+ *
+ * ── Idempotence ──────────────────────────────────────────────────────────
+ * This runs on every activation, so it must be a cheap no-op once current. It
+ * compares the staged VERSION stamp AND the staged renderer bytes against the
+ * shipped pair and returns without writing when both already match — the stamp
+ * catches the ordinary version-bump case, the byte compare additionally catches
+ * an edit made during development at an unchanged version. Two small reads (a
+ * few KB) is the entire cost of the steady state.
+ *
+ * Writes are temp-file-then-rename so a concurrently-running statusline never
+ * reads a half-written renderer, and the VERSION stamp is written LAST: if the
+ * process dies mid-stage the stamp still reads stale, so the next activation sees
+ * the mismatch and retries rather than trusting a partial stage.
+ *
+ * Touches ONLY these two files. `usage-state.json` and `ledger/` live in the
+ * parent directory and are never read, written, or deleted here — nothing is
+ * ever deleted here at all.
+ *
+ * On `~/.claude/settings.json`: deliberately NOT written. That is the operator's
+ * live harness config and is out of scope for the extension; the `tool.statusline`
+ * module documents the exact line to add, per platform.
+ *
+ * On path translation: `src/session/host-path.ts`'s `toNativeHostPath` does NOT
+ * apply here and is deliberately not called. Its job is to sanitize a path STRING
+ * AUTHORED ELSEWHERE that may have crossed the WSL boundary (the shared
+ * `vaultPath` setting, a `GHOLA_LEDGER_ROOT` export) and could otherwise be
+ * joined into a fabricated `C:\mnt\c\...` tree. Both paths here are produced by
+ * the running host for the running host — `context.extensionPath` from VS Code
+ * and `os.homedir()` from Node — so they are already native on WSL and on win32
+ * alike, and there is no foreign spelling to translate. Running them through it
+ * would add a pointless `existsSync` and could not change either value.
+ */
+async function stageStatuslineRenderer(
+  context: vscode.ExtensionContext,
+  logger: vscode.OutputChannel,
+): Promise<void> {
+  try {
+    const srcRenderer = path.join(context.extensionPath, 'scripts', STATUSLINE_RENDERER_FILENAME);
+    const srcVersion = path.join(context.extensionPath, STATUSLINE_VERSION_FILENAME);
+    const stageDir = path.join(os.homedir(), '.ghola', STATUSLINE_STAGE_DIRNAME);
+    const destRenderer = path.join(stageDir, STATUSLINE_RENDERER_FILENAME);
+    const destVersion = path.join(stageDir, STATUSLINE_VERSION_FILENAME);
+
+    // Read what shipped. Both files are required: staging a renderer without its
+    // stamp would leave the line rendering `[Ghola vunknown]`, and staging a stamp
+    // without the renderer would leave nothing to run. Either read failing means
+    // there is nothing coherent to stage, so we leave any existing stage alone.
+    const [rendererText, versionText] = await Promise.all([
+      fs.readFile(srcRenderer, 'utf8'),
+      fs.readFile(srcVersion, 'utf8'),
+    ]);
+
+    // Read what is already staged. Absent / unreadable simply means "not current".
+    const readIfPresent = async (p: string): Promise<string | undefined> => {
+      try {
+        return await fs.readFile(p, 'utf8');
+      } catch {
+        return undefined;
+      }
+    };
+    const [stagedRenderer, stagedVersion] = await Promise.all([
+      readIfPresent(destRenderer),
+      readIfPresent(destVersion),
+    ]);
+    if (stagedVersion === versionText && stagedRenderer === rendererText) return;
+
+    await fs.mkdir(stageDir, { recursive: true });
+    const writeAtomic = async (dest: string, text: string): Promise<void> => {
+      const tmp = `${dest}.tmp.${process.pid}`;
+      try {
+        await fs.writeFile(tmp, text, 'utf8');
+        await fs.rename(tmp, dest);
+      } catch (err) {
+        // Never leave a stray temp file behind on a failed stage.
+        await fs.rm(tmp, { force: true }).catch(() => undefined);
+        throw err;
+      }
+    };
+    await writeAtomic(destRenderer, rendererText);
+    // Best-effort exec bit for anyone who invokes the staged file directly via
+    // its shebang. The documented command form is `node <path>`, which does not
+    // need it, so a chmod failure (or win32, where the mode is meaningless) is
+    // not worth failing the stage over.
+    if (process.platform !== 'win32') {
+      await fs.chmod(destRenderer, 0o755).catch(() => undefined);
+    }
+    // Stamp LAST — see the retry-safety note above.
+    await writeAtomic(destVersion, versionText);
+    logger.appendLine(`[ghola] statusline renderer staged to ${destRenderer}`);
+  } catch (err) {
+    logger.appendLine(`[ghola] statusline renderer staging failed (non-fatal): ${err}`);
   }
-  const flat = readModuleSettings(context.globalState, context.workspaceState);
-  const vaultSetting = flat['tool.obsidian-notes::vaultPath'];
-  if (typeof vaultSetting === 'string' && vaultSetting.trim() !== '') {
-    return path.join(vaultSetting.trim(), '_Gholas');
-  }
-  return path.join(os.homedir(), '.ghola', 'ledger');
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -912,7 +1046,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // be unreliable; that is fine — the War Room tab re-reads on open. Both
   // watchers + the debounce timer are disposed on deactivate.
   {
-    const ledgerRoot = resolveLedgerRoot(context);
+    const ledgerRoot = resolveWatchedLedgerRoot(context, logger);
     let warRoomDebounce: ReturnType<typeof setTimeout> | undefined;
 
     const scheduleWarRoomRefresh = (): void => {
@@ -943,6 +1077,18 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     });
   }
+
+  // ───── Claude Code statusline renderer staging ─────────────────────
+  // Copy `scripts/ghola-statusline.mjs` + a VERSION stamp into
+  // `<homedir>/.ghola/statusline/` so `statusLine.command` in the operator's
+  // `~/.claude/settings.json` can be a VERSION-STABLE path instead of the
+  // version-pinned extension install dir (which breaks on every bump) or a repo
+  // checkout (which does not exist on native Windows). Fire-and-forget and fully
+  // self-contained: it never blocks activation, never throws, and a failure costs
+  // a statusline segment rather than extension startup. We do NOT touch
+  // `~/.claude/settings.json` — the `tool.statusline` module documents the line
+  // the operator adds once, and it never needs changing again.
+  void stageStatuslineRenderer(context, logger);
 
   // Dev-mode convenience auto-open lives inside the discover().then() block
   // above so it runs after applyDefaultOnStartup completes.

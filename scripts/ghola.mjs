@@ -16,12 +16,16 @@
 // the session launcher, so all three surfaces agree on one location. NOTHING
 // is ever written to or read from the launched work repo (<workspace>/.ghola/
 // is gone entirely). Resolution precedence:
-//   1. GHOLA_LEDGER_ROOT env (set/non-empty) -> used verbatim. This is what the
+//   1. GHOLA_LEDGER_ROOT env (set/non-empty) -> that value. This is what the
 //      launcher exports, so an in-session CLI resolves the exact same root the
 //      host and launcher computed.
 //   2. Else GHOLA_VAULT env (set/non-empty) -> <vault>/_Gholas/.
 //   3. Else the home fallback -> <homedir>/.ghola/ledger/ (so War Mode works
 //      even with no Obsidian vault and no launcher env at all).
+// Both env values pass through `toNativeHostPath` (see its comment) before use,
+// so a cross-WSL-boundary path cannot be fabricated into a bogus absolute one;
+// a value already native to this host — every case the launcher produces — is
+// used exactly as given.
 // The resolved root is created with mkdir -p if it does not yet exist (it may
 // be the home fallback, or a vault subdir that has never been written).
 //
@@ -223,22 +227,103 @@ function requireFlag(flags, name, usage) {
 // Ledger-root resolution (GLOBAL — identical to the host + launcher)
 // ─────────────────────────────────────────────────────────────────────────
 
+// DELIBERATE DUPLICATE of `toNativeHostPath` in `src/session/host-path.ts`.
+// This is a standalone Node script — it is invoked as `node scripts/ghola.mjs`,
+// is not part of the extension's esbuild bundle, and therefore cannot import
+// from `src/`. Rather than leave the CLI as the one surface without the guard,
+// the ~10 lines are mirrored here. This is NOT an oversight: if you change the
+// translation rules in `host-path.ts` (or in `scripts/ghola-boot-probe.sh`,
+// which mirrors them in bash), change them here too. That instruction is no
+// longer enforced by comment alone: `scripts/ghola-path-parity.mjs` drives all
+// three implementations over one shared case table under every forced platform
+// and exits non-zero on any drift. Run it after touching this function.
+//
+// KEEP-IN-SYNC EXCEPTION 1 (agreed, not drift) — the bare re-slash is GATED in
+// both JS copies and UNGATED in bash. `translate_path` re-slashes first and
+// returns the re-slashed string even when no platform rule fired, so it answers
+// `C:/Users/x` for `C:\Users\x`; here the bare re-slash is a translation like any
+// other and must clear `existsSync` first. Deliberate: a backslash is a LEGAL
+// POSIX filename character, so an unconditional re-slash could invent a path.
+// Both spellings name the same directory to every Win32 consumer, so gating costs
+// nothing real. The parity checker neutralizes the gate and sees them agree.
+//
+// KEEP-IN-SYNC EXCEPTION 2 (agreed, not drift) — bash models THREE platforms and
+// makes `unix` the identity; both JS copies model TWO (`win32` vs everything
+// else) and so apply the WSL rule on darwin and non-WSL Linux. Accepted rather
+// than fixed: a WSL detector here would be a FOURTH copy of a rule set whose
+// duplication is already the problem, and `existsSync` neutralizes the difference
+// on any host with no `/mnt/<letter>` tree. Residual: a plain-Linux host that
+// really mounts `/mnt/c` would adopt `C:/Users/x` -> `/mnt/c/Users/x` where bash
+// keeps `C:/Users/x`. Neither supported host (WSL, native Windows) is affected,
+// and the adopted path is one `existsSync` CONFIRMED, so the worst case is a
+// disagreement about a real directory, never a fabrication.
+//
+// Why the CLI needs it at all, given the launcher exports an already-native
+// GHOLA_LEDGER_ROOT: the `path.resolve` calls below are the AMPLIFIER that turns
+// a foreign POSIX path into a fabricated absolute one. On win32,
+// `path.resolve('/mnt/c/Users/x')` yields `C:\mnt\c\Users\x` — a plausible-
+// looking Windows path under which the CLI would then happily create and write
+// the entire ledger, while the host watched the real vault and the War Room
+// never refreshed. That happens whenever the env var did not come from the
+// launcher: an operator-exported machine-level value, or the CLI run outside a
+// Ghola session. Translate only to a location CONFIRMED to exist; otherwise
+// keep the operator's original string, which at least still points at their
+// actual misconfiguration.
+function toNativeHostPath(p) {
+  const slashed = p.replace(/\\/g, '/');
+  let translated;
+  if (process.platform === 'win32') {
+    // `/mnt/c/...` or MSYS `/c/...` -> `C:/...`. Single-char drive letters only,
+    // so real mounts (`/mnt/wsl`, `/mnt/host`) are never mangled.
+    const mnt = slashed.match(/^\/mnt\/([a-zA-Z])(\/.*)?$/);
+    const msys = mnt ? null : slashed.match(/^\/([a-zA-Z])(\/.*)?$/);
+    const m = mnt || msys;
+    if (m) translated = `${m[1].toUpperCase()}:${m[2] ?? '/'}`;
+  } else {
+    // `C:/...` -> `/mnt/c/...`, and MSYS `/c/...` -> `/mnt/c/...` too: under Git
+    // Bash `$HOME` is `/c/Users/<u>`, so a native-Windows session can store that
+    // form and a WSL session must recover it the same way the boot probe does.
+    // Any other POSIX path (including every `/mnt/...`) is already native.
+    const drive = slashed.match(/^([a-zA-Z]):(\/.*)?$/);
+    const msys = drive ? null : slashed.match(/^\/([a-zA-Z])(\/.*)?$/);
+    if (drive) translated = `/mnt/${drive[1].toLowerCase()}${drive[2] ?? '/'}`;
+    else if (msys) translated = `/mnt/${msys[1].toLowerCase()}${msys[2] ?? '/'}`;
+  }
+  // No platform rule fired -> the re-slashed spelling is the candidate, and it
+  // faces the same existence gate (KEEP-IN-SYNC EXCEPTION 1 above). When the input
+  // had no backslash the candidate IS the input, so the common case still
+  // short-circuits without touching the filesystem.
+  const candidate = translated ?? slashed;
+  if (candidate === p) return p;
+  if (fs.existsSync(candidate)) return candidate;
+  console.error(
+    `ghola: warning: path translation skipped: '${p}' maps to '${candidate}' on this host, but that location does not exist; keeping the original`,
+  );
+  return p;
+}
+
 // Resolves the ledger root and the vault it came from (or null), GLOBALLY per
 // the contract shared by the extension host and the session launcher:
-//   1. GHOLA_LEDGER_ROOT env (non-empty)  -> used verbatim (vault: null).
+//   1. GHOLA_LEDGER_ROOT env (non-empty)  -> that value (vault: null).
 //   2. Else GHOLA_VAULT env (non-empty)   -> <vault>/_Gholas (vault: <vault>).
 //   3. Else                               -> <homedir>/.ghola/ledger (vault: null).
 // It NEVER resolves anything under the launched work repo. Nothing is
 // auto-discovered here so the CLI can never drift from the host/launcher, which
 // export GHOLA_LEDGER_ROOT/GHOLA_VAULT into the session env.
+//
+// Both env values are run through `toNativeHostPath` BEFORE `path.resolve`, for
+// the reason documented above it. The precedence is unchanged and a value that
+// is already native (the normal case, including every path on this WSL box)
+// passes straight through, so this only ever affects a cross-boundary value that
+// `path.resolve` would otherwise have fabricated.
 function resolveLedgerRoot() {
   const envRoot = process.env.GHOLA_LEDGER_ROOT;
   if (typeof envRoot === 'string' && envRoot.trim() !== '') {
-    return { root: path.resolve(envRoot.trim()), vault: null };
+    return { root: path.resolve(toNativeHostPath(envRoot.trim())), vault: null };
   }
   const vaultEnv = process.env.GHOLA_VAULT;
   if (typeof vaultEnv === 'string' && vaultEnv.trim() !== '') {
-    const vault = path.resolve(vaultEnv.trim());
+    const vault = path.resolve(toNativeHostPath(vaultEnv.trim()));
     return { root: path.join(vault, '_Gholas'), vault };
   }
   return { root: path.join(os.homedir(), '.ghola', 'ledger'), vault: null };
@@ -2646,9 +2731,11 @@ const HELP = `ghola — Ghola Mode command layer (reads/writes the _Gholas/ ledg
 
 Ledger-root resolution (GLOBAL — identical to the extension host + launcher;
 NOTHING is ever written to or read from the launched work repo):
-  1. GHOLA_LEDGER_ROOT env (non-empty)  -> used verbatim
+  1. GHOLA_LEDGER_ROOT env (non-empty)  -> that value
   2. GHOLA_VAULT env (non-empty)        -> <vault>/_Gholas/
   3. otherwise                          -> <homedir>/.ghola/ledger/
+Env paths from the other side of the WSL boundary are translated to this host's
+native form first, but ONLY to a location that exists — never fabricated.
 A convenience copy of the root path is written to <ledger-root>/.ledger-path.
 Per-subject cooperative control lives at <ledger-root>/<subject>/control.json.
 
