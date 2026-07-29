@@ -155,12 +155,32 @@ fi
 # (main is ./dist/extension.js; vsce nests everything under extension/).
 # Skipped with a warning when `unzip` is unavailable.
 if command -v unzip >/dev/null 2>&1; then
-  # Capture the full listing first, then grep the variable. Piping `unzip -l`
-  # straight into `grep -q` lets grep exit on the first match and SIGPIPE the
-  # still-writing unzip (exit 141), which under `pipefail` makes the pipeline
-  # fail and falsely trips the "missing" branch once the listing is long.
-  VSIX_LISTING="$(unzip -l "$VSIX_NAME")"
-  if ! printf '%s\n' "$VSIX_LISTING" | grep -q "extension/dist/extension.js"; then
+  # Capture the entry list first, then match it with a HERE-STRING — never a
+  # pipe. Feeding ANY producer into `grep -q` lets grep exit on the first match
+  # and SIGPIPE the still-writing producer (exit 141), which under `pipefail`
+  # fails the whole pipeline and falsely trips the "missing" branch below.
+  # Capturing `unzip -l` into a variable (v0.18.4) did NOT cure that: it only
+  # promoted `printf` to producer, and `printf | grep -q` still loses the same
+  # race roughly a third of the time on a ~660-line listing, because the match
+  # sits near the top and grep exits while printf has many writes left to go.
+  # A here-string is fully materialised before grep starts, so there is no
+  # producer process left to signal. See CLAUDE.md rule 7.
+  #
+  # `-Z1` (zipinfo mode, names only) rather than `-l`: it lets the match be an
+  # EXACT whole-line one (`grep -qxF`). A substring match against `-l` output is
+  # too weak — `extension/dist/extension.js.map` contains `extension/dist/
+  # extension.js`, so a build that emitted only the sourcemap would sail through.
+  #
+  # The capture is guarded so an unzip that is PRESENT but FAILS (unreadable or
+  # corrupt archive) is reported as a tool/archive failure instead of aborting
+  # with no diagnostic on `set -e` — the operator must be able to tell "the
+  # build is bad" from "the environment is".
+  if ! VSIX_ENTRIES="$(unzip -Z1 "$VSIX_NAME" 2>&1)"; then
+    echo "[ext] ERROR: unzip could not read $VSIX_NAME, so the entry-point check did not run (unreadable archive, not necessarily a bad build)" >&2
+    printf '%s\n' "$VSIX_ENTRIES" >&2
+    exit 1
+  fi
+  if ! grep -qxF "extension/dist/extension.js" <<<"$VSIX_ENTRIES"; then
     echo "[ext] ERROR: $VSIX_NAME is missing extension/dist/extension.js (bad build?)" >&2
     exit 1
   fi
