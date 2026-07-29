@@ -384,6 +384,275 @@ function readActivationVersion(context: vscode.ExtensionContext): string {
   return typeof manifestVersion === 'string' && manifestVersion ? manifestVersion : 'unknown';
 }
 
+/**
+ * `globalState` key recording the highest newer-on-disk version the operator has
+ * already been offered and declined (see `promptWhenNewerVersionInstalled`).
+ *
+ * GLOBAL, not workspace: installing a VSIX is a machine-wide act, so a
+ * workspace-scoped marker would re-offer the same install once per workspace —
+ * exactly the nagging this is built to avoid.
+ *
+ * Declared here rather than in `src/state/keys.ts` only because that module is
+ * outside this change's ownership. If a later change consolidates it, move the
+ * literal string VERBATIM — it names persisted state.
+ */
+const NEWER_INSTALL_DECLINED_VERSION_KEY = 'ghola.newerInstall.declinedVersion';
+
+/**
+ * A parsed VS Code extension install-directory name — `local.ghola-0.26.0` split
+ * into the identity prefix (`local.ghola-`) and the version as NUMBERS.
+ */
+interface ParsedInstallDir {
+  /** Directory-name prefix, trailing hyphen included. This IS the install identity. */
+  prefix: string;
+  /** `[major, minor, patch]` as numbers, for ordering. */
+  version: [number, number, number];
+  /** Canonical `major.minor.patch`, for display. */
+  versionText: string;
+}
+
+/** The outcome of a successful newer-install scan: what is on disk vs. what is running. */
+interface NewerInstall {
+  /** Highest strictly-newer sibling version found, canonical `major.minor.patch`. */
+  newest: string;
+  /** The version this window is actually running, canonical `major.minor.patch`. */
+  running: string;
+}
+
+// ─── begin: newer-install detection (pure) ───────────────────────────
+// Everything from here to the matching end marker is pure — no `vscode`, no
+// filesystem, no state. The markers are load-bearing: with no test suite in this
+// repo, this block is sliced straight out of this file and exercised against real
+// directory listings, so the verified code is literally the shipped code.
+
+/**
+ * Parse an extensions-directory entry name of the form
+ * `<publisher>.<name>-<major>.<minor>.<patch>[-<platform> | +<build>]`.
+ *
+ * The optional trailing suffix is not hypothetical: a real extensions directory
+ * holds entries like `anthropic.claude-code-2.1.220-linux-x64`, so a parser that
+ * required the version to be the entire tail would reject platform-specific
+ * installs. Greedy `(.*-)` followed by a REQUIRED numeric triple resolves the
+ * split by taking the last hyphen that is actually followed by a version.
+ *
+ * Returns `undefined` for anything that does not match — `extensions.json`, a
+ * hand-renamed directory, a stray file. An unparseable name is never guessed at.
+ */
+function parseInstallDir(name: string): ParsedInstallDir | undefined {
+  const m = /^(.*-)(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(name);
+  if (!m) return undefined;
+  const version: [number, number, number] = [Number(m[2]), Number(m[3]), Number(m[4])];
+  // `\d+` happily matches a digit run longer than Number can represent exactly.
+  // A version we cannot hold precisely is one we must not order against.
+  if (!version.every((n) => Number.isSafeInteger(n))) return undefined;
+  return { prefix: m[1], version, versionText: version.join('.') };
+}
+
+/**
+ * Parse a BARE `major.minor.patch` string (the shipped `VERSION` file, the stored
+ * declined marker) by routing it through `parseInstallDir` with a synthetic
+ * prefix. Sharing the one regex is deliberate: the grammar accepted for a bare
+ * version and for a directory tail can then never drift apart.
+ */
+function parseVersionTriple(text: string | undefined): [number, number, number] | undefined {
+  if (typeof text !== 'string' || text.trim() === '') return undefined;
+  return parseInstallDir(`v-${text.trim()}`)?.version;
+}
+
+/**
+ * NUMERIC compare of two version triples, returning a sort-comparator sign.
+ *
+ * String comparison is the bug this exists to prevent: lexically `'0.9.0'` sorts
+ * ABOVE `'0.26.0'`, which would have told an operator running 0.26.0 that a
+ * long-dead 0.9.0 directory was newer. This repo has already walked 0.24 -> 0.25
+ * -> 0.26 with stale directories left behind at each step, so that listing is
+ * the normal case, not a contrived one.
+ */
+function compareVersionTriples(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+): number {
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+
+/**
+ * Given the entry names of an extensions directory and the RUNNING install's own
+ * directory name, return the highest sibling version strictly newer than the
+ * running one, or `undefined` when there is nothing newer.
+ *
+ * Rules, each one a "do not prompt spuriously" guard:
+ *   - The running directory name must itself parse, or we bail. This is also what
+ *     makes the F5 dev host a silent no-op for free: there `extensionPath` is the
+ *     repo checkout (`Project-Ghola`), which has no `-<version>` tail, so the
+ *     scan ends before it looks at anything.
+ *   - A sibling must share the running install's prefix EXACTLY. Nothing about
+ *     `herzog.mandrake-0.3.61` sitting alongside is our business, and the shared
+ *     prefix is what makes this immune to a differently-named neighbour.
+ *   - `declaredRunningVersion` (the shipped `VERSION` file) RAISES the floor when
+ *     it is higher than the directory's own version, never lowers it. Directory
+ *     name and VERSION file normally agree; if a build ever leaves them
+ *     disagreeing, taking the max means "strictly newer than what is running" is
+ *     true under BOTH readings before anyone is interrupted.
+ *   - Strictly greater only. An equal version is not news — and a repeat
+ *     `--force` sideload of the same version reuses the same directory anyway.
+ *   - The HIGHEST newer sibling wins, not the first found: with 0.27.0 and 0.28.0
+ *     both staged, 0.28.0 is what the operator actually wants to be running, and
+ *     keying the decline marker to the highest is what keeps one dismissal from
+ *     being re-asked as a lower version.
+ */
+function findNewerSiblingInstall(
+  entryNames: readonly string[],
+  runningDirName: string,
+  declaredRunningVersion?: string,
+): NewerInstall | undefined {
+  const running = parseInstallDir(runningDirName);
+  if (!running) return undefined;
+
+  let floor = running.version;
+  const declared = parseVersionTriple(declaredRunningVersion);
+  if (declared && compareVersionTriples(declared, floor) > 0) floor = declared;
+
+  let best: ParsedInstallDir | undefined;
+  for (const name of entryNames) {
+    if (name === runningDirName) continue;
+    const sibling = parseInstallDir(name);
+    if (!sibling || sibling.prefix !== running.prefix) continue;
+    if (compareVersionTriples(sibling.version, floor) <= 0) continue;
+    if (!best || compareVersionTriples(sibling.version, best.version) > 0) best = sibling;
+  }
+  if (!best) return undefined;
+  return { newest: best.versionText, running: floor.join('.') };
+}
+
+// ─── end: newer-install detection (pure) ─────────────────────────────
+
+/**
+ * Offer a window reload when a NEWER build of Ghola is installed on disk than the
+ * one this window is running.
+ *
+ * Why this exists: `npm run install-local` (`code --install-extension ghola.vsix
+ * --force`) drops a new version into the extensions directory while the running
+ * extension host keeps executing the OLD one. Nothing said so. The operator had to
+ * remember to reload every single time, and twice debugged behaviour that was
+ * simply the previous build still running. The in-app `Ghola: Update Extension`
+ * command already ends with exactly this offer (see
+ * `src/commands/updateExtension.ts`) — but only after a successful IN-APP update,
+ * which a hand-run sideload never goes through. Same prompt shape and the same
+ * `Reload Window` action label, so the two paths read identically.
+ *
+ * ── Why this cannot degrade startup ──────────────────────────────────────
+ * Same contract as `stageStatuslineRenderer` above: invoked fire-and-forget
+ * (`void`), nothing awaits it, the ENTIRE body sits in one try/catch so the
+ * returned promise can never reject, and the only filesystem call is an awaited
+ * `fs/promises` readdir — so the synchronous part of `activate` never touches
+ * disk.
+ *
+ * ── Fail silent ──────────────────────────────────────────────────────────
+ * Unreadable extensions directory, unparseable running directory name, malformed
+ * sibling name: one log line, no prompt. A broken scan produces silence, never a
+ * guess. Every rejection path is a `return`, so the default is "say nothing".
+ *
+ * ── Not nagging ──────────────────────────────────────────────────────────
+ * This runs on EVERY activation, which means every window reload, so a prompt the
+ * operator has already answered must never come back:
+ *   - It fires only when a STRICTLY higher version exists (see
+ *     `findNewerSiblingInstall`), so the steady state — running the newest build,
+ *     stale lower directories lying around — is silent.
+ *   - Declining records the offered version in `globalState` under
+ *     `NEWER_INSTALL_DECLINED_VERSION_KEY`, and any later scan whose newest find
+ *     is `<=` the recorded version stays silent. Only a genuinely higher version
+ *     than the one declined can speak again. globalState (not workspaceState) is
+ *     what stops a second window on a second workspace re-asking.
+ *   - "Declining" covers BOTH `Later` and dismissing the notification outright,
+ *     because a dismissal that did not count would come straight back on the next
+ *     reload. Accepted trade-off, stated plainly: this is ONE offer per version.
+ *     A notification carrying action buttons does not auto-hide — it waits for the
+ *     operator — so the offer is not lost to a timeout, and the log line records
+ *     it either way.
+ *   - Non-modal, unlike the update command's modal. A modal on every activation
+ *     would be intolerable; this is passive news the operator may ignore.
+ *
+ * ── Not fighting VS Code, and not racing the in-app update ───────────────
+ * Gallery-installed extensions are VS Code's to update and it raises its own
+ * reload prompt when it replaces one, so those are skipped outright and only
+ * sideloads are ours to mention. The in-app update flow cannot double up either:
+ * this scan happens ONCE, at activation, and nothing watches the directory
+ * afterwards — so the newer sibling that `reinstall.sh` writes mid-update is
+ * never seen by a second scan. After that update, `Reload Window` activates the
+ * newest build (nothing newer -> silence) and `Later` performs no reload at all
+ * (no activation -> no second prompt). Either way the operator is asked once.
+ */
+async function promptWhenNewerVersionInstalled(
+  context: vscode.ExtensionContext,
+  logger: vscode.OutputChannel,
+): Promise<void> {
+  try {
+    // Gallery vs. sideload. The signal is `__metadata.publisherId`, NOT the
+    // presence of `__metadata` — every install has that block. A VSIX sideload's
+    // copy holds only { installedTimestamp, targetPlatform, size }, while a
+    // gallery install's additionally holds `id` / `publisherId` /
+    // `publisherDisplayName`, which VS Code writes from the marketplace response.
+    // Verified against a real extensions directory rather than assumed.
+    const metadata: unknown = context.extension?.packageJSON?.__metadata;
+    const publisherId =
+      metadata !== null && typeof metadata === 'object'
+        ? (metadata as { publisherId?: unknown }).publisherId
+        : undefined;
+    if (typeof publisherId === 'string' && publisherId !== '') {
+      logger.appendLine(
+        '[ghola] newer-install check skipped: gallery-managed install, VS Code owns its own update prompt',
+      );
+      return;
+    }
+
+    // `extensionPath` is the RUNNING build's directory; its parent is the
+    // extensions directory, where every other installed version also lives.
+    const runningDirName = path.basename(context.extensionPath);
+    const entryNames = await fs.readdir(path.dirname(context.extensionPath));
+    const found = findNewerSiblingInstall(
+      entryNames,
+      runningDirName,
+      // Prefers the shipped VERSION file, same source of truth as the activation
+      // log line and the updater's installed-version read.
+      readActivationVersion(context),
+    );
+    if (!found) return;
+
+    const declined = parseVersionTriple(
+      context.globalState.get<string>(NEWER_INSTALL_DECLINED_VERSION_KEY),
+    );
+    const newest = parseVersionTriple(found.newest);
+    if (declined && newest && compareVersionTriples(declined, newest) >= 0) {
+      logger.appendLine(
+        `[ghola] v${found.newest} is installed on disk but was already declined; not prompting`,
+      );
+      return;
+    }
+
+    logger.appendLine(
+      `[ghola] newer install found on disk: v${found.newest} (this window is running v${found.running})`,
+    );
+    const choice = await vscode.window.showInformationMessage(
+      `Ghola v${found.newest} is installed, but this window is still running v${found.running}. Reload window to activate?`,
+      'Reload Window',
+      'Later',
+    );
+    if (choice === 'Reload Window') {
+      void vscode.commands.executeCommand('workbench.action.reloadWindow');
+      return;
+    }
+    // `Later` AND dismissal both land here (dismissal resolves `undefined`) — see
+    // the one-offer-per-version note above.
+    await context.globalState.update(NEWER_INSTALL_DECLINED_VERSION_KEY, found.newest);
+    logger.appendLine(`[ghola] reload into v${found.newest} declined; will not ask again for it`);
+  } catch (err) {
+    logger.appendLine(`[ghola] newer-install check failed (non-fatal): ${err}`);
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const logger = vscode.window.createOutputChannel('Ghola');
   context.subscriptions.push(logger);
@@ -1117,6 +1386,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // `~/.claude/settings.json` — the `tool.statusline` module documents the line
   // the operator adds once, and it never needs changing again.
   void stageStatuslineRenderer(context, logger);
+
+  // ───── Newer-build-on-disk reload offer ────────────────────────────
+  // `npm run install-local` sideloads a new VSIX while this window keeps running
+  // the previous build, and until now nothing said so. Offer the same reload
+  // prompt the in-app update flow ends with. Fire-and-forget on the identical
+  // contract as the staging call above: never awaited, never rejects, one async
+  // readdir, silent on any failure, and it cannot re-ask a version already
+  // declined. See `promptWhenNewerVersionInstalled` for the full rationale.
+  void promptWhenNewerVersionInstalled(context, logger);
 
   // Dev-mode convenience auto-open lives inside the discover().then() block
   // above so it runs after applyDefaultOnStartup completes.
