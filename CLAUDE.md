@@ -20,7 +20,8 @@ compose time.
 - **Modules** (`modules/`): toggleable in the Modules tab. Includes `tool.*`, `mode.*`, and `integration.*` namespaces. See `modules/` for the full set.
 
 Retired modules (do not recreate): `reference.hello-ghola`, `tool.wsl-migrate`,
-`mode.preview`, `mode.edge-case-hunt`, `mode.review`, `mode.planning`.
+`mode.preview`, `mode.edge-case-hunt`, `mode.review`, `mode.planning`,
+`tool.untrusted-jira`, `tool.clipboard-image`.
 
 ## Build and dev workflow
 

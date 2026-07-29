@@ -123,7 +123,7 @@
             "Skip ALL permission prompts for the session (--dangerously-skip-permissions). Most permissive; a few circuit breakers (e.g. rm -rf /) still fire."
           ],
           "default": "bypassPermissions",
-          "description": "Permission mode the Ghola Session launches Claude Code in, so you do not have to press Shift+Tab. Maps to a Claude Code launch flag (see per-value descriptions). Only applied when the resolved CLI command references 'claude'. Defaults to bypassPermissions (--dangerously-skip-permissions)."
+          "description": "Permission mode the Ghola Session launches Claude Code in, so you do not have to press Shift+Tab. Maps to a Claude Code launch flag (see per-value descriptions). Under bypassPermissions the flag is added whenever Ghola can identify the launch command as Claude Code — either by resolving a registered ghola.cliAliases entry to a binary named 'claude', or, failing that, by the command string itself containing 'claude'. When the command cannot be identified, the flag is still appended if you set this setting explicitly (logged as best-effort, since a non-Claude binary may reject it); if it is merely sitting at its packaged default, the flag is skipped and Ghola shows a warning telling you how to fix it. Defaults to bypassPermissions (--dangerously-skip-permissions)."
         },
         "ghola.swe.performanceCores": {
           "type": "number",

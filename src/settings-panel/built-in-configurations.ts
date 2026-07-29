@@ -30,7 +30,6 @@ const BASELINE_IDS: string[] = [
   'tool.conversational-settings',
   'tool.fastpath-check',
   'tool.feedback-log',
-  'tool.clipboard-image',
   'tool.open-wsl-repo',
   'tool.database-access',
   'tool.git',

@@ -8,13 +8,12 @@ This module is **not proactive**. It does not fire at session start. The rule ap
 
 Agents NEVER read secrets directly. Wrapper scripts own the secret-handling boundary. A wrapper script sources the credential at call time (from an env var, a config file, or the deployment secrets file) and constructs the authenticated action internally; the agent invokes the wrapper with non-secret arguments and reads back non-secret output. The credential never enters the agent's tool result, prompt, return message, or any downstream artifact.
 
-Three concrete examples from the existing ecosystem:
+Two concrete examples from the existing ecosystem:
 
 - **`bb-curl.sh`** — Bitbucket REST wrapper. Sources `BITBUCKET_TOKEN` from the secrets file at call time and constructs the `Authorization: Bearer <token>` header internally. The agent invokes it with the REST path and method (e.g. `bb-curl.sh GET /pullrequests/123`) and reads back the response body; the token is never exposed in stdout, stderr, or the agent's tool result.
 - **`lprun-query.sh`** — Database query wrapper. Reads the connection details from `swt_settings.json` and runs the query via `lprun8`. The agent invokes it with a connection name and a SELECT statement; the agent never sees connection strings, server names, or credentials.
-- **`clipboard-read.ps1`** — Windows clipboard helper. Reads the clipboard image into a temp file and prints the path. No secrets are involved here, but the pattern is the same: wrapper owns the action, agent owns the orchestration. Listed in `approvedWrappers` for consistency.
 
-The shape is always: agent supplies non-secret arguments, wrapper supplies the secret internally, wrapper returns non-secret output.
+The shape is always: agent supplies non-secret arguments, wrapper supplies the secret internally, wrapper returns non-secret output. The same division of labor — wrapper owns the action, agent owns the orchestration — is worth applying to helper scripts that handle no secret at all, but only a wrapper that actually exists on disk belongs in `approvedWrappers`: an entry pointing at a missing script advertises a capability the session cannot deliver.
 
 ## What the rule forbids
 

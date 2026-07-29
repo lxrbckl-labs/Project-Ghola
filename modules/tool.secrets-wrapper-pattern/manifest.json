@@ -37,8 +37,7 @@
         "description": "User-managed list of wrapper scripts agents may invoke to access secret-protected resources. Each entry is a script path plus a one-line description of what the wrapper handles. Wrappers source the secret at call time and never expose the value in their stdout. Add project-specific wrappers as the ecosystem grows.",
         "default": {
           "${SWT_DIR}/scripts/bb-curl.sh": { "value": "Bitbucket REST wrapper — sources BITBUCKET_TOKEN at call time", "enabled": true },
-          "${SWT_DIR}/scripts/lprun-query.sh": { "value": "LINQPad query wrapper — sources DB credentials via the configured connection", "enabled": true },
-          "scripts/clipboard-read.ps1": { "value": "Windows clipboard helper — no secrets but listed for consistency", "enabled": true }
+          "${SWT_DIR}/scripts/lprun-query.sh": { "value": "LINQPad query wrapper — sources DB credentials via the configured connection", "enabled": true }
         },
         "keyLabel": "Wrapper",
         "valueLabel": "Description",
