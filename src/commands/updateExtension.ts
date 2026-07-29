@@ -25,6 +25,40 @@ export function shellQuote(arg: string): string {
 }
 
 /**
+ * Is `dir` a genuine Project-Ghola source checkout? All three markers must be
+ * present — any one of them alone is far too weak to hand to `reinstall.sh`:
+ *
+ *   1. `.git` — the directory is a clone, not an unpacked copy.
+ *   2. `esbuild.config.js` — it has Ghola's build layout. Corroborating only;
+ *      strategy (b) below already leans on this same marker.
+ *   3. `package.json` parses and its `name` is exactly `ghola` — the identity
+ *      signal. A directory name is not trusted because a clone can be renamed;
+ *      the manifest `name` survives that. This mirrors the self-upgrade repo
+ *      guard in `scripts/ghola-boot-probe.sh`, which answers the identical
+ *      "is this really Project-Ghola?" question the same way.
+ *
+ * An unrelated repo may hold (1) and (2) by coincidence, but it cannot declare
+ * itself `ghola`. Every failure mode — missing file, unreadable file, malformed
+ * JSON — resolves to `false`; a candidate is never assumed to match.
+ */
+function isGholaCheckout(dir: string): boolean {
+  if (
+    !fs.existsSync(path.join(dir, '.git')) ||
+    !fs.existsSync(path.join(dir, 'esbuild.config.js'))
+  ) {
+    return false;
+  }
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(dir, 'package.json'), 'utf8'),
+    ) as { name?: unknown };
+    return pkg.name === 'ghola';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the Project-Ghola git checkout to pull/rebuild/reinstall from.
  *
  *   (a) If `ghola.repoPath` is set and points at a directory containing a
@@ -33,7 +67,13 @@ export function shellQuote(arg: string): string {
  *       a source checkout — it must contain BOTH `.git` and `esbuild.config.js`
  *       (an installed vsix copy has neither, so this distinguishes the F5 dev
  *       host / source install from a packaged install).
- *   (c) Otherwise there is no checkout to operate on; return null.
+ *   (c) Otherwise scan the open workspace folders, in workspace order, and use
+ *       the first one that `isGholaCheckout` verifies. This covers the common
+ *       packaged-install case where the operator already has their clone open
+ *       and has never set `ghola.repoPath`. The verification is deliberately
+ *       stricter than (a) and (b): the workspace is not a path the user aimed
+ *       at this command, so a merely-git-looking folder is not good enough.
+ *   (d) Otherwise there is no checkout to operate on; return null.
  */
 function resolveRepoRoot(context: vscode.ExtensionContext): string | null {
   const configured = vscode.workspace
@@ -49,6 +89,21 @@ function resolveRepoRoot(context: vscode.ExtensionContext): string | null {
     fs.existsSync(path.join(extPath, 'esbuild.config.js'))
   ) {
     return extPath;
+  }
+  // `workspaceFolders` is undefined with no folder open and may hold several in
+  // a multi-root workspace, so iterate rather than indexing [0]. First verified
+  // match wins: the resolution must stay synchronous and non-interactive, and
+  // two Ghola clones in one workspace is pathological — workspace order is at
+  // least deterministic and puts the primary folder first. Non-`file` schemes
+  // (virtual/remote filesystems) have no meaningful local path to build in, so
+  // they are skipped rather than probed.
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    if (folder.uri.scheme !== 'file') {
+      continue;
+    }
+    if (isGholaCheckout(folder.uri.fsPath)) {
+      return folder.uri.fsPath;
+    }
   }
   return null;
 }
@@ -70,7 +125,7 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
   const repoRoot = resolveRepoRoot(context);
   if (!repoRoot) {
     const choice = await vscode.window.showErrorMessage(
-      'Ghola: could not locate a Project-Ghola git checkout to update from. Set "ghola.repoPath" to the absolute path of your clone.',
+      'Ghola: could not locate a Project-Ghola git checkout to update from. Open your clone as a workspace folder, or set "ghola.repoPath" to its absolute path.',
       'Open Settings',
     );
     if (choice === 'Open Settings') {
