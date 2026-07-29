@@ -274,7 +274,8 @@ export class SessionLauncher {
     // Remote Control: `--remote-control <name>` starts the interactive session
     // with Remote Control enabled, so the operator can steer this local session
     // from a phone or from claude.ai/code. It composes cleanly with
-    // `--dangerously-skip-permissions`.
+    // `--dangerously-skip-permissions`. It is MANDATORY — every session launch
+    // gets it, with no setting to turn it off.
     //
     // This is a second CLAUDE-SPECIFIC flag, so it goes through the SAME
     // `claudeCli` gate `permFlag` uses — the comment on the permission block says
@@ -282,36 +283,44 @@ export class SessionLauncher {
     // re-deriving its own guess from `cliCommand`, and this is that future flag.
     //
     // WHY THE THREE-WAY OUTCOME COLLAPSES TO TWO HERE, structurally rather than by
-    // preference: `ghola.remoteControl` DEFAULTS TO FALSE. Reaching this block at
-    // all therefore means the operator switched it on, so permFlag's third case
-    // ("the setting is merely sitting at its packaged default and the command is
-    // not recognizably Claude") has no analogue — there is no default-and-unknown
-    // launch that wants this flag, and nothing to warn about. That leaves
-    // known -> append, and unknown -> append BEST-EFFORT with a log line, matching
-    // permFlag's treatment of an explicitly-configured setting for the same
-    // reason: a flag the operator switched on and Ghola silently dropped is
-    // invisible and looks exactly like Ghola working, whereas a flag a foreign
-    // binary rejects makes that binary print its usage and exit — loud, in the
-    // terminal, and fixable by switching Remote Control off.
+    // preference: Remote Control is MANDATORY. There is no `ghola.remoteControl`
+    // setting to consult any more — the flag is not opt-in, so permFlag's third
+    // case ("the setting is merely sitting at its packaged default and the command
+    // is not recognizably Claude") has no analogue: there is no setting whose
+    // default-vs-chosen status could distinguish two launches, and therefore
+    // nothing to ask the operator to change. That leaves known -> append, and
+    // unknown -> append BEST-EFFORT with a log line. The log line is the whole
+    // remedy surface, which is why it names the CLI-alias registration that would
+    // let Ghola resolve the binary instead of guessing at it.
     //
-    // `oneShot` is excluded deliberately: the Commit-and-Push terminal is a
-    // transient single-prompt dispatch, and registering it as a steerable remote
-    // session would leave a phantom entry there is nothing to steer.
-    const remoteControlEnabled = cfg.get<boolean>('remoteControl', false);
+    // The flag itself is safe to append blind: `--remote-control <name>` is
+    // ACCEPTED and non-fatal even when Remote Control is disabled by environment
+    // (verified against a kill-switch variable), so a machine that cannot bring
+    // Remote Control up still launches normally. What is NOT established is how an
+    // INTERACTIVE session degrades when Remote Control is unavailable — that was
+    // only ever probed non-interactively — so `checkRemoteControlGating` below
+    // stays as the operator-facing warning for the observable half of the gating.
+    //
+    // `oneShot` is excluded deliberately, and mandatory does not change that
+    // reasoning: the Commit-and-Push terminal is a transient single-prompt
+    // dispatch, and registering it as a steerable remote session would leave a
+    // phantom entry there is nothing to steer.
     let remoteControlName = '';
-    if (remoteControlEnabled && !oneShot && cliCommand !== '') {
+    if (!oneShot && cliCommand !== '') {
       remoteControlName = this.resolveRemoteControlSessionName(cfg, effectiveDir, branch);
       if (claudeCli.known) {
         this.logger?.appendLine(
-          `[session] Remote Control enabled: --remote-control ${remoteControlName} (identified as Claude Code via ${claudeCli.via})`,
+          `[session] Remote Control: --remote-control ${remoteControlName} (identified as Claude Code via ${claudeCli.via})`,
         );
       } else {
         this.logger?.appendLine(
-          `[session] ghola.remoteControl honored on a BEST-EFFORT basis because ${claudeCli.reason}. --remote-control ${remoteControlName} was appended anyway because Remote Control is off by default, so having it on is a value you set explicitly. If the command rejects the flag, register it in Ghola's CLI Aliases so Ghola can resolve its binary, or switch Remote Control off in Ghola's Session tab.`,
+          `[session] Remote Control appended on a BEST-EFFORT basis because ${claudeCli.reason}. --remote-control ${remoteControlName} went on the command line anyway because Remote Control is mandatory and there is no setting left to drop it. If the command turns out not to be Claude Code and rejects the flag, register it in Ghola's CLI Aliases so Ghola can resolve its binary.`,
         );
       }
       // Non-blocking, exactly like the permission-mode warning above: a launch is
-      // never withheld over gating Ghola can only partly observe.
+      // never withheld over gating Ghola can only partly observe. Deliberately
+      // kept OUT of `cliProblems` — that list gates the phase-2 send, and Remote
+      // Control being unavailable has no bearing on whether the CLI can start.
       const gatingProblems = this.checkRemoteControlGating(cliCommand, cfg);
       if (gatingProblems.length > 0) {
         this.logger?.appendLine(
@@ -491,8 +500,11 @@ export class SessionLauncher {
     // boots un-initiated. Supplying the value ourselves satisfies the option
     // before the positional prompt is ever parsed, which keeps the trigger word
     // unambiguously the prompt — hence the flag stays BEFORE `${quoted}`.
-    // `resolveRemoteControlSessionName` cannot return an empty string, so the
-    // only way `remoteControlName` is empty here is Remote Control being off.
+    // `resolveRemoteControlSessionName` cannot return an empty string, so the only
+    // way `remoteControlName` is empty here is the block above having declined to
+    // resolve one at all: a one-shot dispatch, or no CLI command configured. There
+    // is no longer a Remote-Control-is-off case — the flag is mandatory — so this
+    // ternary now encodes exactly those two exclusions and nothing else.
     const remoteFlag =
       remoteControlName === ''
         ? ''
@@ -1152,8 +1164,19 @@ export class SessionLauncher {
   /**
    * Pre-flight the part of Claude Code's Remote Control gating that is actually
    * OBSERVABLE from the extension host, returning a list of actionable problems
-   * (empty = nothing detectably wrong). Never throws. Called only when Remote
-   * Control is on; the caller warns and launches anyway.
+   * (empty = nothing detectably wrong). Never throws. Called on every launch that
+   * gets the flag (i.e. every non-one-shot launch with a CLI command); the caller
+   * warns and launches anyway.
+   *
+   * INFORMATION, NOT A GATE. Remote Control is mandatory, so a problem found here
+   * cannot be "fixed" by turning something off in Ghola — the operator has no such
+   * switch. What is left is genuinely actionable elsewhere: the variable to unset
+   * and the layer to unset it in. Every message below therefore reports the
+   * environment fact plus its layer-specific remedy, states that the session
+   * launched regardless, and never mentions a Ghola setting. These strings are also
+   * deliberately kept out of `cliProblems`: that list gates the phase-2 trigger-word
+   * send, and Remote Control being unavailable says nothing about whether the CLI
+   * can start.
    *
    * Follows `checkCliCommandResolvable`'s doctrine: check only what is knowable,
    * fail OPEN on anything unanswerable, and offer a remedy that can actually work.
@@ -1185,9 +1208,10 @@ export class SessionLauncher {
    * host-observable — there is no local artifact this process could read that would
    * answer it truthfully — so no probe is attempted. Guessing would produce exactly
    * the warning-nobody-can-act-on that `isOnWindowsPath`'s fail-open comment
-   * argues against. That gating is documented in `ghola.remoteControl`'s
-   * `markdownDescription` instead, so a toggle that looks like it works but cannot
-   * is at least explained where the operator flips it.
+   * argues against. That gating is documented in
+   * `ghola.remoteControlSessionName`'s `markdownDescription` instead — now the only
+   * Remote Control setting there is — so a feature that silently does not come up
+   * is at least explained on the one control the operator still has.
    */
   private checkRemoteControlGating(
     cliCommand: string,
@@ -1240,7 +1264,7 @@ export class SessionLauncher {
         // terminal.integrated.env, or present but empty.
         if (!hit || hit.value === null || hit.value.trim() === '') continue;
         problems.push(
-          `Remote Control is disabled whenever ${name} is set, and it is set in ${hit.source}. ${hit.remedy}, then relaunch — or switch Remote Control off in Ghola's Session tab.`,
+          `Remote Control is disabled whenever ${name} is set, and it is set in ${hit.source}. This session still launched with --remote-control (the flag is accepted either way), but you will not be able to steer it remotely while ${name} is set. ${hit.remedy}, then relaunch.`,
         );
       }
 
@@ -1254,7 +1278,7 @@ export class SessionLauncher {
         // cannot leak into a notification or the output channel.
         if (host !== null && host !== 'anthropic.com' && !host.endsWith('.anthropic.com')) {
           problems.push(
-            `Remote Control requires a first-party Anthropic endpoint, and ANTHROPIC_BASE_URL in ${baseUrl.source} points at ${host}. Point it back at Anthropic or unset it, then relaunch — or switch Remote Control off in Ghola's Session tab.`,
+            `Remote Control requires a first-party Anthropic endpoint, and ANTHROPIC_BASE_URL in ${baseUrl.source} points at ${host}. This session still launched with --remote-control (the flag is accepted either way), but you will not be able to steer it remotely until ANTHROPIC_BASE_URL is Anthropic's own endpoint or gone entirely. ${baseUrl.remedy}, then relaunch.`,
           );
         }
       }

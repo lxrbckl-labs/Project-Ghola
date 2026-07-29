@@ -547,12 +547,15 @@ export type HostToWebviewMessage =
       cliCommand: string;
       sessionCommand: string;
       permissionMode: string;
-      /** `ghola.remoteControl` — whether the session launches with `--remote-control`. */
-      remoteControl: boolean;
       /**
        * `ghola.remoteControlSessionName` — the Remote Control session-name
        * override. Empty string means "derive the name from the git branch"; the
        * launcher owns that derivation, so the webview shows the raw override only.
+       *
+       * There is no companion enablement field: Remote Control is MANDATORY, so
+       * the launcher appends `--remote-control` on every session launch and there
+       * is nothing about it for the panel to switch. The name is the only part
+       * still under the operator's control, which is why it is the only part sent.
        */
       remoteControlSessionName: string;
       swe: { performanceCores: number; efficiencyCores: number; performanceCoresModel: string; efficiencyCoresModel: string };
