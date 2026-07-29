@@ -8,10 +8,11 @@ This module is **not proactive**. It does not fire at session start. The rule ap
 
 Agents NEVER read secrets directly. Wrapper scripts own the secret-handling boundary. A wrapper script sources the credential at call time (from an env var, a config file, or the deployment secrets file) and constructs the authenticated action internally; the agent invokes the wrapper with non-secret arguments and reads back non-secret output. The credential never enters the agent's tool result, prompt, return message, or any downstream artifact.
 
-Two concrete examples from the existing ecosystem:
+The concrete example shipped with Ghola:
 
-- **`bb-curl.sh`** — Bitbucket REST wrapper. Sources `BITBUCKET_TOKEN` from the secrets file at call time and constructs the `Authorization: Bearer <token>` header internally. The agent invokes it with the REST path and method (e.g. `bb-curl.sh GET /pullrequests/123`) and reads back the response body; the token is never exposed in stdout, stderr, or the agent's tool result.
-- **`lprun-query.sh`** — Database query wrapper. Reads the connection details from `swt_settings.json` and runs the query via `lprun8`. The agent invokes it with a connection name and a SELECT statement; the agent never sees connection strings, server names, or credentials.
+- **`bb-bridge.mjs`** — Bitbucket/Jira bridge client, invoked as `node "$GHOLA_ROOT/scripts/bb-bridge.mjs" <subcommand> ...`. It resolves a bearer token per invocation (from the 0600 coordinates file at `GHOLA_BRIDGE_FILE`, else the legacy `GHOLA_BRIDGE_URL`/`GHOLA_BRIDGE_TOKEN` pair), builds the single `Authorization` header internally, and prints only the JSON result. The token is never accepted as a CLI flag, never printed in output or errors, and never written anywhere. The Bitbucket and Jira credentials proper never leave the extension host at all — the agent talks to the loopback bridge, and the host talks to the upstream.
+
+Database access is the standing counter-example: Ghola ships no query runner, so `tool.database-access` deliberately names none and instructs you to ask TPM for the host's runner path before your first query rather than assuming one.
 
 The shape is always: agent supplies non-secret arguments, wrapper supplies the secret internally, wrapper returns non-secret output. The same division of labor — wrapper owns the action, agent owns the orchestration — is worth applying to helper scripts that handle no secret at all, but only a wrapper that actually exists on disk belongs in `approvedWrappers`: an entry pointing at a missing script advertises a capability the session cannot deliver.
 
@@ -20,7 +21,7 @@ The shape is always: agent supplies non-secret arguments, wrapper supplies the s
 When `parameters.enforcePattern` is true, the following actions are forbidden:
 
 - Reading env vars whose name matches any pattern in `parameters.secretEnvPatterns` (e.g. `BITBUCKET_TOKEN`, `OPENAI_API_KEY`, `DB_PASSWORD`). The patterns are glob-matched case-insensitively against env var names.
-- Reading files whose path matches any entry in `parameters.secretFilePaths` (e.g. `${SWT_SECRETS_PATH}`, `~/.aws/credentials`, `~/.ssh/id_rsa`). Environment variables in entries are expanded at runtime.
+- Reading files whose path matches any entry in `parameters.secretFilePaths` (e.g. `${GHOLA_BRIDGE_FILE}`, `~/.aws/credentials`, `~/.ssh/id_rsa`). Environment variables in entries are expanded at runtime.
 - Echoing, logging, or including in any agent output (return message, SWE assignment, QA verdict, Obsidian note, file write) the value of any matched env var or the contents of any matched file.
 - Constructing raw `Authorization` headers or other credential-bearing values directly in shell commands, HTTP requests, or source files.
 
@@ -29,9 +30,9 @@ The prohibition applies regardless of intent. A debug `echo $BITBUCKET_TOKEN` is
 ## What the rule permits
 
 - Invoking approved wrappers from `parameters.approvedWrappers` with non-secret arguments. The wrapper handles the secret internally.
-- Reading env vars whose names do NOT match any pattern in `parameters.secretEnvPatterns` (e.g. `PATH`, `HOME`, `SWT_DIR`). The patterns must match for the prohibition to apply.
+- Reading env vars whose names do NOT match any pattern in `parameters.secretEnvPatterns` (e.g. `PATH`, `HOME`, `GHOLA_ROOT`). The patterns must match for the prohibition to apply.
 - Reading files whose paths do NOT match any entry in `parameters.secretFilePaths`. Most project files, configs, and source code are fair game.
-- Discussing the existence of a secret without echoing the value (e.g. "the Bitbucket token is set in `${SWT_SECRETS_PATH}` — invoke `bb-curl.sh` to use it").
+- Discussing the existence of a secret without echoing the value (e.g. "the bridge token is in `${GHOLA_BRIDGE_FILE}` — invoke `bb-bridge.mjs` to use it").
 - Asking TPM to add a wrapper if a task requires accessing a secret-protected resource that no approved wrapper currently covers.
 
 ## Violation handling
@@ -70,7 +71,7 @@ The body above applies identically to every agent. The notes below are short fra
 
 ### TPM
 
-You enforce this pattern across all agents. When dispatching a SWE that needs to access a secret-protected resource, name the wrapper script explicitly in the assignment ("use `${SWT_DIR}/scripts/bb-curl.sh` to make the Bitbucket call" or "use `${SWT_DIR}/scripts/lprun-query.sh` against connection `<name>` for the query"). NEVER include raw tokens, passwords, or credential values in assignments — if you find yourself wanting to paste a value, stop and reroute through the wrapper. If a task requires a resource for which no approved wrapper exists, surface the gap to the user before dispatching: either add a wrapper to `parameters.approvedWrappers` or accept that the task cannot proceed under the current configuration.
+You enforce this pattern across all agents. When dispatching a SWE that needs to access a secret-protected resource, name the wrapper script explicitly in the assignment ("use `node "$GHOLA_ROOT/scripts/bb-bridge.mjs" find-pr ...` to make the Bitbucket call"). NEVER include raw tokens, passwords, or credential values in assignments — if you find yourself wanting to paste a value, stop and reroute through the wrapper. If a task requires a resource for which no approved wrapper exists, surface the gap to the user before dispatching: either add a wrapper to `parameters.approvedWrappers` or accept that the task cannot proceed under the current configuration.
 
 ### SWE
 

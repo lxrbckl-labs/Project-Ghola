@@ -22,12 +22,13 @@
       "allowedExceptionPaths": {
         "type": "keyValue",
         "label": "Allowed Exception Paths",
-        "description": "User-managed list of absolute paths or path patterns agents are permitted to access even when they sit outside cwd. Each entry is a path plus a one-line rationale. Add project-specific exceptions (e.g. a shared config dir, a downstream service repo); leave default seeds in place for the typical Obsidian/settings/script paths.",
+        "description": "User-managed list of absolute paths or path patterns agents are permitted to access even when they sit outside cwd. Each entry is a path plus a one-line rationale. Keys may reference an environment variable (${GHOLA_VAULT}) or another module's parameter (${tool.obsidian-notes:vaultPath}); either one expands to the empty string when unset, which makes the entry a no-op rather than a wildcard. The seeds cover only what an enabled baseline module already requires: the Obsidian vault, the installed extension's module content and helper scripts, and the feedback log. Add project-specific exceptions (e.g. a shared config dir, a downstream service repo), and remove any seed whose module you do not run.",
         "default": {
-          "${SWT_OBSIDIAN_PATH}/**": { "value": "Obsidian vault writes via tool.obsidian-notes", "enabled": true },
-          "${SWT_SETTINGS_PATH}": { "value": "Unified settings file", "enabled": true },
-          "${SWT_SECRETS_PATH}": { "value": "Read-only access to the secrets file (never logged or echoed)", "enabled": true },
-          "${SWT_DIR}/scripts/**": { "value": "Bundled helper scripts (lprun-query, clipboard-read, etc.)", "enabled": true }
+          "${tool.obsidian-notes:vaultPath}/**": { "value": "Obsidian vault reads/writes that tool.obsidian-notes mandates - the stored path form, which is the form that module resolves first", "enabled": true },
+          "${GHOLA_VAULT}/**": { "value": "The same vault in the host-native path form the launcher exports, for when the stored form needed translating", "enabled": true },
+          "${GHOLA_ROOT}/modules/**": { "value": "Read-only: the module content files the Session Manifest points at, which every agent reads on demand", "enabled": true },
+          "${GHOLA_ROOT}/scripts/**": { "value": "Execute/read-only: the bundled helper CLIs (ghola.mjs, bb-bridge.mjs, ghola-boot-probe.sh) - never write here", "enabled": true },
+          "${tool.feedback-log:feedbackFilePath}": { "value": "The single feedback.json file tool.feedback-log mandates TPM write (host-injected path)", "enabled": true }
         },
         "keyLabel": "Path",
         "valueLabel": "Rationale",

@@ -28,16 +28,15 @@
       "secretFilePaths": {
         "type": "string",
         "label": "Secret File Paths",
-        "description": "Comma-separated list of file path patterns agents must NEVER read directly. Wrapper scripts may read them on the agent's behalf. Environment variables in entries (e.g. ${SWT_SECRETS_PATH}) are expanded at runtime. Glob support is the same as Cwd Discipline's Allowed Exception Paths.",
-        "default": "${SWT_SECRETS_PATH}, ~/.netrc, ~/.aws/credentials, ~/.ssh/id_*, ~/.config/gh/hosts.yml"
+        "description": "Comma-separated list of file path patterns agents must NEVER read directly. Wrapper scripts may read them on the agent's behalf. Environment variables in entries (e.g. ${GHOLA_BRIDGE_FILE}) are expanded at runtime. Glob support is the same as Cwd Discipline's Allowed Exception Paths.",
+        "default": "${GHOLA_BRIDGE_FILE}, ~/.netrc, ~/.aws/credentials, ~/.ssh/id_*, ~/.config/gh/hosts.yml"
       },
       "approvedWrappers": {
         "type": "keyValue",
         "label": "Approved Wrappers",
-        "description": "User-managed list of wrapper scripts agents may invoke to access secret-protected resources. Each entry is a script path plus a one-line description of what the wrapper handles. Wrappers source the secret at call time and never expose the value in their stdout. Add project-specific wrappers as the ecosystem grows.",
+        "description": "User-managed list of wrapper scripts agents may invoke to access secret-protected resources. Each entry is a script path plus a one-line description of what the wrapper handles. Wrappers source the secret at call time and never expose the value in their stdout. Add project-specific wrappers as the ecosystem grows - but only a wrapper that exists on disk belongs here, because an entry pointing at a missing script advertises a capability the session cannot deliver.",
         "default": {
-          "${SWT_DIR}/scripts/bb-curl.sh": { "value": "Bitbucket REST wrapper — sources BITBUCKET_TOKEN at call time", "enabled": true },
-          "${SWT_DIR}/scripts/lprun-query.sh": { "value": "LINQPad query wrapper — sources DB credentials via the configured connection", "enabled": true }
+          "${GHOLA_ROOT}/scripts/bb-bridge.mjs": { "value": "Bitbucket/Jira bridge client - resolves the bridge bearer token from GHOLA_BRIDGE_FILE or GHOLA_BRIDGE_TOKEN at call time and never prints it", "enabled": true }
         },
         "keyLabel": "Wrapper",
         "valueLabel": "Description",

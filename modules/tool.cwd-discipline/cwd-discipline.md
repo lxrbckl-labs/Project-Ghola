@@ -18,7 +18,14 @@ There are four categories of exception. An operation that matches ANY of them is
 
 `parameters.allowedExceptionPaths` is a user-managed map of absolute paths or path patterns to one-line rationales. An operation whose target path matches any enabled entry proceeds without challenge. The rationale is panel-only metadata — it is not passed to the agent and is not surfaced to the user during the operation — its purpose is to remind the user later why each exception was added so the list does not grow stale.
 
-The seeded defaults cover the typical installation: the Obsidian vault (`${SWT_OBSIDIAN_PATH}/**`), the unified settings file (`${SWT_SETTINGS_PATH}`), the secrets file (`${SWT_SECRETS_PATH}` — read-only by convention, never logged or echoed), and the bundled helper scripts (`${SWT_DIR}/scripts/**`). Add project-specific exceptions as you encounter them; remove seeds if your environment does not need them.
+The seeded defaults authorize exactly what an enabled baseline module already requires, and nothing more:
+
+- **The Obsidian vault** — `${tool.obsidian-notes:vaultPath}/**` and `${GHOLA_VAULT}/**`. Two keys, one directory: `tool.obsidian-notes` mandates the writes and its `vaultPath` parameter is the authoritative source, while `GHOLA_VAULT` is the host-native translation the launcher exports. The two spellings can differ across the WSL boundary, and `GHOLA_VAULT` is additionally absent whenever an operator has set `GHOLA_LEDGER_ROOT` (the launcher exports the vault only when the ledger resolved *through* it) — so keying on the parameter alone or on the env var alone leaves a live vault unauthorized. Both entries no-op when their source is unset, which is the correct behavior for a session with no vault.
+- **The installed extension's module content** — `${GHOLA_ROOT}/modules/**`, **read-only**. This is the read-on-demand contract itself: every `contentPath` in the Session Manifest lives here, so every agent reads out of cwd on every module consult.
+- **The bundled helper scripts** — `${GHOLA_ROOT}/scripts/**`, **execute and read only**. `tool.ghola-ledger` requires `node "$GHOLA_ROOT/scripts/ghola.mjs"`, the Bitbucket/Jira paths require `bb-bridge.mjs`, and `tool.session-bootstrap` runs `ghola-boot-probe.sh`. No module asks an agent to *write* under `${GHOLA_ROOT}`, and none may: that directory is the installed extension, editing it is self-modification, and Ghola's own source work happens in the work repo (cwd) instead. Treat a write under `${GHOLA_ROOT}` as refused even though these two entries would match the path.
+- **The feedback log** — `${tool.feedback-log:feedbackFilePath}`, a single file (not a glob). `tool.feedback-log` injects this path from the extension's global storage and instructs TPM to write it with the `Write` tool.
+
+Add project-specific exceptions as you encounter them; remove any seed whose module you do not run. Two things deliberately have no seed: Ghola's module settings live in VS Code's global/workspace state rather than in a settings file, and its credentials live in VS Code `SecretStorage` rather than in a secrets file — neither is a path, so neither needs an exception. The one secret-bearing *file* in a Ghola session is the bridge coordinates file at `GHOLA_BRIDGE_FILE`; it is denied outright by `tool.secrets-wrapper-pattern` and reached only through `bb-bridge.mjs`, so it must never be added here.
 
 ### Verbal redirect
 
@@ -34,11 +41,14 @@ Read-only git commands (`status`, `diff`, `log`, `blame`, `show`) are always per
 
 ## Path-pattern matching
 
-`parameters.allowedExceptionPaths` keys may be written in any of three forms; the matching rule is whichever applies:
+`parameters.allowedExceptionPaths` keys may be written in any of four forms; the matching rule is whichever applies:
 
 - **Absolute paths** (e.g. `/home/user/projects/shared-config`): matched verbatim against the operation's target path. A directory entry matches operations on the directory itself, not its contents — use a glob for recursive coverage.
-- **Glob patterns** (e.g. `${SWT_DIR}/scripts/**`): matched as a standard glob. `**` matches any depth; `*` matches a single path segment.
-- **Environment variable references** (e.g. `${SWT_OBSIDIAN_PATH}`): expanded at runtime before matching. The expanded value is then itself treated as an absolute path or a glob per the rules above. An unset variable expands to the empty string and the entry is treated as a no-op for that operation.
+- **Glob patterns** (e.g. `${GHOLA_ROOT}/scripts/**`): matched as a standard glob. `**` matches any depth; `*` matches a single path segment.
+- **Environment variable references** (e.g. `${GHOLA_VAULT}`): expanded at runtime before matching. The expanded value is then itself treated as an absolute path or a glob per the rules above. An unset variable expands to the empty string and the entry is treated as a no-op for that operation.
+- **Module-parameter references** (e.g. `${tool.obsidian-notes:vaultPath}`): `${<module-id>:<parameterName>}`, expanded from the named module's `parameters` block in your Session Manifest, which you already hold. The expanded value is then treated as an absolute path or a glob per the rules above. A module that is not in the manifest, a parameter that is not listed, and an empty parameter value all expand to the empty string, so the entry is a no-op — exactly like an unset environment variable. Use this form when the authoritative source for a path is a module setting rather than an env var; an entry keyed on an env var Ghola does not export is silently dead, which is how a mandated out-of-cwd write ends up with no resolvable authorization.
+
+Both expanding forms fail CLOSED: they can only ever be a no-op, never a wildcard. An entry that expands to the empty string authorizes nothing and the operation falls through to the ordinary refusal.
 
 No regex support in v0.1. If a user-supplied entry contains regex metacharacters they are matched literally (or as glob wildcards where applicable), not as regex.
 
