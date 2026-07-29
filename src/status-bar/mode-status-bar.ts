@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
 import { formatMode, formatModeWithWar } from '../session/banner';
+import { resolveTeamIdentity, type TeamIdentity } from '../session/team-identity';
 
 /**
  * Config key gating the status-bar item's visibility. Mirrors the
@@ -52,12 +53,56 @@ function prettyMode(raw: string): string {
 }
 
 /**
- * A native VS Code status-bar item showing the current Ghola session modality
- * (mode) and whether War Mode is active — e.g. `Ghola: ticket-work + war`. It
- * reuses the banner's `formatModeWithWar` so the label matches the launch
- * banner and the composer byte-for-byte, and takes the War-Mode flag from an
- * injected provider so it agrees with the same `mode.war::enabled` source of
- * truth the composer/launcher gate off.
+ * Separator between the instance identity and the mode. Matches the ` · `
+ * already used across the settings-panel webview's meta lines, so the status bar
+ * reads like the rest of Ghola's UI.
+ */
+const LABEL_SEPARATOR = ' · ';
+
+/**
+ * The label used when no switchboard identity can be resolved (no workspace
+ * folder open, or a folder path with no basename). Preserves the pre-identity
+ * label exactly, so the degraded case is the historical one rather than an empty
+ * or `undefined` identity.
+ */
+const NO_IDENTITY_PREFIX = 'Ghola:';
+
+/**
+ * One sentence explaining where the resolved identity came from, so an operator
+ * who sees `cmms2@win` can discover from the tooltip that it is their Team
+ * Switchboard name and why it carries an `@win`. Kept short deliberately — the
+ * authority is `_AgentComms/_Switchboard.md`, not this string.
+ */
+function describeIdentity(identity: TeamIdentity): string {
+  // Only claim the strip when it actually happened — a bare `cmms2`, and a
+  // basename of exactly `Project-` (which keeps its name rather than strip to
+  // nothing), must not be described as having had a prefix removed.
+  const origin =
+    identity.basename === identity.teamName
+      ? `workspace folder '${identity.basename}'`
+      : `workspace folder '${identity.basename}', leading 'Project-' stripped`;
+  const qualifier = identity.qualified
+    ? `'@${identity.environment}' marks this host, because the WSL clone holds the unqualified name`
+    : 'this WSL host holds the unqualified name';
+  const multiRoot =
+    identity.folderCount > 1
+      ? ` Multi-root workspace (${identity.folderCount} folders): the identity comes from the first.`
+      : '';
+  return `Ghola team: ${identity.name} — this window's Team Switchboard name, from ${origin}; ${qualifier}.${multiRoot}`;
+}
+
+/**
+ * A native VS Code status-bar item showing WHICH Ghola instance this window is
+ * (its Team Switchboard identity) plus the current session modality (mode) and
+ * whether War Mode is active — e.g. `cmms2@win · Ticket Work + War`. The
+ * identity is the part that discriminates: the operator runs 8+ windows across
+ * two hosts, and every one of them on the same mode used to render a
+ * byte-identical label. It reuses the banner's `formatModeWithWar` so the mode
+ * half matches the launch banner and the composer byte-for-byte, takes the
+ * War-Mode flag from an injected provider so it agrees with the same
+ * `mode.war::enabled` source of truth the composer/launcher gate off, and takes
+ * the identity from `session/team-identity.ts` so it agrees with the name the
+ * agent registers in the switchboard roster.
  *
  * The item lives on the Left, near the workspace/branch context, and opens the
  * Ghola settings panel on click. Callers wire `refresh()` to loader changes,
@@ -100,11 +145,24 @@ export class ModeStatusBarItem implements vscode.Disposable {
     const warMode = this.getWarMode();
     const modeLabel = formatModeWithWar(enabledModules, warMode);
 
+    // `workspaceFolders` is `undefined` with no folder open and may hold several
+    // in a multi-root workspace; `resolveTeamIdentity` owns the first-folder
+    // decision and returns `undefined` when there is nothing to derive from.
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    const identity = resolveTeamIdentity(folders.map((folder) => folder.uri.fsPath));
+
     // War Mode gets a distinct flame icon so it stands out at a glance; other
     // sessions use the org icon. The `+ war` suffix is already in `modeLabel`.
     const icon = warMode ? '$(flame)' : '$(organization)';
-    this.item.text = `${icon} Ghola: ${prettyMode(modeLabel)}`;
-    this.item.tooltip = `Ghola mode: ${formatMode(enabledModules)}. War Mode: ${
+    // Identity FIRST, because that is what distinguishes this window from the
+    // other seven; the mode follows because it is genuinely useful. With no
+    // identity to show, fall back to the historical `Ghola: <mode>` label.
+    const prefix = identity ? `${identity.name}${LABEL_SEPARATOR}` : `${NO_IDENTITY_PREFIX} `;
+    this.item.text = `${icon} ${prefix}${prettyMode(modeLabel)}`;
+    const identityNote = identity
+      ? describeIdentity(identity)
+      : 'Ghola team: unknown — no workspace folder is open, so no Team Switchboard name can be derived.';
+    this.item.tooltip = `${identityNote} Ghola mode: ${formatMode(enabledModules)}. War Mode: ${
       warMode ? 'on' : 'off'
     }. Click to open Ghola settings.`;
     this.item.show();
