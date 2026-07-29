@@ -166,6 +166,15 @@ interface UIState {
   sessionCommand: string;
   /** Value of ghola.permissionMode VS Code configuration (permission mode Claude Code launches in). */
   permissionMode: string;
+  /** Value of ghola.remoteControl VS Code configuration (launch with Claude Code Remote Control enabled). */
+  remoteControl: boolean;
+  /**
+   * Value of ghola.remoteControlSessionName VS Code configuration — the Remote
+   * Control session-name OVERRIDE, verbatim. Empty means "derive it from the git
+   * branch"; the derivation lives in the launcher, so this is never a resolved
+   * name and the input renders empty (with a placeholder) in that case.
+   */
+  remoteControlSessionName: string;
   /** Current SWE agent counts and model preferences pulled from `ghola.swe.*` VS Code configuration. */
   sweConfig: {
     performanceCores: number;
@@ -376,6 +385,8 @@ const state: UIState = {
   cliCommand: 'claude',
   sessionCommand: 'initiate',
   permissionMode: 'bypassPermissions',
+  remoteControl: false,
+  remoteControlSessionName: '',
   sweConfig: { performanceCores: 2, efficiencyCores: 1, performanceCoresModel: 'opus', efficiencyCoresModel: 'sonnet' },
   qaConfig: { count: 1, model: 'sonnet' },
   configurations: [],
@@ -570,6 +581,8 @@ function handleMessage(msg: HostToWebviewMessage): void {
       state.cliCommand = msg.cliCommand ?? 'claude';
       state.sessionCommand = msg.sessionCommand ?? 'initiate';
       state.permissionMode = msg.permissionMode ?? 'bypassPermissions';
+      state.remoteControl = msg.remoteControl ?? false;
+      state.remoteControlSessionName = msg.remoteControlSessionName ?? '';
       if (msg.swe) {
         state.sweConfig = {
           performanceCores: msg.swe.performanceCores,
@@ -1049,8 +1062,8 @@ function renderGeneral(wrapper: HTMLElement): void {
   wrapper.appendChild(textEl('h1', 'Session'));
   wrapper.appendChild(textEl('p', 'Configure the command that launches your Ghola agent team, then start a session.', 'subtitle'));
 
-  // Launch row: [CLI Alias] [Initiation Command] [Permission Mode] [Configuration] [Play]
-  // Package sits at the far left, Play at the far right, with the three
+  // Launch row: [CLI Alias] [Initiation Command] [Permission Mode] [Remote Control] [Configuration] [Play]
+  // Package sits at the far left, Play at the far right, with the
   // label-above-input fields between them. Built first, then appended to the
   // wrapper directly under the Session description (above the alias editor).
   const launchRow = el('div', { class: 'session-launch-row' });
@@ -1091,7 +1104,73 @@ function renderGeneral(wrapper: HTMLElement): void {
   permissionPicker.title = 'The permission mode Claude Code launches in for this session.';
   permissionField.appendChild(permissionPicker);
 
-  // Column 4 — Configuration dropdown
+  // Column 4 — Remote Control. A `renderToggle` switch for ghola.remoteControl
+  // plus the optional session-name override (ghola.remoteControlSessionName),
+  // both persisted through the same generic `updateConfiguration` message the
+  // permission-mode picker uses. The name input is only visible while the toggle
+  // is on, because a name means nothing with Remote Control off — and it is left
+  // EMPTY rather than pre-filled with a derived name: the derivation (git branch
+  // -> repo folder -> fallback) happens in the launcher at launch time against
+  // the terminal's actual working directory, so anything shown here would be a
+  // guess. The placeholder names the default instead.
+  //
+  // Laid out as a ROW inside the standard .session-launch-field column (which is
+  // flex-direction: column by default) so the switch and the input sit level with
+  // the neighbouring launch-row controls. The input reuses
+  // .setting-input.session-command-input, so its border-radius, padding, height,
+  // and `font: inherit` come from the same rule as the Initiation Command field.
+  const remoteField = el('div', { class: 'session-launch-field' });
+  remoteField.style.flexDirection = 'row';
+  remoteField.style.alignItems = 'center';
+  remoteField.style.gap = '6px';
+  // `0 1 auto` instead of the class's `1 1 0`: with the toggle off this column is
+  // a 34px switch, and letting it claim an equal share of a nowrap row would
+  // narrow the alias / Initiation Command / permission fields for nothing. Still
+  // SHRINKABLE (and .session-launch-field keeps min-width: 0), so a narrow panel
+  // compresses it rather than overflowing the row.
+  remoteField.style.flex = '0 1 auto';
+  remoteField.title =
+    'Enable Claude Code Remote Control for this session so you can steer it from your phone or claude.ai/code. The session name defaults to the current git branch; type a name here to override it.';
+  const remoteNameInp = el('input', {
+    class: 'setting-input session-command-input',
+    'aria-label': 'Remote Control session name',
+  }) as HTMLInputElement;
+  remoteNameInp.type = 'text';
+  remoteNameInp.placeholder = 'git branch';
+  remoteNameInp.value = state.remoteControlSessionName;
+  remoteNameInp.style.display = state.remoteControl ? '' : 'none';
+  remoteNameInp.addEventListener('blur', () => {
+    if (remoteNameInp.value === state.remoteControlSessionName) return;
+    state.remoteControlSessionName = remoteNameInp.value;
+    vscode.postMessage({
+      type: 'updateConfiguration',
+      section: 'ghola',
+      key: 'remoteControlSessionName',
+      value: remoteNameInp.value,
+    });
+  });
+  remoteField.appendChild(
+    renderToggle({
+      checked: state.remoteControl,
+      ariaLabel: 'Enable Claude Code Remote Control for this session',
+      onChange: (next) => {
+        state.remoteControl = next;
+        // Reveal/hide the override input in place rather than calling render():
+        // a full re-render would rebuild the whole page's DOM and steal focus
+        // from the switch the user just operated.
+        remoteNameInp.style.display = next ? '' : 'none';
+        vscode.postMessage({
+          type: 'updateConfiguration',
+          section: 'ghola',
+          key: 'remoteControl',
+          value: next,
+        });
+      },
+    }),
+  );
+  remoteField.appendChild(remoteNameInp);
+
+  // Column 5 — Configuration dropdown
   const configField = el('div', { class: 'session-launch-field session-launch-field--config' });
   const configDropdown = renderConfigDropdown();
   configDropdown.title = 'The module configuration preset applied to this session.';
@@ -1108,7 +1187,7 @@ function renderGeneral(wrapper: HTMLElement): void {
   sessionBtn.innerHTML = PLAY_ICON_SVG;
   sessionBtn.addEventListener('click', () => vscode.postMessage({ type: 'openSession' }));
 
-  // Assemble the launch row in visual order: the three fields, then Play (far
+  // Assemble the launch row in visual order: the fields, then Play (far
   // right). All are direct children of .session-launch-row so the single row gap
   // governs every adjacent pair uniformly; flex-wrap:nowrap keeps them on one
   // line and flex-shrink:0 on .icon-button keeps the button fixed while the
@@ -1117,6 +1196,7 @@ function renderGeneral(wrapper: HTMLElement): void {
   launchRow.appendChild(aliasField);
   launchRow.appendChild(sessionField);
   launchRow.appendChild(permissionField);
+  launchRow.appendChild(remoteField);
   launchRow.appendChild(configField);
   launchRow.appendChild(sessionBtn);
 

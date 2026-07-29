@@ -824,6 +824,8 @@ export class SettingsPanel implements vscode.Disposable {
     const cliCommand = cfg.get<string>('cliCommand', 'claude');
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate');
     const permissionMode = cfg.get<string>('permissionMode', 'bypassPermissions');
+    const remoteControl = cfg.get<boolean>('remoteControl', false);
+    const remoteControlSessionName = cfg.get<string>('remoteControlSessionName', '');
     const swe = {
       performanceCores: cfg.get<number>('swe.performanceCores', 2),
       efficiencyCores: cfg.get<number>('swe.efficiencyCores', 1),
@@ -843,6 +845,8 @@ export class SettingsPanel implements vscode.Disposable {
       cliCommand,
       sessionCommand,
       permissionMode,
+      remoteControl,
+      remoteControlSessionName,
       swe,
       qa,
       aliases,

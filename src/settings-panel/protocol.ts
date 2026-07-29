@@ -547,6 +547,14 @@ export type HostToWebviewMessage =
       cliCommand: string;
       sessionCommand: string;
       permissionMode: string;
+      /** `ghola.remoteControl` — whether the session launches with `--remote-control`. */
+      remoteControl: boolean;
+      /**
+       * `ghola.remoteControlSessionName` — the Remote Control session-name
+       * override. Empty string means "derive the name from the git branch"; the
+       * launcher owns that derivation, so the webview shows the raw override only.
+       */
+      remoteControlSessionName: string;
       swe: { performanceCores: number; efficiencyCores: number; performanceCoresModel: string; efficiencyCoresModel: string };
       qa: { count: number; model: string };
       aliases: CliAlias[];

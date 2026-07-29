@@ -41,6 +41,37 @@ const FASTPATH_SETTING_KEY = 'fastpathDirectory';
 const AUTO_CD_INTO_REPO_KEY = 'autoCdIntoRepo';
 
 /**
+ * Last link in the Remote Control session-name chain. Reached only when every
+ * earlier candidate (the operator's override, the git branch, the repo folder
+ * name) normalizes to the empty string — which is exactly why it exists: the
+ * name handed to `--remote-control` must NEVER be empty. See
+ * `resolveRemoteControlSessionName`.
+ */
+const REMOTE_CONTROL_FALLBACK_NAME = 'ghola-session';
+
+/**
+ * Cap on the normalized Remote Control session name. Branch names are unbounded
+ * and routinely long (`feature/CMMS-2861-automated-testing---incidents-`); 80
+ * characters keeps a real branch fully readable in a phone-sized session list
+ * while stopping a pathological branch from dominating the command line. The cap
+ * is applied AFTER normalization so it counts the characters actually emitted.
+ */
+const REMOTE_CONTROL_NAME_MAX_LENGTH = 80;
+
+/**
+ * Environment variables whose presence disables Claude Code's Remote Control
+ * outright. Host-observable (unlike the plan/OAuth/org-toggle requirements), so
+ * they are the part of the gating `checkRemoteControlGating` can honestly
+ * pre-flight.
+ */
+const REMOTE_CONTROL_BLOCKING_ENV_VARS = [
+  'DISABLE_TELEMETRY',
+  'DO_NOT_TRACK',
+  'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+  'DISABLE_GROWTHBOOK',
+];
+
+/**
  * Optional per-launch overrides. When omitted, `launch()` behaves exactly as the
  * default Sessions-tab play button: it creates the `Ghola Session` terminal,
  * writes the GHOLA_{TPM,SWE,QA}_PROMPT_FILE scaffolding, and sends the trigger
@@ -240,6 +271,56 @@ export class SessionLauncher {
       void vscode.window.showWarningMessage(`Ghola Session: ${cliProblems.join(' ')}`);
     }
 
+    // Remote Control: `--remote-control <name>` starts the interactive session
+    // with Remote Control enabled, so the operator can steer this local session
+    // from a phone or from claude.ai/code. It composes cleanly with
+    // `--dangerously-skip-permissions`.
+    //
+    // This is a second CLAUDE-SPECIFIC flag, so it goes through the SAME
+    // `claudeCli` gate `permFlag` uses — the comment on the permission block says
+    // every future Claude-specific flag must reuse `claudeCli` rather than
+    // re-deriving its own guess from `cliCommand`, and this is that future flag.
+    //
+    // WHY THE THREE-WAY OUTCOME COLLAPSES TO TWO HERE, structurally rather than by
+    // preference: `ghola.remoteControl` DEFAULTS TO FALSE. Reaching this block at
+    // all therefore means the operator switched it on, so permFlag's third case
+    // ("the setting is merely sitting at its packaged default and the command is
+    // not recognizably Claude") has no analogue — there is no default-and-unknown
+    // launch that wants this flag, and nothing to warn about. That leaves
+    // known -> append, and unknown -> append BEST-EFFORT with a log line, matching
+    // permFlag's treatment of an explicitly-configured setting for the same
+    // reason: a flag the operator switched on and Ghola silently dropped is
+    // invisible and looks exactly like Ghola working, whereas a flag a foreign
+    // binary rejects makes that binary print its usage and exit — loud, in the
+    // terminal, and fixable by switching Remote Control off.
+    //
+    // `oneShot` is excluded deliberately: the Commit-and-Push terminal is a
+    // transient single-prompt dispatch, and registering it as a steerable remote
+    // session would leave a phantom entry there is nothing to steer.
+    const remoteControlEnabled = cfg.get<boolean>('remoteControl', false);
+    let remoteControlName = '';
+    if (remoteControlEnabled && !oneShot && cliCommand !== '') {
+      remoteControlName = this.resolveRemoteControlSessionName(cfg, effectiveDir, branch);
+      if (claudeCli.known) {
+        this.logger?.appendLine(
+          `[session] Remote Control enabled: --remote-control ${remoteControlName} (identified as Claude Code via ${claudeCli.via})`,
+        );
+      } else {
+        this.logger?.appendLine(
+          `[session] ghola.remoteControl honored on a BEST-EFFORT basis because ${claudeCli.reason}. --remote-control ${remoteControlName} was appended anyway because Remote Control is off by default, so having it on is a value you set explicitly. If the command rejects the flag, register it in Ghola's CLI Aliases so Ghola can resolve its binary, or switch Remote Control off in Ghola's Session tab.`,
+        );
+      }
+      // Non-blocking, exactly like the permission-mode warning above: a launch is
+      // never withheld over gating Ghola can only partly observe.
+      const gatingProblems = this.checkRemoteControlGating(cliCommand, cfg);
+      if (gatingProblems.length > 0) {
+        this.logger?.appendLine(
+          `[session] Remote Control pre-flight: ${gatingProblems.join(' | ')}`,
+        );
+        void vscode.window.showWarningMessage(`Ghola Session: ${gatingProblems.join(' ')}`);
+      }
+    }
+
     const perfCores = cfg.get<number>('swe.performanceCores', 2);
     const effCores = cfg.get<number>('swe.efficiencyCores', 1);
     const perfModel = cfg.get<string>('swe.performanceCoresModel', 'opus');
@@ -379,16 +460,51 @@ export class SessionLauncher {
     // embedded single quote as '\'', PowerShell by doubling it). One-shot
     // dispatch and the no-CLI shell path keep the timed phase-2 sendText below
     // (a multi-KB one-shot prompt must never go on the command line).
-    const isBashShell = shellPath === '/bin/bash' || shellPath === '/usr/bin/bash';
+    //
+    // An UNDEFINED `shellPath` on a non-win32 host counts as bash-equivalent, and
+    // that closes the last Enter-key gap. `pickShell()` returns undefined there
+    // only when NEITHER /bin/bash NOR /usr/bin/bash exists (a zsh- or fish-only
+    // box), in which case VS Code falls back to the user's default profile — some
+    // POSIX shell (zsh, fish, sh, dash), every one of which accepts the POSIX
+    // single-quoted token `shellQuote` emits, including its '\'' escape (the
+    // adjacent-token concatenation that trick relies on is POSIX word-joining, and
+    // fish reproduces it too). Without this, that host alone fell through to the
+    // timed two-phase send, where the trigger word arrives as terminal input and
+    // waits for a manual Enter. NOT widened to cover a hypothetical `cmd.exe`:
+    // neither quoter models cmd's quoting, and `pickShell()` cannot return it
+    // anyway (win32 always resolves to pwsh.exe or powershell.exe), so the
+    // platform guard keeps the undefined case POSIX-only by construction.
+    const isBashShell =
+      shellPath === '/bin/bash' ||
+      shellPath === '/usr/bin/bash' ||
+      (shellPath === undefined && os.platform() !== 'win32');
     const isPwshShell = shellPath === 'pwsh.exe' || shellPath === 'powershell.exe';
+    // `--remote-control` carries its OWN leading space, following `permFlag`'s
+    // convention above so the flags compose by plain concatenation after
+    // `${cliCommand}` (empty string = no flag).
+    //
+    // The name is ALWAYS present and ALWAYS routed through the same quoter as the
+    // trigger word, so a branch full of `/` and `-` arrives as ONE token on both
+    // shells. This is the whole point of the design: `--remote-control [name]`
+    // takes an OPTIONAL value, so `claude --remote-control 'initiate'` binds
+    // `initiate` as the SESSION NAME, the trigger word vanishes, and the session
+    // boots un-initiated. Supplying the value ourselves satisfies the option
+    // before the positional prompt is ever parsed, which keeps the trigger word
+    // unambiguously the prompt — hence the flag stays BEFORE `${quoted}`.
+    // `resolveRemoteControlSessionName` cannot return an empty string, so the
+    // only way `remoteControlName` is empty here is Remote Control being off.
+    const remoteFlag =
+      remoteControlName === ''
+        ? ''
+        : ` --remote-control ${isPwshShell ? this.pwshQuote(remoteControlName) : this.shellQuote(remoteControlName)}`;
     const useArgPrompt = !oneShot && !!cliCommand && (isBashShell || isPwshShell) && !!phaseTwoMessage;
     if (useArgPrompt) {
       const quoted = isPwshShell
         ? this.pwshQuote(phaseTwoMessage!)
         : this.shellQuote(phaseTwoMessage!);
-      terminal.sendText(`${cliCommand}${permFlag} ${quoted}`, true);
+      terminal.sendText(`${cliCommand}${permFlag}${remoteFlag} ${quoted}`, true);
     } else if (cliCommand) {
-      terminal.sendText(`${cliCommand}${permFlag}`, true);
+      terminal.sendText(`${cliCommand}${permFlag}${remoteFlag}`, true);
       // Only arm the blind timer when pre-flight found nothing wrong. When the
       // CLI plainly cannot start, the phase-2 message would land in the shell as
       // a bogus command rather than as CLI input, so hold it back and say why.
@@ -733,6 +849,86 @@ export class SessionLauncher {
   }
 
   /**
+   * Resolve the Remote Control session name. **Never returns an empty string** —
+   * that is this function's entire contract, because `--remote-control [name]`
+   * takes an OPTIONAL value, so an empty or omitted name lets the CLI bind the
+   * positional trigger word as the session name and the session boots
+   * un-initiated.
+   *
+   * The chain, first non-empty normalized candidate wins:
+   *
+   *   1. `ghola.remoteControlSessionName` — an explicit override always wins.
+   *   2. The current git BRANCH, reused from the value already resolved for
+   *      `GHOLA_BRANCH` rather than shelling out to git a second time. This is
+   *      the default because a branch is what actually distinguishes concurrent
+   *      sessions: Claude Code's own `--remote-control-session-name-prefix`
+   *      defaults to the HOSTNAME, which makes eight sessions on one machine
+   *      indistinguishable from a phone.
+   *   3. The effective working directory's BASENAME — the repo folder name. This
+   *      is what covers the two explicit edge cases: a DETACHED HEAD (where
+   *      `git rev-parse --abbrev-ref HEAD` prints the literal `HEAD`, which names
+   *      no branch) and a NON-GIT workspace (where `readGitBranch` returns `''`).
+   *   4. `REMOTE_CONTROL_FALLBACK_NAME` — a static constant, reached when there is
+   *      no workspace at all or when every earlier candidate normalizes away.
+   *
+   * Emptiness is impossible STRUCTURALLY, not probabilistically: the last
+   * candidate is a literal that normalizes to itself, and the loop returns the
+   * first candidate that normalizes non-empty, so the loop cannot fall through
+   * for any input. The trailing return is unreachable and exists only so the
+   * signature is total without relying on that argument.
+   */
+  private resolveRemoteControlSessionName(
+    cfg: vscode.WorkspaceConfiguration,
+    dir: string | undefined,
+    branch: string,
+  ): string {
+    const candidates = [
+      cfg.get<string>('remoteControlSessionName', ''),
+      branch === 'HEAD' ? '' : branch,
+      dir ? path.basename(dir) : '',
+      REMOTE_CONTROL_FALLBACK_NAME,
+    ];
+    for (const candidate of candidates) {
+      const normalized = this.normalizeRemoteControlName(candidate);
+      if (normalized !== '') return normalized;
+    }
+    return REMOTE_CONTROL_FALLBACK_NAME;
+  }
+
+  /**
+   * Normalize one session-name candidate, returning `''` when nothing usable is
+   * left (which is how `resolveRemoteControlSessionName` advances its chain).
+   *
+   * Each rule earns its place:
+   *
+   *   - Control characters are stripped. They would be quoted faithfully and then
+   *     corrupt the terminal's own rendering of the command line.
+   *   - Whitespace and BOTH path separators collapse to `-`. Quoting already makes
+   *     `/` safe for the shell, so this is not a shell-safety measure: whether the
+   *     Remote Control service accepts a `/` in a session name is not observable
+   *     from here, and `feature-CMMS-2861-...` stays every bit as recognizable to
+   *     the operator as `feature/CMMS-2861-...`. Runs of `-` are deliberately NOT
+   *     collapsed — a branch with `---` in it keeps it, so the name still matches
+   *     what `git branch` prints.
+   *   - LEADING dashes are removed, and this one is a correctness requirement
+   *     rather than cosmetics: an option with an optional value treats a following
+   *     token that begins with `-` as the NEXT OPTION, not as its value, so
+   *     `--remote-control '-wip'` would leave the option valueless and re-expose
+   *     the exact trap the explicit name exists to prevent.
+   *   - Trailing dashes are removed so a name never reads as truncated; the cap is
+   *     re-trimmed for the same reason after it cuts.
+   */
+  private normalizeRemoteControlName(raw: string): string {
+    const cleaned = raw
+      .replace(/[\u0000-\u001f\u007f]+/g, '')
+      .replace(/[\s/\\]+/g, '-')
+      .replace(/^-+/, '')
+      .replace(/-+$/, '');
+    if (cleaned.length <= REMOTE_CONTROL_NAME_MAX_LENGTH) return cleaned;
+    return cleaned.slice(0, REMOTE_CONTROL_NAME_MAX_LENGTH).replace(/-+$/, '');
+  }
+
+  /**
    * Decide whether `cliCommand` launches Claude Code, so a Claude-SPECIFIC launch
    * flag can be appended to it. This is the single decision site for that
    * question — the reason the old `cliCommand.includes('claude')` test had to go.
@@ -953,4 +1149,137 @@ export class SessionLauncher {
     }
   }
 
+  /**
+   * Pre-flight the part of Claude Code's Remote Control gating that is actually
+   * OBSERVABLE from the extension host, returning a list of actionable problems
+   * (empty = nothing detectably wrong). Never throws. Called only when Remote
+   * Control is on; the caller warns and launches anyway.
+   *
+   * Follows `checkCliCommandResolvable`'s doctrine: check only what is knowable,
+   * fail OPEN on anything unanswerable, and offer a remedy that can actually work.
+   *
+   * WHAT IT CHECKS — the two conditions Ghola can see:
+   *
+   *   - the four kill-switch variables in `REMOTE_CONTROL_BLOCKING_ENV_VARS`, whose
+   *     mere presence disables Remote Control outright;
+   *   - `ANTHROPIC_BASE_URL` pointing somewhere that is not Anthropic.
+   *
+   * across the three places a session's environment actually comes from, merged in
+   * the SAME precedence order the session will see:
+   *
+   *   1. `process.env` — the extension host's environment, which the terminal
+   *      inherits.
+   *   2. `terminal.integrated.env.<platform>` — VS Code layers this over the
+   *      inherited environment for every terminal it creates. A `null` value there
+   *      DELETES the variable, so a null is treated as "not set" (and is offered
+   *      below as the remedy).
+   *   3. The selected alias's `VAR=value` prefixes, parsed by the same
+   *      `parseBashCommand` the alias renderers use. These are set at invocation
+   *      time and so win over both layers above — and they are precisely the case a
+   *      host-side `process.env` check alone would MISS, because the variable never
+   *      exists in this process at all.
+   *
+   * WHAT IT DELIBERATELY DOES NOT CHECK. Remote Control also requires a
+   * Pro/Max/Team/Enterprise plan authenticated via OAuth rather than an API key,
+   * and on Team/Enterprise an organization-level toggle. NONE of that is
+   * host-observable — there is no local artifact this process could read that would
+   * answer it truthfully — so no probe is attempted. Guessing would produce exactly
+   * the warning-nobody-can-act-on that `isOnWindowsPath`'s fail-open comment
+   * argues against. That gating is documented in `ghola.remoteControl`'s
+   * `markdownDescription` instead, so a toggle that looks like it works but cannot
+   * is at least explained where the operator flips it.
+   */
+  private checkRemoteControlGating(
+    cliCommand: string,
+    cfg: vscode.WorkspaceConfiguration,
+  ): string[] {
+    try {
+      const platform = os.platform();
+      const platformKey = platform === 'win32' ? 'windows' : platform === 'darwin' ? 'osx' : 'linux';
+
+      // Merged view: value `null` means "explicitly deleted for the terminal".
+      // `source` names WHERE the variable came from and `remedy` says how to undo
+      // it THERE — three layers need three different instructions, and a remedy
+      // aimed at the wrong layer is a remedy that cannot work.
+      const merged = new Map<string, { value: string | null; source: string; remedy: string }>();
+      for (const [name, value] of Object.entries(process.env)) {
+        if (typeof value === 'string') {
+          merged.set(name, {
+            value,
+            source: 'the environment VS Code was started in',
+            remedy: `Unset it where it is exported (a shell rc file, or your desktop session), or add "${name}": null to terminal.integrated.env.${platformKey} to drop it for terminals only`,
+          });
+        }
+      }
+      const terminalEnv =
+        vscode.workspace
+          .getConfiguration('terminal.integrated')
+          .get<Record<string, string | null>>(`env.${platformKey}`) ?? {};
+      for (const [name, value] of Object.entries(terminalEnv)) {
+        merged.set(name, {
+          value: typeof value === 'string' ? value : null,
+          source: `terminal.integrated.env.${platformKey}`,
+          remedy: `Remove that entry from terminal.integrated.env.${platformKey}, or set its value to null`,
+        });
+      }
+      const aliases = cfg.get<CliAlias[]>('cliAliases', []);
+      const registered = aliases.find((entry) => entry?.alias === cliCommand);
+      const parsed = registered ? parseBashCommand(registered.command) : null;
+      for (const { name, value } of parsed?.envVars ?? []) {
+        merged.set(name, {
+          value,
+          source: `the "${cliCommand}" entry in Ghola's CLI Aliases`,
+          remedy: `Delete the ${name}= prefix from that alias's command in Ghola's CLI Aliases and press Save`,
+        });
+      }
+
+      const problems: string[] = [];
+      for (const name of REMOTE_CONTROL_BLOCKING_ENV_VARS) {
+        const hit = merged.get(name);
+        // Fail open on anything not unambiguously set: absent, deleted by a null in
+        // terminal.integrated.env, or present but empty.
+        if (!hit || hit.value === null || hit.value.trim() === '') continue;
+        problems.push(
+          `Remote Control is disabled whenever ${name} is set, and it is set in ${hit.source}. ${hit.remedy}, then relaunch — or switch Remote Control off in Ghola's Session tab.`,
+        );
+      }
+
+      const baseUrl = merged.get('ANTHROPIC_BASE_URL');
+      if (baseUrl && baseUrl.value !== null && baseUrl.value.trim() !== '') {
+        const host = this.readUrlHost(baseUrl.value.trim());
+        // `null` = the host was never determined (an unexpanded `$VAR`, or a value
+        // that is not a URL at all). Fail open: a warning about a host this process
+        // never resolved is a warning the operator cannot act on. Only the NAME of
+        // the host is ever reported, never the URL, so a credential embedded in it
+        // cannot leak into a notification or the output channel.
+        if (host !== null && host !== 'anthropic.com' && !host.endsWith('.anthropic.com')) {
+          problems.push(
+            `Remote Control requires a first-party Anthropic endpoint, and ANTHROPIC_BASE_URL in ${baseUrl.source} points at ${host}. Point it back at Anthropic or unset it, then relaunch — or switch Remote Control off in Ghola's Session tab.`,
+          );
+        }
+      }
+      return problems;
+    } catch (err) {
+      this.logger?.appendLine(
+        `[session] Remote Control pre-flight: skipped (${(err as Error).message})`,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Lowercased hostname of `value`, or `null` when it cannot be determined —
+   * which is the signal the caller uses to stay silent. A value holding `$` or a
+   * backtick is a shell expansion this process cannot resolve (`$MY_PROXY/v1`
+   * parses as a perfectly valid but entirely fictional URL), so it is refused
+   * before `URL` gets a chance to answer confidently about nothing.
+   */
+  private readUrlHost(value: string): string | null {
+    if (value.includes('$') || value.includes('`')) return null;
+    try {
+      return new URL(value).hostname.toLowerCase();
+    } catch {
+      return null;
+    }
+  }
 }

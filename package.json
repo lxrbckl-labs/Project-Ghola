@@ -125,6 +125,16 @@
           "default": "bypassPermissions",
           "description": "Permission mode the Ghola Session launches Claude Code in, so you do not have to press Shift+Tab. Maps to a Claude Code launch flag (see per-value descriptions). Under bypassPermissions the flag is added whenever Ghola can identify the launch command as Claude Code — either by resolving a registered ghola.cliAliases entry to a binary named 'claude', or, failing that, by the command string itself containing 'claude'. When the command cannot be identified, the flag is still appended if you set this setting explicitly (logged as best-effort, since a non-Claude binary may reject it); if it is merely sitting at its packaged default, the flag is skipped and Ghola shows a warning telling you how to fix it. Defaults to bypassPermissions (--dangerously-skip-permissions)."
         },
+        "ghola.remoteControl": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Launch the Ghola Session with Claude Code's Remote Control enabled (`--remote-control <name>`), so you can steer the running local session from your phone or from claude.ai/code. Off by default and strictly opt-in: most of what gates Remote Control is invisible to Ghola, so enabling it has to be your choice rather than something that quietly changes an existing launch. It does not conflict with `--dangerously-skip-permissions`. Ghola always passes an explicit session name (see `#ghola.remoteControlSessionName#`), because `--remote-control` takes an OPTIONAL value and an omitted name would swallow the Initiation Command as the session name.\n\n**Ghola pre-flights what it can see** and warns without ever blocking the launch: Remote Control is disabled outright when `DISABLE_TELEMETRY`, `DO_NOT_TRACK`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, or `DISABLE_GROWTHBOOK` is set in the session's environment, or when `ANTHROPIC_BASE_URL` points at a non-Anthropic host.\n\n**Not observable from here, so Ghola cannot check it:** Remote Control also requires a Pro, Max, Team, or Enterprise plan authenticated through OAuth (an `ANTHROPIC_API_KEY` will not do) and, on Team and Enterprise, the organization-level Remote Control toggle. If none of Ghola's warnings fire and Remote Control still does not come up, it is one of those."
+        },
+        "ghola.remoteControlSessionName": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Remote Control session name used when `#ghola.remoteControl#` is on. Leave EMPTY to derive it from the current git branch of the session's working directory — with several sessions running at once the branch is what actually tells them apart, whereas Claude Code's own `--remote-control-session-name-prefix` defaults to the hostname and makes every session on one machine look alike. A non-empty value here overrides the derived name.\n\nEither way the name is normalized before it is passed: whitespace and path separators become `-`, leading dashes are dropped (a name starting with `-` would be parsed as another option), and it is capped at 80 characters. If normalization leaves nothing, Ghola falls back to the repository folder name and then to `ghola-session`, so the name is never empty — an empty name would let Claude Code bind the Initiation Command as the session name and the session would boot un-initiated."
+        },
         "ghola.swe.performanceCores": {
           "type": "number",
           "default": 2,
@@ -185,7 +195,7 @@
         "ghola.repoPath": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to your Project-Ghola git clone, used by 'Ghola: Update Extension' to locate the source checkout to pull, rebuild, and reinstall. When empty, Ghola falls back to the extension's own install path if that path is a git checkout (the F5 dev host or a source install). Set this when running from an installed VSIX so the update command knows which clone to update from."
+          "description": "Absolute path to your Project-Ghola git clone, used by 'Ghola: Update Extension' to locate the source checkout to pull, rebuild, and reinstall. Resolution order: this setting, when it names a directory containing '.git'; then the extension's own install path, if that path holds both '.git' and 'esbuild.config.js' (the F5 dev host or a source install); then the first open workspace folder verified as a genuine Ghola clone ('.git' plus 'esbuild.config.js' plus a package.json whose name is 'ghola'). Set this when running from an installed VSIX without your clone open, or to force the update to come from one specific clone."
         },
         "ghola.linqpadConnectionsPath": {
           "type": "string",
