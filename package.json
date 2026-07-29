@@ -2,7 +2,7 @@
   "name": "ghola",
   "displayName": "Ghola",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.24.1",
+  "version": "0.25.0",
   "icon": "resources/icon-source.png",
   "publisher": "local",
   "engines": {
@@ -70,7 +70,7 @@
         "ghola.cliCommand": {
           "type": "string",
           "default": "claude",
-          "description": "CLI binary to launch in the Ghola Session terminal. Sent as a shell command before the Initiation Command. Defaults to 'claude' (Claude Code). The CLI is started first so the Initiation Command can be delivered to it as user input rather than as a shell command. Leave empty to skip launching a CLI and send the Initiation Command directly to the shell instead."
+          "description": "LEGACY CLI-binary setting, superseded by the ghola.cliAliases registry plus ghola.selectedAlias. This value is inert unless ghola.selectedAlias is blank: whenever selectedAlias is non-empty — and it defaults to 'claude' — the alias name wins and this setting is never read. There is no longer a UI control for it; only hand-editing settings.json reaches it. When it IS in effect, the value is sent as a shell command before the Initiation Command, so the CLI starts first and the Initiation Command can be delivered to it as user input rather than as a shell command. Blank this AND ghola.selectedAlias to skip launching a CLI and send the Initiation Command directly to the shell instead."
         },
         "ghola.sessionCommand": {
           "type": "string",
@@ -110,7 +110,7 @@
         "ghola.selectedAlias": {
           "type": "string",
           "default": "claude",
-          "description": "Name of the alias from ghola.cliAliases that the Sessions tab will launch as the CLI command. When non-empty this overrides ghola.cliCommand at session launch — the alias name (not its expansion) is sent to the terminal so the shell's alias lookup resolves it. Leave empty to fall back to ghola.cliCommand for back-compat with users who have not registered any aliases."
+          "description": "PRIMARY launch setting: the name of the alias from ghola.cliAliases that the Sessions tab launches as the CLI command. The alias name (not its expansion) is sent to the terminal so the shell's alias lookup resolves it. Defaults to 'claude', which matches the alias shipped by default in ghola.cliAliases. Whenever this is non-empty it overrides the legacy ghola.cliCommand — so on a default install cliCommand is never consulted. Deliberately blanking this field is the only way to fall back to ghola.cliCommand."
         },
         "ghola.permissionMode": {
           "type": "string",
