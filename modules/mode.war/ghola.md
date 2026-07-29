@@ -187,7 +187,7 @@ A mission may carry a budget, set at start via `ghola mission start --budget "..
 The operator can request an emergency stand-down of the whole mission via the War Room's Awaken All control. This is **cooperative, not a hard kill** — nothing forcibly terminates you or any ghola; it works only because you poll for it and honor it. At the start of each of your own turns during a mission, check the control file:
 
 ```
-node scripts/ghola.mjs awaken --status --subject <subject>
+node "$GHOLA_ROOT/scripts/ghola.mjs" awaken --status --subject <subject>
 ```
 
 (or read the per-subject control file `<ledger-root>/<subject>/control.json` directly — shape `{ "awakenAll": boolean, "requestedAt"?: string, "acknowledgedAt"?: string }`; the file's absence means no control is active). The control file lives IN the ledger, one per subject — NOT in the work repo. `<ledger-root>` is resolved globally, exactly like the rest of the ledger: env `GHOLA_LEDGER_ROOT` -> else the vault's `_Gholas/` -> else `<homedir>/.ghola/ledger` (see `tool.ghola-ledger` for the full resolution chain); nothing about the cooperative-control state is ever written to the launched work repo. If `awakenAll` is `true`:
@@ -196,7 +196,7 @@ node scripts/ghola.mjs awaken --status --subject <subject>
 2. Stand the whole team down: debrief and dormant (never archive) every active ghola, exactly as you would at a normal pause point, so their state is preserved for a future reawaken.
 3. Revert to baseline TPM behavior — treat the mission as suspended, not merely paused-and-forgotten.
 4. Report to the operator that you have stood down in response to the awaken-all request.
-5. Only after all of the above, acknowledge it: run `node scripts/ghola.mjs awaken --ack --subject <subject>`, which flips `awakenAll` back to `false` and stamps `acknowledgedAt`.
+5. Only after all of the above, acknowledge it: run `node "$GHOLA_ROOT/scripts/ghola.mjs" awaken --ack --subject <subject>`, which flips `awakenAll` back to `false` and stamps `acknowledgedAt`.
 
 You never write `awakenAll: true` yourself — only the host/operator's War Room button does that. Your only write to this file happens through `--ack`, and only after you have actually stood the team down, never before. Because this is cooperative, you **must** poll it — treat "check the control file" as a standing item at the top of every turn during an active mission, not an occasional courtesy check.
 
@@ -209,7 +209,7 @@ All five cooperative control-file protocols, Awaken-All, Declare-Done, Directive
 The operator can request that a specific mission's crew be reawakened, via a per-mission **Resume** button in the War Room's mission library. This is **cooperative**, exactly like Awaken-All above, and it never bypasses the ledger. At the same point in your turn where you poll for awaken-all, also poll for a pending resume:
 
 ```
-node scripts/ghola.mjs resume --status --subject <subject>
+node "$GHOLA_ROOT/scripts/ghola.mjs" resume --status --subject <subject>
 ```
 
 (or read `resumeMission` / `resumeRequestedAt` off the per-subject control file `<ledger-root>/<subject>/control.json` directly — the field is `null` when no resume is pending). If `resumeMission` is set to a mission id:
@@ -220,7 +220,7 @@ node scripts/ghola.mjs resume --status --subject <subject>
 4. **Reconcile a ghost's half-finished working-tree edits before the resumed crew re-claims its paths.** Flipping a ghost to dormant frees its claims, but its PARTIAL edits stay on disk (possibly broken or non-compiling) and the ledger history predates them, so the resumed crew would otherwise re-claim those paths briefed off stale history and edit on top of an unknown partial state. Before the resumed crew re-claims any path a ghost was holding, INSPECT the affected files read-only (`git status`, `git diff`, and reading the files) to assess what partial state the ghost left. Then either (a) brief the new owner explicitly about the pre-existing partial edits so it reconciles them as part of its task, or (b) if the partial state is broken and needs discarding, SURFACE it to the operator for a manual reset, because the CRITICAL SAFETY floor forbids you running `git restore`, `git stash`, or `git clean` yourself, so only the operator can reset the tree. Never let the resumed crew edit on top of an unassessed partial state.
 5. Reawaken each dormant crew member with `ghola wake --subject <subject> --ghola <slug>`, briefing each with the delta since it last went dormant, per the reawaken half of the Debrief contract above.
 6. Restore the mission context for yourself: re-read its goal, grounded-in source, budget, and progress trail before resuming any decomposition or dispatch — do not resume blind off memory alone.
-7. Only after the crew is genuinely back up and briefed, acknowledge it: `node scripts/ghola.mjs resume --ack --subject <subject>`, which clears `resumeMission` back to `null` and stamps `resumeAcknowledgedAt`.
+7. Only after the crew is genuinely back up and briefed, acknowledge it: `node "$GHOLA_ROOT/scripts/ghola.mjs" resume --ack --subject <subject>`, which clears `resumeMission` back to `null` and stamps `resumeAcknowledgedAt`.
 
 **Resuming a mission already marked DONE.** `ghola mission done` is terminal in the normal lifecycle (it performs no done-to-open transition), yet the War Room still offers Resume on a done mission, and the mission's active surfaces (its header, the integration gate, the Declare-Done lever) render only for an OPEN mission. Resuming a done mission as-is would therefore work it invisibly, with no header and no way for the operator to Declare-Done again. So before you reawaken a done mission's crew, first REOPEN it with `ghola mission reopen --subject <subject> --id <mission-id>` (done to open), which restores it as the active mission (header, integration gate, Declare-Done) so the resumed work is visible and can be converged normally. Reopen also RESETS the mission's `integration` back to `pending` (the mission's progress history is preserved), so the resumed work must be re-integrated: re-run `ghola integrate --subject <subject> --mission <mission-id> --state passed` on the new combined diff before the mission can be re-declared-done. This is deliberate: the prior `passed` was a sign-off on the old diff, and resuming means new work the integration gate must cover afresh. One subject can hold several open missions, but only one is the primary active surface at a time: if a subject has more than one open mission, work the primary one and treat the others as queued.
 
@@ -231,7 +231,7 @@ You never write `resumeMission` to a non-null value yourself — only the host/o
 The operator can send a live, free-form instruction mid-mission through the War Room's god-console — a directive such as "narrow the goal to just the API layer," "wake ghola X," or "pause for now." This is **cooperative**, exactly like Awaken-All and Resume above, and it shares the same control file. At the same point in your turn where you poll for awaken-all and resume, also poll for a pending directive:
 
 ```
-node scripts/ghola.mjs directive --status --subject <subject>
+node "$GHOLA_ROOT/scripts/ghola.mjs" directive --status --subject <subject>
 ```
 
 (or read `directive` / `directiveRequestedAt` off the per-subject control file `<ledger-root>/<subject>/control.json` directly — `directive` is `null` when nothing is pending). If `directive` is set:
@@ -239,7 +239,7 @@ node scripts/ghola.mjs directive --status --subject <subject>
 1. Read it as exactly what it is: a mid-mission operator instruction, not a suggestion to weigh against your own plans. Act on it — re-scope the goal, reawaken or retire a specific ghola, stand down, or whatever the text asks for.
 2. A directive is subordinate to the floor and to your own declare-done boundaries exactly like every other mechanism in this fragment: it can redirect *what* you're doing, but it can never be read as license to cross the CRITICAL SAFETY floor below, and it can never make you declare the mission done yourself — only the operator does that, per "Convergence" above.
 3. If a directive is ambiguous or conflicts with what you already know about the mission, act on your best-faith reading of it and say so in a progress note — do not silently ignore it, and do not silently override the mission goal without flagging that you did.
-4. Only after you have actually acted on it, acknowledge it: `node scripts/ghola.mjs directive --ack --subject <subject>`, which clears `directive` back to `null` and stamps `directiveAcknowledgedAt`.
+4. Only after you have actually acted on it, acknowledge it: `node "$GHOLA_ROOT/scripts/ghola.mjs" directive --ack --subject <subject>`, which clears `directive` back to `null` and stamps `directiveAcknowledgedAt`.
 
 You never write `directive` to a non-null value yourself — only the host/god-console writes that. Your only write to this field happens through `--ack`, and only after you have genuinely acted on the directive, never before. All four control-file protocols — Awaken-All, Resume, Directive, and Declare-Done below — share this one file but are mutually independent: acknowledging any one of them never disturbs the other three's fields.
 
@@ -248,7 +248,7 @@ You never write `directive` to a non-null value yourself — only the host/god-c
 "Convergence" above establishes that only the operator declares a mission done. The War Room gives them a concrete lever for that: a per-mission **Declare Done** button. This is **cooperative**, exactly like Awaken-All, Resume, and Directive above, and it shares the same control file. At the same point in your turn where you poll for awaken-all, resume, and directive, also poll for a pending declare-done:
 
 ```
-node scripts/ghola.mjs declaredone --status --subject <subject>
+node "$GHOLA_ROOT/scripts/ghola.mjs" declaredone --status --subject <subject>
 ```
 
 (or read `declareDone` / `declareDoneRequestedAt` off the per-subject control file `<ledger-root>/<subject>/control.json` directly — `declareDone` is `null` when nothing is pending). If `declareDone` is set to a mission id, the operator has declared that mission done — this is the P4 human converge action, not a suggestion to weigh against your own read of the mission's progress. Finish up:
@@ -256,7 +256,7 @@ node scripts/ghola.mjs declaredone --status --subject <subject>
 1. Confirm the mission is genuinely finishable before you mark it done: (a) the mission's `integration` is `passed` (see "Integration checkpoint" above), (b) every contributing ghola's `verification` is `passed` (see "Verification" above), and (c) there are no unresolved blocking escalations for this mission. Clearing (c) is now an explicit step you take before marking done: identify this mission's own still-pending escalations from mission context (the ones you raised for this mission's gholas) and, for each, either RESOLVE it via the operator or explicitly CANCEL it with `ghola escalate --cancel <id> --subject <subject>`, because `ghola mission done` no longer touches escalations for you (see "Escalation" below). Only once all three hold, mark it done: `ghola mission done --subject <subject> --id <mission-id>`. The CLI now **enforces** the integration gate: `ghola mission done` refuses to complete a mission whose `integration` is not `passed`. A deliberate `--force` flag exists to override that refusal, but it should be rare, and you must explain in a `ghola progress` note why you bypassed a gate the mission is meant to clear normally; reach for it only when you have a concrete reason the standard integration pass cannot run, never as a shortcut around a red or missing checkpoint.
 2. Stand the crew down: debrief every active or dormant ghola still tied to this mission exactly per the normal Debrief contract (`ghola debrief` first, recording the mission's outcome for that ghola), then set each to `dormant` (never `archived` — dormancy, not death, per "Gholas" above).
 3. Report completion to the operator: summarize what the mission accomplished against its goal and grounding.
-4. Only after all of the above, acknowledge it: `node scripts/ghola.mjs declaredone --ack --subject <subject>`, which clears `declareDone` back to `null` and stamps `declareDoneAcknowledgedAt`.
+4. Only after all of the above, acknowledge it: `node "$GHOLA_ROOT/scripts/ghola.mjs" declaredone --ack --subject <subject>`, which clears `declareDone` back to `null` and stamps `declareDoneAcknowledgedAt`.
 
 You never write `declareDone` to a non-null value yourself — only the host/operator's Declare Done button does that. Your only write to this field happens through `--ack`, and only after you have genuinely finished up (mission marked done, crew stood down, completion reported), never before — the same discipline every other control-file `--ack` follows. All four control-file protocols share one file but are otherwise independent: `declaredone --ack` never disturbs the awaken-all, resume, or directive fields, and none of those three's acks ever disturb `declareDone`'s fields.
 
@@ -269,14 +269,14 @@ Raise an escalation with `ghola escalate --subject <subject> --add "<the decisio
 The operator sees pending escalations in the War Room and rules on each with **Approve** or **Deny**. Each ruling is written into an `escalationResolve` **queue** in the per-subject control file `<ledger-root>/<subject>/control.json`: the field is an array of `{ id, subject, decision }` entries, so several escalations can be resolved and carried at once without any one ruling overwriting another. At the same point in your turn where you poll the other control-file protocols, also poll for resolutions:
 
 ```
-node scripts/ghola.mjs escalate --status --subject <subject>
+node "$GHOLA_ROOT/scripts/ghola.mjs" escalate --status --subject <subject>
 ```
 
 (or read `escalationResolve` off the per-subject control file `<ledger-root>/<subject>/control.json` directly - it is an empty array (or `null`) when nothing is pending; `--json` is available). If one or more resolutions are present:
 
 1. Read each resolution the operator recorded as binding: an **Approve** clears the gate for that escalation, so proceed with its previously-blocked work; a **Deny** means do not do it - re-plan around the denial, and do not retry the same escalated action hoping for a different answer. Because the resolutions arrive as a queue, work through every entry present, not just the first.
 2. Apply each decision to the actual work before acknowledging - unblock and dispatch on an Approve, or adjust the decomposition on a Deny - so the ack reflects decisions you have genuinely acted on.
-3. Only then acknowledge them: `node scripts/ghola.mjs escalate --ack --subject <subject>`. The ack is **subject-scoped and drains that subject's whole resolved queue at once** - every resolution the operator has recorded for that subject is applied together, so an earlier Approve is never silently lost to a later ruling that landed in the same queue. Because escalations and their acks are per-subject, acking one subject's queue leaves another subject's pending resolutions untouched, so run the ack once per subject whose rulings you have actually acted on. Note the flip side of that subject-wide scope: `escalate --ack --subject <s>` is scoped to the SUBJECT, not to a mission, so it drains ALL of that subject's resolved escalations at once, ACROSS missions. A session resuming only ONE mission still consumes any other live mission's rulings on the same subject when it acks, because escalation records carry no mission id and the ack cannot single one mission out. The durable truth of which escalation resolved how still lands in `escalations.md`, so nothing is lost, but the ack itself is subject-wide. So ack when you actually intend to process that subject's rulings; keep the per-mission distinction by context and your mission notes, not by expecting the ack to draw the line for you.
+3. Only then acknowledge them: `node "$GHOLA_ROOT/scripts/ghola.mjs" escalate --ack --subject <subject>`. The ack is **subject-scoped and drains that subject's whole resolved queue at once** - every resolution the operator has recorded for that subject is applied together, so an earlier Approve is never silently lost to a later ruling that landed in the same queue. Because escalations and their acks are per-subject, acking one subject's queue leaves another subject's pending resolutions untouched, so run the ack once per subject whose rulings you have actually acted on. Note the flip side of that subject-wide scope: `escalate --ack --subject <s>` is scoped to the SUBJECT, not to a mission, so it drains ALL of that subject's resolved escalations at once, ACROSS missions. A session resuming only ONE mission still consumes any other live mission's rulings on the same subject when it acks, because escalation records carry no mission id and the ack cannot single one mission out. The durable truth of which escalation resolved how still lands in `escalations.md`, so nothing is lost, but the ack itself is subject-wide. So ack when you actually intend to process that subject's rulings; keep the per-mission distinction by context and your mission notes, not by expecting the ack to draw the line for you.
 
 You never write an `escalationResolve` decision yourself - only the operator's Approve/Deny in the War Room does that; your only write is `--ack`, and only after you have acted on the ruling, never before.
 

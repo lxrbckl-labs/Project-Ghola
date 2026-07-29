@@ -25,7 +25,7 @@ On a qualifying transient failure, TPM runs this sequence:
 
 `parameters.posture` sets how TPM handles a qualifying failure. Per the preamble's parameter-authority rule this value is authoritative:
 
-- **`autonomous`** (default): TPM checks status and retries automatically, narrating each step as it goes. No approval gate between attempts, up to the cap.
+- **`autonomous`** (default): TPM checks status and retries automatically, posting one line per attempt as it goes. No approval gate between attempts, up to the cap.
 - **`ask`**: TPM reports the failure and the status result, then WAITS for the user to approve before redeploying. Nothing is retried until the user says go.
 
 ## Settings
@@ -58,7 +58,7 @@ These rules are cumulative with every other module's rules and hard rules. They 
 These are distinct states and must produce distinct behavior:
 
 - **Module disabled** (no `tool.api-error-recovery` in the Session Manifest): TPM has no sanctioned recovery loop. A transient API failure is surfaced to the user as a stop, exactly like any other failure; TPM does not check status, back off, or redeploy on its own initiative.
-- **Module enabled, `parameters.posture` = `autonomous`** (default): TPM checks status, backs off, and redeploys a fresh subagent automatically, narrating each step, up to `parameters.maxRetries`. Subject to the full safety floor.
+- **Module enabled, `parameters.posture` = `autonomous`** (default): TPM checks status, backs off, and redeploys a fresh subagent automatically, one line per attempt, up to `parameters.maxRetries`. Subject to the full safety floor.
 - **Module enabled, `parameters.posture` = `ask`**: TPM checks status and reports the failure, then waits for user approval before each redeploy. Nothing is retried autonomously.
 
 Do not merge these cases.
@@ -69,7 +69,7 @@ The body above applies to the delegation lifecycle TPM owns. The notes below fra
 
 ### TPM
 
-You are the primary — the ONLY — actor for this module. You own delegation, so you own recovery. When a subagent you dispatched terminates early or fails, first CLASSIFY: does the failure match a `parameters.retriableErrors` signature (a transient server/infra error or a `temporarily unavailable` model), or is it a genuine task failure? Only a transient match enters this loop; a genuine failure you report normally and never retry here. On a transient match, run the recovery procedure: check Claude status (if `parameters.checkStatusPage`) and report it in one line, wait per `parameters.backoffSeconds`, then redeploy a FRESH subagent with the SAME role prompt and SAME task — reducing concurrency on an overload if `parameters.reduceConcurrencyOnOverload` is on — up to `parameters.maxRetries`, after which you STOP and escalate to the user with the failure, status findings, attempts, and a recommendation. Honor `parameters.posture`: under `ask`, report and wait for approval before each redeploy. Per your verbose-narration duty, announce each step as it happens — for example: "SWE-2 hit a 529; Claude status shows a minor incident; redeploying attempt 2/3 after 15s." Never let recovery change the task's scope or permissions, never exceed the cap, and never silently swallow the failure.
+You are the primary — the ONLY — actor for this module. You own delegation, so you own recovery. When a subagent you dispatched terminates early or fails, first CLASSIFY: does the failure match a `parameters.retriableErrors` signature (a transient server/infra error or a `temporarily unavailable` model), or is it a genuine task failure? Only a transient match enters this loop; a genuine failure you report normally and never retry here. On a transient match, run the recovery procedure: check Claude status (if `parameters.checkStatusPage`) and report it in one line, wait per `parameters.backoffSeconds`, then redeploy a FRESH subagent with the SAME role prompt and SAME task — reducing concurrency on an overload if `parameters.reduceConcurrencyOnOverload` is on — up to `parameters.maxRetries`, after which you STOP and escalate to the user with the failure, status findings, attempts, and a recommendation. Honor `parameters.posture`: under `ask`, report and wait for approval before each redeploy. A retry sequence must be **visible**, and your Brevity Contract already requires it: a failure is on its mandatory disclosure list, so the underlying error is never something you sit on. Disclose it, do not narrate it — post **one line per retry attempt and one line for the final outcome**, and nothing in between, since silence while an attempt is in flight is correct. For example: "SWE-2 hit a `529`; Claude status shows a minor incident; redeploying attempt 2/3 after 15s." That shape is both terse and fully disclosed. Never let recovery change the task's scope or permissions, never exceed the cap, and never silently swallow the failure.
 
 ### SWE
 

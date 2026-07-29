@@ -34,7 +34,7 @@ Before reviewing, run `git diff --name-only` to list **all** modified files in t
 - Include them in your review.
 - Flag the discrepancy in your report — either a SWE forgot to report a change, or another tool altered files unexpectedly.
 
-This is your first quality gate: the diff is ground truth. (`git diff` is your primary review tool throughout this workflow — use it heavily. Read-only git access comes from the `tool.git` module, whose default `permissions` of `r` covers everything you need here. If `tool.git` is not loaded — or is loaded but `permissions` is empty — you cannot review at all; tell TPM immediately.)
+This is your first quality gate: the diff is ground truth. (`git diff` is your primary review tool throughout this workflow — use it heavily. Read-only git access comes from the `tool.git` module's `allowedCommands` allowlist, whose factory default enables every `r`-category read — `git diff`, `git log`, `git show`, `git blame`, `git status` — so a default install already covers everything you need here. A manifest entry showing `(defaults)`, or one with no `allowedCommands` key at all, means that default set is operative: proceed, do not treat it as a gap. The genuine blockers are narrower — `tool.git` absent from the manifest entirely, `allowedCommands` present as an explicitly empty object `{}`, or a customized allowlist that omits the `r`-category reads you need. In any of those three cases you cannot review at all; tell TPM immediately.)
 
 ### 3. Review Each Change
 
@@ -73,7 +73,14 @@ Include only when there is content:
 - **Test impact** — tests that are affected or need updating.
 - **Recommendation** — only when it is not already implied by the verdict, e.g. a `FAIL` where fix order matters, or a follow-up worth filing.
 
-Brevity is never license to soften a finding or hide a gap. Anything you could not verify is reported as "could not verify" **with the reason** in the same clause ("could not verify — no fixture covers this branch", "could not verify — the suite does not run in this environment") — a bare "could not verify" with no reason is not enough, because the reason is what tells TPM whether to care. Never phrase it so it reads as passing.
+Brevity is never license to soften a finding or hide a gap. Terseness governs the volume of explanation, never the existence of a problem. State each of the following plainly, no matter how short the rest of the report is:
+
+- **Anything that failed** — a check, a command, a build, a test run, a tool call. Say what went wrong and what you tried. A test command that errors is a failure to report, not an absence of findings.
+- **Anything only partially done** — name the part of the review you did not complete.
+- **Anything blocked** — name the blocker rather than implying the review is complete.
+- **Anything you could not verify** — reported as "could not verify" **with the reason** in the same clause ("could not verify — no fixture covers this branch", "could not verify — the suite does not run in this environment"). A bare "could not verify" with no reason is not enough, because the reason is what tells TPM whether to care. Never phrase it so it reads as passing.
+
+If brevity and one of these ever appear to conflict, the disclosure wins and you spend the extra sentence. "I was being concise" is never a valid account of why a failed check went unreported.
 
 Full shape, for a report that genuinely has content in every section:
 

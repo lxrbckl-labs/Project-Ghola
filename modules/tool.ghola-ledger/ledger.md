@@ -9,10 +9,12 @@ This module is **not proactive**. It sits quietly until a task touches ghola-mod
 The ledger is plain markdown on disk, but agents do not read or write those files with `Read`/`Edit`/`Write`, and do not shell out to `cat`, `sed`, or hand-rolled scripts against them. **All ledger operations go through the `ghola` CLI**, invoked as:
 
 ```
-node scripts/ghola.mjs <command> [subcommand] --flag value ...
+node "$GHOLA_ROOT/scripts/ghola.mjs" <command> [subcommand] --flag value ...
 ```
 
-The CLI serializes every write behind an advisory lockfile so concurrent gholas mutating the same subject never clobber each other's changes — a hand-edit bypasses that guarantee and can corrupt the ledger. Run `node scripts/ghola.mjs --help` for the live command list if anything below drifts from the installed script.
+`$GHOLA_ROOT` is the installed Ghola extension's root, exported into the session environment — the script ships with the extension and is **not** present in the launched work repo, so always invoke it through `$GHOLA_ROOT` and never as a repo-relative `scripts/ghola.mjs` path.
+
+The CLI serializes every write behind an advisory lockfile so concurrent gholas mutating the same subject never clobber each other's changes — a hand-edit bypasses that guarantee and can corrupt the ledger. Run `node "$GHOLA_ROOT/scripts/ghola.mjs" --help` for the live command list if anything below drifts from the installed script.
 
 ## Where the ledger lives
 
@@ -133,8 +135,9 @@ Commands:
 | `groom` | `--subject S [--days 30]` | Soft-archives every ghola in the subject idle past N days (default 30). |
 | `ls` | `--subject S [--json]` | Lists a subject's gholas — id, state, model, last-used, purpose, generation, parent, reliability. **This is the reuse-vs-regrow lookup** — always run it before spawning. |
 | `board` | `[--subject S] [--id M] [--json]` | Renders the war-room view (ASCII by default; `--json` mirrors the same data the War Room webview shows, plus extra fields — the host actually builds the webview's payload by parsing the ledger files directly, not by shelling out to `board --json`). With no `--subject`/`--id`, shows a summary across all subjects; subject scope includes alerts and roster generation/parent/reliability. |
+| `boot` | `--subject S [--json]` | **Read-only session-start orientation** — one aggregate of the subject's cooperative-control state, the resolved ledger root, its prior missions, its existing crew, and an `operating-notes.md` excerpt (a fresh subject reads back as clean/none sections, which is not an error). Reuses the `--status` / `mission list` / `ls` / notes readers; **never writes or acks anything**. Run once at session start (`mode.war` issues it in the bootstrap's Wave 3); it does NOT replace the per-turn control polling. |
 
-The control commands `awaken`, `resume`, `directive`, `declaredone`, and `escalate` key off a **per-subject** control file `<ledger-root>/<subject>/control.json` (living beside that subject's missions/gholas under the globally-resolved ledger root — never the work repo), which is why each requires `--subject` to select it. `--json` is available on `ls`, `board`, `alert --list`, `record`, `awaken`, `resume`, `directive`, `declaredone`, `escalate`, `template list`, `template use`, and `mission list`/`mission resume` (the only `mission` subcommands that honor it — `mission start`, `mission done`, and `mission reopen` do not) — use it when you need to parse the result programmatically rather than read it as prose.
+The control commands `awaken`, `resume`, `directive`, `declaredone`, and `escalate` key off a **per-subject** control file `<ledger-root>/<subject>/control.json` (living beside that subject's missions/gholas under the globally-resolved ledger root — never the work repo), which is why each requires `--subject` to select it. `--json` is available on `ls`, `board`, `boot`, `alert --list`, `record`, `awaken`, `resume`, `directive`, `declaredone`, `escalate`, `template list`, `template use`, and `mission list`/`mission resume` (the only `mission` subcommands that honor it — `mission start`, `mission done`, and `mission reopen` do not) — use it when you need to parse the result programmatically rather than read it as prose.
 
 ## Role-Specific Notes
 
