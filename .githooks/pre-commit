@@ -6,15 +6,118 @@
 # it, so the VSIX (vsce reads package.json) and the vX.Y.Z tag (post-commit hook
 # reads VERSION) always agree. No-op when they already match.
 #
+# It also gates the host-path translation triplicate (see the parity block
+# below) - the ONE thing in this hook that can refuse a commit.
+#
 # Skip a single run with:   GHOLA_SKIP_HOOK=1 git commit ...
 #
-# Never blocks a commit: every failure path exits 0 and leaves package.json as-is.
+# The version-sync half never blocks a commit: every failure path exits 0 and
+# leaves package.json as-is.
 set -uo pipefail
 
 [ -n "${GHOLA_SKIP_HOOK:-}" ] && exit 0
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 cd "$REPO_ROOT" || exit 0
+
+# --- host-path translation parity gate --------------------------------------
+# One path-translation rule set is implemented THREE times on purpose - bash
+# translate_path() in scripts/ghola-boot-probe.sh, toNativeHostPath() in
+# src/session/host-path.ts, and the deliberate mirror in scripts/ghola.mjs (that
+# checker's header explains why they cannot be centralized). The triplicate has
+# already drifted silently once, with three keep-in-sync comments as the only
+# enforcement. Comments do not fail a commit; this block does.
+#
+# Runs FIRST, before the version sync below, so a refusal happens before this
+# hook has rewritten or staged anything. Runs ONLY when one of the three
+# implementations - or the checker itself, whose case table and extraction
+# anchors are equally load-bearing - is in the staged set, so an ordinary docs or
+# module commit pays nothing for it.
+#
+# Blocks on exit 1 (a genuine divergence) and ONLY on that. No node, no esbuild,
+# checker missing, an implementation the checker could not reach (exit 2), or any
+# unexpected status all print and let the commit through: a gate that blocks
+# because tooling is absent gets switched off by its owner within a week, and
+# then it guards nothing at all.
+PARITY_SCRIPT="scripts/ghola-path-parity.mjs"
+# The staged list is CAPTURED and then matched with a pure-bash `case` - no pipe
+# into grep. Two reasons: `set -o pipefail` plus an early-exiting consumer turns
+# the producer's SIGPIPE into a spurious pipeline failure (CLAUDE.md rule 7), and
+# a `case` needs no external binary, so the gate still evaluates correctly in the
+# stripped-down PATH a GUI commit can hand us. Whole-line globs, so a path that
+# merely CONTAINS one of these names does not trigger the check.
+#
+# `--no-renames` matters: with git's default rename detection a MOVE of one of
+# these files reports only the destination path, so moving an implementation away
+# - exactly the change most likely to break the checker's anchors - would slip
+# past the gate. Without detection the move is a delete + an add, and the old
+# path is in the list.
+staged="$(git diff --cached --name-only --no-renames 2>/dev/null)"
+parity_staged=""
+while IFS= read -r f; do
+  case "$f" in
+    scripts/ghola-boot-probe.sh|src/session/host-path.ts|scripts/ghola.mjs|"$PARITY_SCRIPT")
+      parity_staged=1; break ;;
+  esac
+done <<<"$staged"
+if [ -n "$parity_staged" ]; then
+  if ! command -v node >/dev/null 2>&1; then
+    echo "[ghola-hook] pre-commit: node not on PATH - path-parity check SKIPPED (commit allowed)."
+  elif [ ! -f "$PARITY_SCRIPT" ]; then
+    echo "[ghola-hook] pre-commit: $PARITY_SCRIPT missing - path-parity check SKIPPED (commit allowed)."
+  elif [ ! -d node_modules/esbuild ]; then
+    # The checker type-strips host-path.ts with the in-tree esbuild. On a fresh
+    # clone or mid-`npm install` it simply cannot run - that is an absent tool,
+    # not a divergence.
+    echo "[ghola-hook] pre-commit: esbuild not installed - path-parity check SKIPPED (commit allowed)."
+  else
+    # `timeout` when it exists: a wedged subprocess inside a pre-commit hook is
+    # the one failure mode with no obvious way out. Its 124 lands in the
+    # fail-open arm below, like any other unexpected status.
+    if command -v timeout >/dev/null 2>&1; then
+      parity_out="$(timeout 30 node "$PARITY_SCRIPT" 2>&1)"
+      prc=$?
+    else
+      parity_out="$(node "$PARITY_SCRIPT" 2>&1)"
+      prc=$?
+    fi
+    case "$prc" in
+      0)
+        :   # parity OK - silent, which is every normal run (~0.15s)
+        ;;
+      1)
+        echo "$parity_out"
+        echo "[ghola-hook] pre-commit: BLOCKED - the three host-path translation copies DISAGREE."
+        echo "[ghola-hook]   scripts/ghola-boot-probe.sh translate_path(), src/session/host-path.ts"
+        echo "[ghola-hook]   toNativeHostPath() and scripts/ghola.mjs toNativeHostPath() must return the"
+        echo "[ghola-hook]   same string for every case in $PARITY_SCRIPT (report above)."
+        echo "[ghola-hook]   Reproduce with:  node $PARITY_SCRIPT"
+        echo "[ghola-hook]   Reconcile the three rule sets - or, if a difference is intentional, record"
+        echo "[ghola-hook]   it in all three keep-in-sync comments AND teach the checker to expect it."
+        echo "[ghola-hook]   Commit anyway (last resort):  GHOLA_SKIP_HOOK=1 git commit ..."
+        exit 1
+        ;;
+      2)
+        # Exit 2 = an implementation could not be REACHED. Ambiguous by
+        # construction: equally a rename that broke the guard and a refactor
+        # mid-flight. Deliberately NOT fatal - blocking would make the hook the
+        # enemy of the refactor it exists to protect (the commit that repairs the
+        # checker's anchors is itself a commit that touches these files). It is
+        # loud instead: the full report prints, the next commit touching these
+        # files re-runs it, and a real divergence still exits 1 once the anchors
+        # line up again.
+        echo "$parity_out"
+        echo "[ghola-hook] pre-commit: WARNING - $PARITY_SCRIPT could not reach one of the three"
+        echo "[ghola-hook]   implementations (function renamed or reindented?). Parity is UNVERIFIED"
+        echo "[ghola-hook]   for this commit and the commit is ALLOWED. Fix the anchors or the source,"
+        echo "[ghola-hook]   then re-run:  node $PARITY_SCRIPT"
+        ;;
+      *)
+        echo "[ghola-hook] pre-commit: path-parity check exited $prc (could not run) - SKIPPED, commit allowed."
+        ;;
+    esac
+  fi
+fi
 
 [ -f VERSION ] || exit 0
 [ -f package.json ] || exit 0
