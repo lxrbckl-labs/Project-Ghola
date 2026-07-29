@@ -1073,7 +1073,7 @@ function renderGeneral(wrapper: HTMLElement): void {
   // launcher should use; the empty option falls back to the legacy command.
   // Fields carry no visible label; each control surfaces its description via a
   // native `title` tooltip on hover — Ghola's standard hover-help mechanism.
-  const aliasField = el('div', { class: 'session-launch-field' });
+  const aliasField = el('div', { class: 'session-launch-field session-launch-field--alias' });
   const aliasPicker = renderAliasPickerDropdown();
   aliasPicker.title = 'The Claude CLI alias used to launch this session.';
   aliasField.appendChild(aliasPicker);
