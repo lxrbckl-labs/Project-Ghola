@@ -2,7 +2,7 @@
   "name": "ghola",
   "displayName": "Ghola",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "icon": "resources/icon-source.png",
   "publisher": "local",
   "engines": {
@@ -196,7 +196,7 @@
         "ghola.repoPath": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to your Project-Ghola git clone, used by 'Ghola: Update Extension' to locate the source checkout to pull, rebuild, and reinstall. Resolution order: this setting, when it names a directory containing '.git'; then the extension's own install path, if that path holds both '.git' and 'esbuild.config.js' (the F5 dev host or a source install); then the first open workspace folder verified as a genuine Ghola clone ('.git' plus 'esbuild.config.js' plus a package.json whose name is 'ghola'). Set this when running from an installed VSIX without your clone open, or to force the update to come from one specific clone."
+          "description": "Absolute path to your Project-Ghola git clone, used by 'Ghola: Update Extension' to locate the source checkout to pull, rebuild, and reinstall. Resolution order: this setting, when it names a directory containing '.git'; then the extension's own install path, if that path holds both '.git' and 'esbuild.config.js' (the F5 dev host or a source install); then the first open workspace folder verified as a genuine Ghola clone ('.git' plus 'esbuild.config.js' plus a package.json whose name is 'ghola'). Set this when running from an installed VSIX without your clone open, or to force the update to come from one specific clone. On a native-Windows host where none of those resolve, a POSIX-absolute value here (one starting with a single '/' — a '//server/share' UNC spelling is deliberately excluded) is instead read as evidence that the clone lives inside WSL and the update is delegated there: Ghola picks the distribution by probing each installed one for the repo's '.git', runs that checkout's own scripts/reinstall.sh inside it, and installs the resulting vsix from the Windows side."
         },
         "ghola.linqpadConnectionsPath": {
           "type": "string",
@@ -212,7 +212,7 @@
         "ghola.statusBar.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Show the Ghola mode / War Mode indicator in the VS Code status bar."
+          "description": "Show the Ghola status-bar item, which leads with this window's Team Switchboard identity and follows it with the session mode — e.g. 'cmms2@win · Ticket Work + War', with a flame icon in place of the org icon while War Mode is on. The identity is derived from the git repository root at or above the first open workspace folder, with a leading 'Project-' stripped and an environment qualifier appended on every host except WSL, which holds the unqualified name ('@win', '@mac'); the Team Switchboard module's 'teamName' setting overrides it verbatim. With no workspace folder open the item falls back to its older 'Ghola: <mode>' label, and clicking it opens Ghola's settings panel."
         }
       }
     },
