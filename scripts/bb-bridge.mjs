@@ -419,13 +419,24 @@ const MARKER_UNAVAILABLE = 'bridge-unavailable';
 // of this comment recorded that the marker "cannot appear on the boot path"
 // because the probe only calls `get-ticket` and `find-pr` and neither was a slow
 // route. Adding RETRY_BUDGET_READ_ROUTES made that FALSE: both boot-path routes
-// now emit this marker on a deadline. scripts/ghola-boot-probe.sh greps only
-// `bridge-unreachable|bridge-unavailable`, so until it learns this third marker a
-// throttled boot lookup degrades to `pr_state=na` / `ticket_state=unavailable` —
-// which reads as "we looked and there is no PR / no ticket" for a lookup that was
-// never answered. That is strictly less wrong than the `bridge-down` (relaunch the
-// session) it used to report, but it is still wrong, and the probe MUST grow a
-// third classification for it. See the note beside RETRY_BUDGET_READ_ROUTES.
+// now emit this marker on a deadline. scripts/ghola-boot-probe.sh has since
+// learned this third marker, so the current two-file contract is:
+//   `bridge-unreachable` / `bridge-unavailable` -> `bridge_down_last()` latches
+//     `bridge_state="down"` and the boot path reports `ticket_state="bridge-down"`
+//     / `pr_state="bridge-down"` (ghola-boot-probe.sh:65-68, 410, 473).
+//   `bridge-timeout` -> `bridge_slow_last()` greps for it and latches
+//     `bridge_state="upstream-slow"` (unless a prior call already set `down`,
+//     which outranks it), and the boot path reports `ticket_state="bridge-slow"`
+//     / `pr_state="bridge-slow"` (ghola-boot-probe.sh:90-95, 416, 478).
+// A throttled boot lookup no longer degrades to `pr_state=na` / `ticket_state=
+// unavailable`; that was the risk this contract exists to prevent. It still
+// matters that these are three DISTINCT verdicts with opposite remedies:
+// `bridge-down` means the transport is dead and relaunching the session is real,
+// actionable advice; `bridge-slow` means the bridge is healthy and the only
+// honest answer is "wait" — a relaunch is useless there. Neither may ever be
+// read as an absence: a `bridge-down` or `bridge-slow` ticket/PR lookup was
+// never answered, so "no ticket" / "no PR" was never established. Keep both
+// marker sets and both files in sync when either changes.
 const MARKER_TIMEOUT = 'bridge-timeout';
 
 // Resolves the bridge address + bearer token per the precedence documented at
