@@ -178,31 +178,82 @@ const RETRYABLE_ROUTES = new Set([
   '/list-comments',
 ]);
 
-// Per-attempt request timeouts. Reads get a tight bound so a hung bridge cannot
-// stall a boot probe; writes get a looser one because aborting a write in
-// flight makes its outcome ambiguous, which is exactly what we are trying to
-// avoid. Before this, there was NO timeout on this hop at all — a wedged bridge
-// hung the caller forever.
-// 3s is generous for a loopback hop: a bridge that has not answered in 3s is
-// wedged, not slow. Kept deliberately tight because the WORST case is
+// Per-attempt request timeouts, in THREE READ TIERS plus the mutation bound.
+// The tier is chosen by ROUTE, and the only thing that makes a tier correct is
+// that it sits ABOVE THE HOST'S WORST CASE for that route: a client bound set
+// below the host's own ceiling loses a race it can never win, and then reports
+// the loss as a dead bridge. Writes get a looser, non-overridable bound because
+// aborting a write in flight makes its outcome ambiguous, which is exactly what
+// we are trying to avoid. Before any of this existed there was NO timeout on
+// this hop at all — a wedged bridge hung the caller forever.
+//
+// TIER 1 — FAST READS: routes the host answers WITHOUT any upstream call. Today
+// that is `/health` alone. 3s is generous for a loopback hop with no Atlassian
+// request behind it: a bridge that has not answered in 3s is wedged, not slow.
+// Kept deliberately tight because the worst case is
 // 2 * READ_TIMEOUT_MS + RETRY_DELAY_MS (~6.25s) and scripts/ghola-boot-probe.sh
 // runs reads on the session's critical boot path.
+//
+// DO NOT ADD A ROUTE HERE THAT MAKES AN UPSTREAM CALL. That was the original
+// defect and it is easy to re-introduce, because "it is only one call" sounds
+// like it belongs in the fast tier. One CALL is not one ATTEMPT — see
+// RETRY_BUDGET_READ_TIMEOUT_MS.
 const READ_TIMEOUT_MS = 3000;
 const MUTATION_TIMEOUT_MS = 30000;
 
-// SLOW READS — routes whose host-side work is a PAGINATED WALK, not a single
-// upstream call, and which therefore must NOT be judged by READ_TIMEOUT_MS.
+// ─── Host-side worst case, mirrored ─────────────────────────────────────
+//
+// These MIRROR constants in src/ (this is a standalone script and deliberately
+// imports nothing from there). They exist so the tiers below are DERIVED
+// arithmetic instead of round numbers someone guessed at. If a src/ value
+// changes, change its mirror here and the tiers recompute:
+//
+//   HOST_REQUEST_TIMEOUT_MS   = REQUEST_TIMEOUT_MS        (atlassian-client.ts,
+//                                                          bitbucket-pr-client.ts)
+//   HOST_MAX_REQUEST_ATTEMPTS = 1 + MAX_TRANSIENT_RETRIES (bitbucket-failover.ts)
+//   HOST_MAX_RETRY_WAIT_MS    = MAX_TOTAL_RETRY_WAIT_MS   (bitbucket-failover.ts)
+const HOST_REQUEST_TIMEOUT_MS = 8000;
+const HOST_MAX_REQUEST_ATTEMPTS = 4;
+const HOST_MAX_RETRY_WAIT_MS = 9000;
+
+// Ceiling for ONE logical host-side upstream request. Every attempt may burn its
+// full 8s deadline, and `withTransientRetry` may sleep its ENTIRE 9s budget
+// between them — a 429's `Retry-After` is honored verbatim and can be far larger
+// than the 400/800/1600ms exponential fallback, so the 9s budget, not the
+// backoff series, is what caps the sleeping. 4 * 8000 + 9000 = 41000 ms.
+const HOST_REQUEST_CEILING_MS = HOST_MAX_REQUEST_ATTEMPTS * HOST_REQUEST_TIMEOUT_MS
+  + HOST_MAX_RETRY_WAIT_MS;
+
+// Loopback + JSON + event-loop slack. NOT "headroom" in the pick-a-margin sense:
+// HOST_REQUEST_CEILING_MS is an exact arithmetic bound on the upstream work, so
+// the only thing left to cover is this process talking to 127.0.0.1 and the host
+// scheduling the work. 5s is lavish for that.
+const TRANSPORT_SLACK_MS = 5000;
+
+// TIER 2 — SLOW READS: routes whose host-side work is a PAGINATED WALK, not a
+// single upstream call, and which therefore must NOT be judged by
+// READ_TIMEOUT_MS.
 //
 // This existed as a latent defect for as long as list-comments has: every read
-// shared the 3s bound, but /health answers without touching Atlassian and
-// /find-pr, /get-ticket and /get-comments are ONE upstream request each (~300ms),
-// while /list-comments walks up to 20 pages of the Bitbucket comments API back to
-// back — each page with its own 8s host-side timeout and its own transient-retry
-// budget. On a small PR the walk is one page and finishes inside 3s, so the bug
-// stayed invisible; on a large PR (hundreds of CodeRabbit comments, 4+ pages) the
-// walk legitimately needs 10s+ and the CLIENT gave up at 3s while the host was
-// still working correctly. The host then finished into a closed socket and the
-// operator was told the bridge was "unreachable" — see describeTransport.
+// shared the 3s bound, even though only /health answers without touching
+// Atlassian at all, while /list-comments walks up to 20 pages of the Bitbucket
+// comments API back to back — each page with its own 8s host-side timeout and its
+// own transient-retry budget. On a small PR the walk is one page and finishes
+// inside 3s, so the bug stayed invisible; on a large PR (hundreds of CodeRabbit
+// comments, 4+ pages) the walk legitimately needs 10s+ and the CLIENT gave up at
+// 3s while the host was still working correctly. The host then finished into a
+// closed socket and the operator was told the bridge was "unreachable" — see
+// describeTransport.
+//
+// CORRECTION — an earlier version of this comment asserted that "/find-pr,
+// /get-ticket and /get-comments are ONE upstream request each (~300ms)" and used
+// that to justify leaving them in the fast tier. The nominal latency was right
+// and the CONCLUSION was wrong, which is worse than being simply wrong: it read
+// as a considered decision and so nobody re-derived it. ~300ms is the SUCCESS
+// case. The bound has to cover the FAILURE case, and every one of those routes
+// wraps its upstream call in the host's transient-retry loop, whose ceiling is
+// 41s per request — see RETRY_BUDGET_READ_TIMEOUT_MS below, which is the tier
+// that assertion should have produced.
 //
 // SIZING — the value must stay comfortably ABOVE the host's WORST CASE, not
 // above its nominal budget, or the client still loses the race it was widened to
@@ -226,6 +277,61 @@ const SLOW_READ_TIMEOUT_MS = 120000;
 // long enough Jira thread yet. They are listed together deliberately: these two
 // fail the same way at the same scale and should be reasoned about as one class.
 const SLOW_READ_ROUTES = new Set(['/list-comments', '/get-comments']);
+
+// TIER 3 — RETRY-BUDGET READS: ONE logical host-side call, with NO pagination,
+// but a call that carries the FULL transient-retry budget — so its ceiling is
+// tens of seconds, not the ~300ms a nominal round trip costs.
+//
+// This is the tier whose ABSENCE made a healthy, deliberately-backing-off host
+// get reported as a wedged one. `/find-pr` and `/get-ticket` were both judged at
+// READ_TIMEOUT_MS on the grounds that each is "one upstream call", which
+// conflated ONE CALL with ONE ATTEMPT. The arithmetic, at ONE Bitbucket token:
+//
+//   one upstream request   4 attempts * 8s + 9s of backoff        =  41s
+//                          (HOST_REQUEST_CEILING_MS; withTransientRetry
+//                           in bitbucket-failover.ts)
+//   /get-ticket            1 request, single Jira token, no
+//                          rotation (Jira never rotates)          =  41s
+//   one Bitbucket query    41s * N configured tokens
+//                          (withBitbucketFailover makes ONE FULL
+//                           PASS: up to N attempts, each a whole
+//                           request with its own retry budget)     =  41s * N
+//   /find-pr               up to TWO queries — the `state=OPEN`
+//                          match, then the MERGED/DECLINED/
+//                          SUPERSEDED fallback that fires when
+//                          OPEN is genuinely empty
+//                          (findOpenPrForBranch, atlassian-client.ts) = 82s * N
+//
+// 82s at N=1 — more than 27x the 3s bound these routes used to be judged
+// against. The observed failure was exactly that ratio: a rate-limited /find-pr
+// was aborted at 3s, replayed once, and abandoned at ~6.25s while the host was
+// still correctly honoring Bitbucket's Retry-After, and the operator was told the
+// bridge was unreachable and to relaunch the session.
+//
+// WHY THIS DOES NOT SCALE WITH THE TOKEN COUNT: it cannot, and should not. The
+// Bitbucket token COUNT lives in the host's secret storage and is never sent over
+// this bridge (`/health` returns `{ status: 'ok' }` and nothing more), so this
+// client has no way to learn N — and adding a field for it would publish a shape
+// of the operator's credential configuration to the CLI side to compute a timeout
+// constant, which is a bad trade. The tier therefore covers the SINGLE-TOKEN
+// worst case exactly, which is the overwhelmingly common configuration, and a
+// multi-token operator whose lookup genuinely exhausts every token widens it with
+// GHOLA_BRIDGE_TIMEOUT_MS. The timeout message names both the knob and the
+// multi-token multiplier so that case is self-diagnosing rather than mysterious.
+const RETRY_BUDGET_READ_TIMEOUT_MS = 2 * HOST_REQUEST_CEILING_MS + TRANSPORT_SLACK_MS;
+
+// Routes that are ONE logical host-side call carrying a FULL retry budget.
+// `/find-pr` is the worst case (two queries x N tokens); `/get-ticket` shares the
+// identical per-request arithmetic against Jira's single token. They are listed
+// together for the same reason the two paginated reads are: they fail the same
+// way for the same reason and should be reasoned about as one class.
+//
+// CLASSIFYING A NEW ROUTE: if the host wraps its work in `withTransientRetry`
+// and/or `withBitbucketFailover` but does NOT paginate, it belongs here. If it
+// ALSO paginates it belongs in SLOW_READ_ROUTES instead, whose bound already
+// includes one final page running its full retry budget. Only a route that
+// touches neither Atlassian product belongs in the fast tier.
+const RETRY_BUDGET_READ_ROUTES = new Set(['/find-pr', '/get-ticket']);
 
 // Escape hatch for a pathologically large PR or a slow link. Clamped to a sane
 // range so a typo like `5` (ms) cannot make every call fail instantly. Not a
@@ -257,7 +363,16 @@ function timeoutForRoute(routePath) {
     return MUTATION_TIMEOUT_MS;
   }
 
-  const base = SLOW_READ_ROUTES.has(routePath) ? SLOW_READ_TIMEOUT_MS : READ_TIMEOUT_MS;
+  // Tier selection. SLOW_READ_ROUTES is tested FIRST and the sets are kept
+  // disjoint: `/get-comments` paginates AND carries a per-page retry budget, and
+  // its 120s bound already accounts for both, so it must never be demoted to the
+  // 87s retry-budget tier by a future edit that adds it to the second set.
+  let base = READ_TIMEOUT_MS;
+  if (SLOW_READ_ROUTES.has(routePath)) {
+    base = SLOW_READ_TIMEOUT_MS;
+  } else if (RETRY_BUDGET_READ_ROUTES.has(routePath)) {
+    base = RETRY_BUDGET_READ_TIMEOUT_MS;
+  }
   const raw = process.env[TIMEOUT_ENV_VAR];
   if (raw === undefined || raw === '') return base;
   const parsed = Number(raw);
@@ -295,10 +410,22 @@ const MARKER_UNAVAILABLE = 'bridge-unavailable';
 // token, an obvious contradiction that sent debugging in the wrong direction
 // more than once.
 //
-// SAFE TO ADD: scripts/ghola-boot-probe.sh greps only for the two markers above,
-// and only ever calls `get-ticket` and `find-pr` — neither is a slow route — so
-// this marker cannot appear on the boot path and cannot change the probe's
-// classification. Do NOT use it for a fast route.
+// Carried by BOTH non-fast read tiers: the paginated walks (SLOW_READ_ROUTES) and
+// the retry-budget reads (RETRY_BUDGET_READ_ROUTES). Do NOT use it for a fast
+// route — on `/health` a deadline really does mean a wedged host, and that is the
+// one place `bridge-unreachable` is the honest answer.
+//
+// BOOT-PROBE CONTRACT — READ THIS BEFORE CHANGING EITHER SET. An earlier version
+// of this comment recorded that the marker "cannot appear on the boot path"
+// because the probe only calls `get-ticket` and `find-pr` and neither was a slow
+// route. Adding RETRY_BUDGET_READ_ROUTES made that FALSE: both boot-path routes
+// now emit this marker on a deadline. scripts/ghola-boot-probe.sh greps only
+// `bridge-unreachable|bridge-unavailable`, so until it learns this third marker a
+// throttled boot lookup degrades to `pr_state=na` / `ticket_state=unavailable` —
+// which reads as "we looked and there is no PR / no ticket" for a lookup that was
+// never answered. That is strictly less wrong than the `bridge-down` (relaunch the
+// session) it used to report, but it is still wrong, and the probe MUST grow a
+// third classification for it. See the note beside RETRY_BUDGET_READ_ROUTES.
 const MARKER_TIMEOUT = 'bridge-timeout';
 
 // Resolves the bridge address + bearer token per the precedence documented at
@@ -467,6 +594,55 @@ function describeTransport(url, routePath, err, timeoutMs) {
       + 'bridge is fine and relaunching the session will NOT help.';
   }
 
+  // Same reasoning as the slow-read branch, different cause: here the host is not
+  // walking pages, it is WAITING — honoring an upstream Retry-After or backing off
+  // a 5xx, on purpose, exactly as designed. The generic ETIMEDOUT branch below
+  // would call that a possibly-wedged extension host and tell the operator to
+  // relaunch the session, which is wrong twice over: it is false (the host is
+  // healthy and mid-backoff) and it is expensive (a relaunch discards session
+  // context and does not clear a rate limit).
+  //
+  // The last two lines matter as much as the classification. This route's silence
+  // is NOT evidence of absence: a `/find-pr` that never answered has NOT told us
+  // there is no PR, and reading it that way is how a genuinely open PR got
+  // reported as "No open PR for branch" and cost a team real debugging time.
+  if (RETRY_BUDGET_READ_ROUTES.has(routePath) && isTimeoutTransport(err)) {
+    const secs = Math.round(timeoutMs / 1000);
+    // Name the right product and the right shape of work, for the same reason the
+    // slow-read branch does: a message that confidently describes the wrong
+    // upstream sends the reader to check the wrong place.
+    const src = routePath === '/get-ticket'
+      ? {
+        api: 'Jira',
+        work: 'a single issue read',
+        // Jira authenticates with ONE token and never rotates, so the ceiling
+        // here is exactly one request's retry budget — no token multiplier.
+        scale: 'Jira uses a single token and never rotates, so one request\'s retry\nbudget is the whole ceiling',
+        absence: 'that the ticket does not exist',
+      }
+      : {
+        api: 'Bitbucket',
+        work: 'up to two pull-request queries',
+        scale: 'a multi-token Bitbucket setup multiplies the worst case by the\nnumber of configured tokens, so it can legitimately need considerably more',
+        absence: 'that there is no PR for this branch',
+      };
+    return `${MARKER_TIMEOUT}: ${routePath} did not answer within ${secs}s (${code}).\n`
+      + 'This is NOT a dead or wedged bridge and NOT a reason to relaunch the session — the\n'
+      + `connection was accepted. ${routePath} is ${src.work} against ${src.api}, and the host\n`
+      + `retries a rate-limited (HTTP 429) or 5xx response up to 4 times while honoring\n`
+      + `${src.api}'s Retry-After, so a deadline here almost always means THE UPSTREAM IS\n`
+      + 'THROTTLING US and the host is deliberately backing off. It is healthy, and it very\n'
+      + 'likely completed the lookup after this client stopped waiting.\n'
+      + 'Fix: wait for the throttling to clear and re-run. If you need an answer now, give THIS\n'
+      + `ONE command a longer deadline (${src.scale}):\n`
+      + `  ${TIMEOUT_ENV_VAR}=300000 node scripts/bb-bridge.mjs ${routePath.slice(1)} ...\n`
+      + 'Prefer the prefix over `export` — an exported value silently outlives the command you\n'
+      + 'set it for. Confirm with `bb-bridge health` (it answers without calling Atlassian): if\n'
+      + 'that succeeds, the bridge is fine.\n'
+      + `DO NOT CONCLUDE ${src.absence}. Nothing was answered, so nothing was\n`
+      + 'ruled out — this result is "unknown", never an absence.';
+  }
+
   switch (code) {
     case 'ECONNREFUSED':
       return `${MARKER_UNREACHABLE}: nothing is listening at ${url} (ECONNREFUSED).\n`
@@ -554,7 +730,11 @@ async function callBridge(routePath, body) {
   const retryable = RETRYABLE_ROUTES.has(routePath);
   const timeoutMs = timeoutForRoute(routePath);
   const maxAttempts = retryable ? 2 : 1;
-  const slow = SLOW_READ_ROUTES.has(routePath);
+  // Routes where a deadline WE set is never a transient blip, so the single
+  // client-side replay must be suppressed for that one cause. Both non-fast read
+  // tiers qualify — see the retry decision in the catch block below.
+  const noReplayOnDeadline = SLOW_READ_ROUTES.has(routePath)
+    || RETRY_BUDGET_READ_ROUTES.has(routePath);
 
   const payload = JSON.stringify(body);
   let res;
@@ -574,14 +754,19 @@ async function callBridge(routePath, body) {
       // One retry, and only for a route that is safe to replay AND a code that
       // could plausibly succeed on replay.
       //
-      // A DEADLINE EXCEEDED on a slow route is deliberately excluded: unlike a
-      // reset socket, it is not a blip. It means the host's paginated walk
-      // genuinely needed longer than we allowed, and replaying it just makes the
-      // host redo the identical work against a second copy of the same deadline
-      // — doubling the wait to reach the same failure. Fail once, and tell the
-      // operator which knob to turn.
+      // A DEADLINE EXCEEDED on a slow or retry-budget route is deliberately
+      // excluded: unlike a reset socket, it is not a blip. On a slow route it
+      // means the host's paginated walk genuinely needed longer than we allowed;
+      // on a retry-budget route it means the host is mid-backoff against a
+      // throttling upstream. Either way, replaying makes the host redo the
+      // identical work against a second copy of the same deadline — doubling the
+      // wait to reach the same failure. Worse on a retry-budget route: the replay
+      // fires a FRESH round of requests at an upstream that has already told us it
+      // is rate-limited, spending someone else's 429 budget to learn nothing.
+      // Fail once, and tell the operator which knob to turn.
       const deadlineExceeded = isTimeoutTransport(err);
-      if (attempt < maxAttempts && isRetryableTransport(err) && !(slow && deadlineExceeded)) {
+      if (attempt < maxAttempts && isRetryableTransport(err)
+        && !(noReplayOnDeadline && deadlineExceeded)) {
         await sleep(RETRY_DELAY_MS);
         continue;
       }
@@ -960,18 +1145,29 @@ Read verbs (health, get-ticket, get-comments, find-pr, list-comments) get one
 automatic retry on a transient transport error. Write verbs NEVER retry: a
 timeout on a write is ambiguous and a replay could double-post.
 
-Timeouts: most reads are bounded at 3s (one upstream call, so anything slower
-means a wedged bridge). The two PAGINATED reads — list-comments (Bitbucket) and
-get-comments (Jira) — get 120s, because each walks its API page by page and a
-long thread legitimately needs longer. Writes are pinned at 30s and cannot be
-widened. Override the read budgets with GHOLA_BRIDGE_TIMEOUT_MS (1000-600000 ms);
-prefer prefixing it to one command over exporting it.
+Timeouts come in three read tiers, each set above the HOST's worst case for that
+route (a bound below it would abort work the host is still doing correctly):
+  3s    health — answers without calling Atlassian at all, so anything slower
+        means a wedged bridge.
+  87s   find-pr, get-ticket — one logical upstream call, but the host retries a
+        429/5xx up to 4 times honoring Retry-After (41s per request; find-pr may
+        run two queries, and a multi-token Bitbucket setup multiplies that by the
+        token count).
+  120s  list-comments (Bitbucket), get-comments (Jira) — each walks its API page
+        by page, so a long thread legitimately needs longer.
+Writes are pinned at 30s and cannot be widened. Override the read budgets with
+GHOLA_BRIDGE_TIMEOUT_MS (1000-600000 ms); prefer prefixing it to one command over
+exporting it. These are CEILINGS, not waits — a healthy call still returns in
+well under a second.
 
-A list-comments deadline is reported as 'bridge-timeout', NOT
-'bridge-unreachable' — the bridge is alive and the fix is more time, not a
-session relaunch. A large PR may also come back as a successful PARTIAL result:
-status 'ok' with truncated: true and a message saying how many of how many
-comments were fetched. Treat that as real data, not as a failure.
+A deadline on any of those four non-health reads is reported as 'bridge-timeout',
+NOT 'bridge-unreachable' — the bridge is alive and the fix is more time (or
+waiting out a rate limit), never a session relaunch. Treat a 'bridge-timeout' on
+find-pr / get-ticket as UNKNOWN, never as an absence: nothing answered, so
+"no PR" / "no ticket" was not established. A large PR may also come back as a
+successful PARTIAL result: status 'ok' with truncated: true and a message saying
+how many of how many comments were fetched. Treat that as real data, not as a
+failure.
 `;
 
 async function main() {
