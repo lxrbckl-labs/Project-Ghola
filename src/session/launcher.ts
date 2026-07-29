@@ -97,10 +97,25 @@ interface LaunchOptions {
  * answer came from) so a log line can say WHY the flag was appended. `known:
  * false` carries a `reason` phrased to follow "because ...", so the operator is
  * told what Ghola could not resolve rather than just that something was off.
+ *
+ * `resolvedNonClaudeBinary` splits `known: false` into its two genuinely
+ * different halves, WITHOUT changing what `known` means for any existing caller:
+ *
+ *   - PRESENT — tier 1 positively RESOLVED a binary out of the alias registry and
+ *     that binary is not `claude`. This is evidence, not ignorance: Ghola knows
+ *     what runs. The value is the binary name it resolved.
+ *   - ABSENT — the command is UNKNOWABLE from this process: unregistered, or a
+ *     registered expansion `parseBashCommand` will not reduce, or no command at
+ *     all. It may still be a shell function or a wrapper that execs `claude`.
+ *
+ * The distinction matters because appending a Claude-specific flag best-effort is
+ * correct in the second case (a dropped flag is silent; a rejected flag is loud)
+ * and pointless in the first. Callers that do not care read `known` exactly as
+ * before and are unaffected.
  */
 type ClaudeCliIdentity =
   | { known: true; binary: string; via: string }
-  | { known: false; reason: string };
+  | { known: false; reason: string; resolvedNonClaudeBinary?: string };
 
 export class SessionLauncher {
   constructor(
@@ -282,16 +297,29 @@ export class SessionLauncher {
     // every future Claude-specific flag must reuse `claudeCli` rather than
     // re-deriving its own guess from `cliCommand`, and this is that future flag.
     //
-    // WHY THE THREE-WAY OUTCOME COLLAPSES TO TWO HERE, structurally rather than by
-    // preference: Remote Control is MANDATORY. There is no `ghola.remoteControl`
-    // setting to consult any more — the flag is not opt-in, so permFlag's third
-    // case ("the setting is merely sitting at its packaged default and the command
-    // is not recognizably Claude") has no analogue: there is no setting whose
-    // default-vs-chosen status could distinguish two launches, and therefore
-    // nothing to ask the operator to change. That leaves known -> append, and
-    // unknown -> append BEST-EFFORT with a log line. The log line is the whole
-    // remedy surface, which is why it names the CLI-alias registration that would
-    // let Ghola resolve the binary instead of guessing at it.
+    // THE THREE-WAY OUTCOME HERE IS NOT permFlag's THREE-WAY OUTCOME, and the
+    // difference is structural. Remote Control is MANDATORY: there is no
+    // `ghola.remoteControl` setting to consult any more, so permFlag's third case
+    // ("the setting is merely sitting at its packaged default rather than chosen")
+    // has no analogue — no setting whose default-vs-chosen status could distinguish
+    // two launches, and therefore nothing to ask the operator to change. What
+    // splits the outcome three ways instead is the QUALITY OF THE EVIDENCE about
+    // the command, which `identifyClaudeCli` now reports:
+    //
+    //   1. KNOWN Claude Code -> append, and log which tier said so.
+    //   2. POSITIVELY NOT Claude Code (`resolvedNonClaudeBinary` present: a
+    //      registered alias resolved to a binary that is not `claude`) -> SKIP.
+    //      This is the escape hatch mandatory-Remote-Control otherwise removed. Its
+    //      absence was the real defect: `ghola.permissionMode` can be set to "off",
+    //      but Remote Control has no off switch, so an operator running a genuinely
+    //      foreign CLI had NO way to stop Ghola appending an argument that binary
+    //      rejects. Skipping is safe precisely because the evidence is positive —
+    //      Ghola is not guessing about what runs, it resolved it.
+    //   3. UNKNOWABLE (unregistered command, unparseable expansion, wrapper script,
+    //      shell function) -> append BEST-EFFORT with a log line. Appending blind is
+    //      RIGHT here and dropping the flag would be wrong: a rejected flag is loud
+    //      and visible in the terminal, a silently missing one looks exactly like
+    //      Ghola working. The log line is the whole remedy surface.
     //
     // The flag itself is safe to append blind: `--remote-control <name>` is
     // ACCEPTED and non-fatal even when Remote Control is disabled by environment
@@ -307,26 +335,40 @@ export class SessionLauncher {
     // phantom entry there is nothing to steer.
     let remoteControlName = '';
     if (!oneShot && cliCommand !== '') {
-      remoteControlName = this.resolveRemoteControlSessionName(cfg, effectiveDir, branch);
-      if (claudeCli.known) {
+      // `resolvedNonClaudeBinary` is present ONLY in outcome 2 above. Testing it
+      // behind `!claudeCli.known` reads the field off the `known: false` variant and
+      // leaves `claudeCli.known` itself meaning exactly what it meant to `permFlag`.
+      if (!claudeCli.known && claudeCli.resolvedNonClaudeBinary !== undefined) {
+        // `remoteControlName` stays '' — the emission site reads that as "no flag".
+        // `checkRemoteControlGating` is skipped too, and not as an afterthought: every
+        // string it produces asserts "this session still launched with
+        // --remote-control", which would be false here. A warning about Remote
+        // Control's plumbing is also worthless for a command that is not Claude Code.
         this.logger?.appendLine(
-          `[session] Remote Control: --remote-control ${remoteControlName} (identified as Claude Code via ${claudeCli.via})`,
+          `[session] Remote Control SKIPPED: --remote-control was not appended because ${claudeCli.reason}. Ghola resolved that binary from the alias registry, so this is positive evidence rather than a failure to resolve — re-registering the alias cannot change the answer. If "${claudeCli.resolvedNonClaudeBinary}" is in fact a wrapper that execs Claude Code, point the alias at the "claude" binary directly (or pass --remote-control from inside the wrapper) to get Remote Control back.`,
         );
       } else {
-        this.logger?.appendLine(
-          `[session] Remote Control appended on a BEST-EFFORT basis because ${claudeCli.reason}. --remote-control ${remoteControlName} went on the command line anyway because Remote Control is mandatory and there is no setting left to drop it. If the command turns out not to be Claude Code and rejects the flag, register it in Ghola's CLI Aliases so Ghola can resolve its binary.`,
-        );
-      }
-      // Non-blocking, exactly like the permission-mode warning above: a launch is
-      // never withheld over gating Ghola can only partly observe. Deliberately
-      // kept OUT of `cliProblems` — that list gates the phase-2 send, and Remote
-      // Control being unavailable has no bearing on whether the CLI can start.
-      const gatingProblems = this.checkRemoteControlGating(cliCommand, cfg);
-      if (gatingProblems.length > 0) {
-        this.logger?.appendLine(
-          `[session] Remote Control pre-flight: ${gatingProblems.join(' | ')}`,
-        );
-        void vscode.window.showWarningMessage(`Ghola Session: ${gatingProblems.join(' ')}`);
+        remoteControlName = this.resolveRemoteControlSessionName(cfg, effectiveDir, branch);
+        if (claudeCli.known) {
+          this.logger?.appendLine(
+            `[session] Remote Control: --remote-control ${remoteControlName} (identified as Claude Code via ${claudeCli.via})`,
+          );
+        } else {
+          this.logger?.appendLine(
+            `[session] Remote Control appended on a BEST-EFFORT basis because ${claudeCli.reason}. --remote-control ${remoteControlName} went on the command line anyway because Remote Control is mandatory and there is no setting left to drop it, and a silently missing flag is worse than a visibly rejected one. If the command is NOT Claude Code and rejects the flag, register it in Ghola's CLI Aliases with the expansion it really runs: once Ghola can resolve the binary and sees it is not "claude", it skips this flag on its own.`,
+          );
+        }
+        // Non-blocking, exactly like the permission-mode warning above: a launch is
+        // never withheld over gating Ghola can only partly observe. Deliberately
+        // kept OUT of `cliProblems` — that list gates the phase-2 send, and Remote
+        // Control being unavailable has no bearing on whether the CLI can start.
+        const gatingProblems = this.checkRemoteControlGating(cliCommand, cfg);
+        if (gatingProblems.length > 0) {
+          this.logger?.appendLine(
+            `[session] Remote Control pre-flight: ${gatingProblems.join(' | ')}`,
+          );
+          void vscode.window.showWarningMessage(`Ghola Session: ${gatingProblems.join(' ')}`);
+        }
       }
     }
 
@@ -502,9 +544,11 @@ export class SessionLauncher {
     // unambiguously the prompt — hence the flag stays BEFORE `${quoted}`.
     // `resolveRemoteControlSessionName` cannot return an empty string, so the only
     // way `remoteControlName` is empty here is the block above having declined to
-    // resolve one at all: a one-shot dispatch, or no CLI command configured. There
-    // is no longer a Remote-Control-is-off case — the flag is mandatory — so this
-    // ternary now encodes exactly those two exclusions and nothing else.
+    // resolve one at all, which happens in exactly three cases: a one-shot
+    // dispatch, no CLI command configured, or a command Ghola POSITIVELY resolved
+    // to a binary that is not `claude`. There is still no Remote-Control-is-off
+    // setting — the flag is mandatory — so this ternary encodes those three
+    // exclusions and nothing else.
     const remoteFlag =
       remoteControlName === ''
         ? ''
@@ -975,6 +1019,20 @@ export class SessionLauncher {
    * interactive-shell probe is not available). The `reason` returned says which
    * of those it was; the caller decides between honoring the operator's explicit
    * setting and warning that it could not.
+   *
+   * ONE `known: false` CASE IS NOT UNKNOWABLE, and it is the reason
+   * `resolvedNonClaudeBinary` exists. When tier 1 resolves a registered alias all
+   * the way down to a binary and that binary is not `claude`, Ghola has POSITIVE
+   * evidence about what runs — categorically different from "could not resolve".
+   * That branch, and only that branch, sets `resolvedNonClaudeBinary` to the name
+   * it resolved. Nothing about `known` changes, so a caller that only asks
+   * "is this Claude Code?" behaves exactly as it did; a caller that must decide
+   * whether appending a flag blind is defensible can ask the sharper question.
+   *
+   * Note the tier ORDER is load-bearing for that field's meaning: tier 2 runs
+   * first, so a registered alias whose NAME contains `claude` but whose binary
+   * does not is still `known: true`. That is HEAD's behavior, kept deliberately
+   * (see tier 2 above) — the superset guarantee outranks the sharper evidence.
    */
   private identifyClaudeCli(
     cliCommand: string,
@@ -1009,9 +1067,13 @@ export class SessionLauncher {
       };
     }
     if (parsed) {
+      // The one POSITIVELY-not-Claude outcome: a registered alias resolved cleanly
+      // to a binary, and that binary is not `claude`. Carry the binary name so the
+      // caller can distinguish this from the unknowable cases below.
       return {
         known: false,
         reason: `alias "${command}" is registered in Ghola's CLI Aliases and expands to the binary "${parsed.binary}", which is not Claude Code's "claude"`,
+        resolvedNonClaudeBinary: parsed.binary,
       };
     }
     return {
