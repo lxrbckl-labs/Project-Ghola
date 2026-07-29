@@ -18,7 +18,7 @@ The CLI serializes every write behind an advisory lockfile so concurrent gholas 
 
 The ledger root is resolved **globally** — identically by this CLI, the extension host, and the session launcher, so all three surfaces agree on one location. **NOTHING is ever written to or read from the launched work repo**: there is no `<workspace>/.ghola/` pointer, no workspace-local ledger, and no control file in the work repo. Resolution precedence:
 
-- **`GHOLA_LEDGER_ROOT` env** (set and non-empty) — used verbatim. This is what the launcher exports, so an in-session CLI resolves the exact same root the host and launcher computed.
+- **`GHOLA_LEDGER_ROOT` env** (set and non-empty) — used as given, after translation to this host's native path form (only ever to a location confirmed to exist). This is what the launcher exports, so an in-session CLI resolves the exact same root the host and launcher computed.
 - **Else `GHOLA_VAULT` env** (set and non-empty) — the Obsidian vault, at a dedicated top-level `_Gholas/` directory (`<vault>/_Gholas/`). Cross-session and cross-project — gholas persist independently of any one workspace being open.
 - **Else the home fallback** — `<homedir>/.ghola/ledger/`, so ghola mode works fully with no Obsidian vault and no launcher env at all. This lives in the operator's home directory, NOT next to the work repo.
 
