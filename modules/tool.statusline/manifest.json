@@ -2,7 +2,7 @@
   "id": "tool.statusline",
   "name": "Statusline",
   "version": "0.1.1",
-  "description": "Live Claude Code harness statusline for Ghola, rendered by scripts/ghola-statusline.sh: shows [Ghola vX.Y.Z] plus cumulative session tokens, context-window usage, and 5-hour rolling-window usage when the harness payload provides them (context % and 5h % turn red at >=85%). The script currently renders all-segments-always with a fixed 85% threshold and does NOT read the settings below; they are forward-looking and do not yet take effect.",
+  "description": "Live Claude Code harness statusline for Ghola, rendered by scripts/ghola-statusline.mjs (the Node renderer, and the one that works on both WSL and native Windows; the original scripts/ghola-statusline.sh is kept for back-compat on WSL and emits byte-identical output): shows [Ghola vX.Y.Z] plus cumulative session tokens, context-window usage, and 5-hour rolling-window usage when the harness payload provides them (context % and 5h % turn red at >=85%). Both renderers currently render all-segments-always with a fixed 85% threshold and do NOT read the settings below; they are forward-looking and do not yet take effect.",
   "proactive": false,
   "category": "utility",
   "kind": "capability",

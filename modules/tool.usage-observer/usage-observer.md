@@ -8,7 +8,7 @@ Act when the operator asks something like: "what plan am I on?", "estimate my pl
 
 ## Where the data comes from
 
-The Ghola status line (`scripts/ghola-statusline.sh`) receives the harness usage payload and writes a small snapshot to **`~/.ghola/usage-state.json`** on every render, so it is effectively always current. Read that file:
+The Ghola status line receives the harness usage payload and writes a small snapshot to **`~/.ghola/usage-state.json`** on every render, so it is effectively always current. Either renderer writes it — `scripts/ghola-statusline.mjs` (Node, used on both WSL and native Windows) or `scripts/ghola-statusline.sh` (the original, WSL-only) — to the same path, with the same shape. Read that file:
 
 ```json
 { "session_tokens": 142000, "context_pct": 62, "five_hour_pct": 41, "updated": 1752600000 }

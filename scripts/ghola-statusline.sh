@@ -101,6 +101,18 @@ if raw.strip():
 # never the work repo. Atomic write (temp + replace). Only written when there is
 # an actual usage signal, so an empty payload never clobbers a good snapshot.
 # Wrapped so a filesystem fault can never break the status line.
+#
+# The temp name carries our PID. A FIXED ".tmp" is not safe when several sessions
+# render at once (the normal case here): the second render truncates the temp the
+# first is about to rename into place, publishing a torn file that
+# tool.usage-observer then fails to parse. Readers only ever open
+# usage-state.json, so the temp name is not part of the contract — the path,
+# shape, and key order below are, and are unchanged. Matches the .mjs port.
+#
+# On failure the temp is unlinked; if that unlink itself fails we leave the stray
+# temp behind rather than risk the status line — it is inert (nothing reads
+# ".tmp.<pid>") and the next successful render of that PID overwrites it.
+tmp_path = None
 try:
     if raw_tokens is not None or raw_fh is not None:
         import time
@@ -114,12 +126,17 @@ try:
             obj["context_pct"] = raw_ctx
         if raw_fh is not None:
             obj["five_hour_pct"] = raw_fh
-        tmp_path = state_path + ".tmp"
+        tmp_path = state_path + ".tmp." + str(os.getpid())
         with open(tmp_path, "w") as f:
             json.dump(obj, f)
         os.replace(tmp_path, state_path)
+        tmp_path = None
 except Exception:
-    pass
+    if tmp_path is not None:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 sys.stdout.write(f"{tokens_str}|{pct}|{five_hour_pct}")
 PY
