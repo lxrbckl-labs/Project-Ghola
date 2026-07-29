@@ -6,6 +6,13 @@ import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
 import type { ModuleHandle } from '../modules/handle';
 import { readModuleSettings } from '../state/module-settings';
+import {
+  parseBashCommand,
+  powerShellSkipReason,
+  readDefinedAliasNames,
+  type CliAlias,
+} from './alias-sync';
+import { resolveLedgerRoot } from './host-path';
 import { newSessionId, resolveAgentPromptFilePath } from './prompt-file';
 
 /**
@@ -18,13 +25,6 @@ const CLI_BOOT_DELAY_MS = 3000;
 
 /** Module id whose enablement gates the WSL fast-path `cd`. */
 const FASTPATH_MODULE_ID = 'tool.fastpath-check';
-
-/**
- * `tool.obsidian-notes`. Its `vaultPath` setting is the single source of truth
- * for the Obsidian vault, used here to resolve the War Mode ledger root the
- * SAME way the extension host and the `ghola` CLI do.
- */
-const OBSIDIAN_MODULE_ID = 'tool.obsidian-notes';
 
 /**
  * `tool.self-upgrade`. When it is enabled and NO `mode.*` module is, the session
@@ -57,6 +57,19 @@ interface LaunchOptions {
    */
   promptOverride?: string;
 }
+
+/**
+ * Whether the configured CLI command is known to launch Claude Code — the gate
+ * every CLAUDE-SPECIFIC launch flag has to pass before it may be appended.
+ *
+ * `known: true` carries the evidence (`binary`, and `via` naming where the
+ * answer came from) so a log line can say WHY the flag was appended. `known:
+ * false` carries a `reason` phrased to follow "because ...", so the operator is
+ * told what Ghola could not resolve rather than just that something was off.
+ */
+type ClaudeCliIdentity =
+  | { known: true; binary: string; via: string }
+  | { known: false; reason: string };
 
 export class SessionLauncher {
   constructor(
@@ -132,18 +145,51 @@ export class SessionLauncher {
 
     // Permission mode the session launches Claude Code in, so the user does not
     // have to press Shift+Tab. Read the same way as cliCommand/sessionCommand.
-    // The flag is only handed to the CLI when the resolved cliCommand actually
-    // references `claude` — a user's custom non-claude CLI would not understand
-    // these flags. `permFlag` carries its OWN leading space so it can be spliced
-    // directly after `${cliCommand}` at the emission sites (empty string = no flag).
+    //
+    // `--dangerously-skip-permissions` is a CLAUDE-SPECIFIC flag, so it does need
+    // a gate: appending it to a foreign binary would make the launch fail. But
+    // the gate used to be `cliCommand.includes('claude')` — a substring test on a
+    // string that is, in the alias-first world, usually an alias NAME rather than
+    // a binary. An operator whose alias is `cc`, `csession`, or `work` therefore
+    // got NO permission flag while the settings UI still showed bypassPermissions:
+    // the chosen setting and the emitted command line diverged silently.
+    //
+    // `identifyClaudeCli` replaces the substring test with an actual resolution
+    // (alias name -> registered expansion -> binary), and the branches below
+    // decide what happens when the answer is genuinely unknowable. Every future
+    // Claude-specific flag must reuse `claudeCli` rather than re-deriving its own
+    // guess from `cliCommand`, or it inherits exactly this blind spot.
+    //
+    // `permFlag` carries its OWN leading space so it can be spliced directly
+    // after `${cliCommand}` at the emission sites (empty string = no flag).
     const permissionMode = cfg.get<string>('permissionMode', 'bypassPermissions');
+    const claudeCli = this.identifyClaudeCli(cliCommand, cfg);
     let permFlag = '';
-    if (cliCommand.includes('claude')) {
-      switch (permissionMode) {
-        case 'bypassPermissions':
-          permFlag = ' --dangerously-skip-permissions';
-          break;
-        // 'off' (and any unexpected value) -> no flag, current manual-approve behavior.
+    // 'off' (and any unexpected value) -> no flag, current manual-approve behavior.
+    if (permissionMode === 'bypassPermissions') {
+      if (claudeCli.known) {
+        permFlag = ' --dangerously-skip-permissions';
+      } else if (this.isExplicitlyConfigured(cfg, 'permissionMode')) {
+        // Unknowable command, but the operator WROTE this setting, so there is a
+        // real choice to honor. Honor it. The trade: a flag a non-Claude binary
+        // rejects makes that binary print its usage and exit — loud, visible in
+        // the terminal, and fixable by setting permissionMode to "off". Dropping
+        // the flag the operator asked for is invisible and looks exactly like
+        // Ghola working correctly, which is the failure being fixed here.
+        permFlag = ' --dangerously-skip-permissions';
+        this.logger?.appendLine(
+          `[session] permissionMode=bypassPermissions honored on a BEST-EFFORT basis because ${claudeCli.reason}. --dangerously-skip-permissions was appended anyway because ghola.permissionMode is a value you set explicitly. If the command rejects the flag, register it in Ghola's CLI Aliases so Ghola can resolve its binary, or set ghola.permissionMode to "off".`,
+        );
+      } else if (cliCommand !== '') {
+        // Nothing of the operator's to honor: bypassPermissions is only the
+        // DEFAULT here, and the command is not recognizably Claude Code. Skip the
+        // flag so a foreign CLI still launches — but never silently. A missing
+        // permission flag with no explanation is the exact defect this block
+        // exists to prevent, so it gets the same non-blocking warning treatment
+        // as a failed CLI pre-flight.
+        const message = `Ghola Session: launched WITHOUT --dangerously-skip-permissions because ${claudeCli.reason}, and ghola.permissionMode is still at its default rather than a value you chose. Register the command in Ghola's CLI Aliases so Ghola can resolve its binary, or set ghola.permissionMode explicitly to have the flag passed regardless.`;
+        this.logger?.appendLine(`[session] ${message}`);
+        void vscode.window.showWarningMessage(message);
       }
     }
 
@@ -184,6 +230,16 @@ export class SessionLauncher {
       return;
     }
 
+    // Pre-flight the resolved CLI command so a command the shell cannot resolve
+    // produces an actionable message instead of a CommandNotFoundException
+    // followed by the trigger word being typed into a shell with no CLI in it.
+    // Returns [] on non-win32 by design — see checkCliCommandResolvable.
+    const cliProblems = await this.checkCliCommandResolvable(cliCommand, cfg);
+    if (cliProblems.length > 0) {
+      this.logger?.appendLine(`[session] CLI pre-flight failed: ${cliProblems.join(' | ')}`);
+      void vscode.window.showWarningMessage(`Ghola Session: ${cliProblems.join(' ')}`);
+    }
+
     const perfCores = cfg.get<number>('swe.performanceCores', 2);
     const effCores = cfg.get<number>('swe.efficiencyCores', 1);
     const perfModel = cfg.get<string>('swe.performanceCoresModel', 'opus');
@@ -212,10 +268,10 @@ export class SessionLauncher {
       // SAME repo hold different values. Modules that produce per-run output key
       // on this to keep concurrent runs apart: `tool.playwright` nests each
       // run's test-results/, playwright-report/, videos/, and Edge profile under
-      // it. Deliberately NOT derived from the workspace path — that is what the
-      // composed-prompt-file suffix does, and it is identical for every session
-      // in a workspace, which is precisely the collision this closes. See
-      // `newSessionId` in prompt-file.ts.
+      // it. Deliberately NOT derived from the workspace path or the extension-host
+      // instance — those are what the composed-prompt-file suffix is keyed on, and
+      // both are constant for the life of the window, so two LAUNCHES in one
+      // window share them. See `newSessionId` in prompt-file.ts.
       GHOLA_SESSION_ID: newSessionId(),
       SWE_PERFORMANCE_CORES: String(perfCores),
       SWE_EFFICIENCY_CORES: String(effCores),
@@ -225,12 +281,19 @@ export class SessionLauncher {
       QA_AGENT_COUNT: String(qaCount),
       QA_MODEL: qaModel,
     };
-    // War Mode ledger root, resolved GLOBALLY and identically to the extension
-    // host and the `ghola` CLI (see resolveLedgerRoot). Exporting GHOLA_LEDGER_ROOT
-    // (and GHOLA_VAULT when a vault resolved) means the in-session CLI resolves the
-    // exact same ledger location this launcher and the host computed — no workspace
-    // pointer, and no drift that would silently break War Mode.
-    const ledger = this.resolveLedgerRoot();
+    // War Mode ledger root, resolved GLOBALLY through the SHARED resolver in
+    // `host-path.ts` — the same one the settings panel's War Room reader and the
+    // activation-time ledger watchers use, so writer and watcher can never
+    // disagree. Exporting GHOLA_LEDGER_ROOT (and GHOLA_VAULT when a vault
+    // resolved) means the in-session CLI resolves the exact same ledger location
+    // this launcher and the host computed — no workspace pointer, and no drift
+    // that would silently break War Mode. Both values are already in the host's
+    // NATIVE path form (the resolver normalizes the vault before joining), so the
+    // CLI's `path.resolve` cannot re-anchor a foreign `/mnt/<drive>` path onto
+    // the current drive.
+    const ledger = resolveLedgerRoot(this.globalState, this.workspaceState, (m) =>
+      this.logger?.appendLine(`[session] ${m}`),
+    );
     env.GHOLA_LEDGER_ROOT = ledger.root;
     if (ledger.vault) env.GHOLA_VAULT = ledger.vault;
 
@@ -247,13 +310,16 @@ export class SessionLauncher {
     if (this.bridgeUrl) env.GHOLA_BRIDGE_URL = this.bridgeUrl;
     if (this.bridgeToken) env.GHOLA_BRIDGE_TOKEN = this.bridgeToken;
     if (!oneShot) {
-      // Per-workspace paths written by SettingsPanel.writeAllAgentPromptFiles()
-      // immediately before launch. Each path is stable across reopens of the
-      // same workspace but unique across different workspaces, so two VS Code
-      // windows hosting different folders cannot overwrite each other's
-      // composed prompts. The SWE/QA files exist so TPM can read them via
-      // its Read tool and inject the content into the prompt passed to the
-      // Agent tool when spawning a SWE or QA subagent.
+      // Paths written by SettingsPanel.writeAllAgentPromptFiles() immediately
+      // before launch. Keyed on the workspace folder AND this extension-host
+      // instance (see resolveAgentPromptFilePath), so neither two windows on
+      // different folders NOR two windows/profiles on the SAME folder can
+      // overwrite each other's composed prompts while an agent is reading them.
+      // Resolving here rather than accepting the writer's return value is safe
+      // precisely because both sides key on process-scoped inputs. The SWE/QA
+      // files exist so TPM can read them via its Read tool and inject the
+      // content into the prompt passed to the Agent tool when spawning a SWE or
+      // QA subagent.
       env.GHOLA_TPM_PROMPT_FILE = resolveAgentPromptFilePath('tpm');
       env.GHOLA_SWE_PROMPT_FILE = resolveAgentPromptFilePath('swe');
       env.GHOLA_QA_PROMPT_FILE = resolveAgentPromptFilePath('qa');
@@ -305,21 +371,35 @@ export class SessionLauncher {
     //      one-shot dispatch mode it is `promptOverride` — a self-contained
     //      prompt sent verbatim instead of the trigger word.
     const phaseTwoMessage = oneShot ? promptOverride : sessionCommand;
-    // Race-free trigger-word delivery: on bash (WSL/Linux) with a real CLI and a
-    // non-empty trigger word, pass the word as the CLI's positional prompt arg so
-    // `claude` submits it as turn 1 with no boot-delay race. One-shot dispatch, the
-    // pwsh/Windows shell, and the no-CLI shell path all keep the timed phase-2
-    // sendText below (a multi-KB one-shot prompt must never go on the command line).
+    // Race-free trigger-word delivery: on bash (WSL/Linux) or PowerShell
+    // (Windows) with a real CLI and a non-empty trigger word, pass the word as
+    // the CLI's positional prompt arg so `claude` submits it as turn 1 with no
+    // boot-delay race — and so nothing is ever typed after a command the shell
+    // could not resolve. Each shell gets its own quoting (bash escapes an
+    // embedded single quote as '\'', PowerShell by doubling it). One-shot
+    // dispatch and the no-CLI shell path keep the timed phase-2 sendText below
+    // (a multi-KB one-shot prompt must never go on the command line).
     const isBashShell = shellPath === '/bin/bash' || shellPath === '/usr/bin/bash';
-    const useArgPrompt = !oneShot && !!cliCommand && isBashShell && !!phaseTwoMessage;
+    const isPwshShell = shellPath === 'pwsh.exe' || shellPath === 'powershell.exe';
+    const useArgPrompt = !oneShot && !!cliCommand && (isBashShell || isPwshShell) && !!phaseTwoMessage;
     if (useArgPrompt) {
-      terminal.sendText(`${cliCommand}${permFlag} ${this.shellQuote(phaseTwoMessage!)}`, true);
+      const quoted = isPwshShell
+        ? this.pwshQuote(phaseTwoMessage!)
+        : this.shellQuote(phaseTwoMessage!);
+      terminal.sendText(`${cliCommand}${permFlag} ${quoted}`, true);
     } else if (cliCommand) {
       terminal.sendText(`${cliCommand}${permFlag}`, true);
-      if (phaseTwoMessage) {
+      // Only arm the blind timer when pre-flight found nothing wrong. When the
+      // CLI plainly cannot start, the phase-2 message would land in the shell as
+      // a bogus command rather than as CLI input, so hold it back and say why.
+      if (phaseTwoMessage && cliProblems.length === 0) {
         setTimeout(() => {
           terminal.sendText(phaseTwoMessage, true);
         }, CLI_BOOT_DELAY_MS);
+      } else if (phaseTwoMessage) {
+        this.logger?.appendLine(
+          '[session] holding back the phase-2 message: the CLI command failed pre-flight, so it would be typed into a shell with no CLI running',
+        );
       }
     } else if (phaseTwoMessage) {
       // No CLI command configured — preserve the legacy "send phrase to shell"
@@ -615,29 +695,6 @@ export class SessionLauncher {
   }
 
   /**
-   * Resolve the War Mode ledger root GLOBALLY, with the SAME precedence the
-   * `ghola` CLI (`scripts/ghola.mjs` resolveLedgerRoot) and the extension host
-   * (`SettingsPanel.resolveLedgerRoot`) use, so all three surfaces always agree:
-   *   1. GHOLA_LEDGER_ROOT env (non-empty)                 -> used verbatim.
-   *   2. Else the `tool.obsidian-notes` `vaultPath` setting -> <vault>/_Gholas.
-   *   3. Else                                               -> <homedir>/.ghola/ledger.
-   * NEVER resolves under the launched work repo. Returns the resolved root plus
-   * the vault it came from (or null) so the caller can also export GHOLA_VAULT.
-   */
-  private resolveLedgerRoot(): { root: string; vault: string | null } {
-    const envRoot = process.env.GHOLA_LEDGER_ROOT;
-    if (typeof envRoot === 'string' && envRoot.trim() !== '') {
-      return { root: envRoot.trim(), vault: null };
-    }
-    const vaultSetting = this.readModuleSetting(OBSIDIAN_MODULE_ID, 'vaultPath');
-    if (typeof vaultSetting === 'string' && vaultSetting.trim() !== '') {
-      const vault = vaultSetting.trim();
-      return { root: path.join(vault, '_Gholas'), vault };
-    }
-    return { root: path.join(os.homedir(), '.ghola', 'ledger'), vault: null };
-  }
-
-  /**
    * Read a single field from a module's persisted settings. Settings live in
    * the GLOBAL `ghola.moduleSettings` map (via `readModuleSettings`, which also
    * falls back to any not-yet-migrated per-workspace value) as a flat dictionary
@@ -663,6 +720,237 @@ export class SessionLauncher {
    */
   private shellQuote(s: string): string {
     return `'${s.replace(/'/g, "'\\''")}'`;
+  }
+
+  /**
+   * Wrap a string as a single PowerShell single-quoted token. PowerShell's
+   * literal-string escape for an embedded single quote is to DOUBLE it (`''`) —
+   * bash's `'\''` trick would be passed through verbatim and corrupt the value.
+   * Only used on the pwsh trigger-word path.
+   */
+  private pwshQuote(s: string): string {
+    return `'${s.replace(/'/g, "''")}'`;
+  }
+
+  /**
+   * Decide whether `cliCommand` launches Claude Code, so a Claude-SPECIFIC launch
+   * flag can be appended to it. This is the single decision site for that
+   * question — the reason the old `cliCommand.includes('claude')` test had to go.
+   *
+   * WHY A SUBSTRING TEST IS THE WRONG INSTRUMENT. Since alias-first resolution
+   * landed, `cliCommand` is normally an entry from `ghola.cliAliases` — an alias
+   * NAME, chosen by the operator, that says nothing about the binary behind it.
+   * `csession` runs Claude Code; `claude-tools` might not. The substring test got
+   * both backwards and, worse, got the first one wrong SILENTLY.
+   *
+   * The two tiers below are ordered by how much they actually know:
+   *
+   *   1. REGISTRY RESOLUTION (real evidence). When the command is a registered
+   *      alias, `ghola.cliAliases` holds its bash-canonical expansion, and
+   *      `parseBashCommand` already knows how to reduce that to {envVars, binary,
+   *      args}. Test the BINARY, strictly: basename, minus any Windows executable
+   *      extension, equal to `claude`. This is what makes `cc`, `csession`, and
+   *      `work` resolve correctly instead of failing the old substring test.
+   *   2. NAME PATTERN (the pre-existing signal, kept verbatim). If tier 1 does not
+   *      answer — the command is not registered, or its expansion is not a plain
+   *      simple command Ghola will parse — fall back to the old
+   *      `includes('claude')` test on the whole command string. Keeping it, rather
+   *      than replacing it with something stricter, is deliberate: it makes the
+   *      set of commands recognized here a strict SUPERSET of what HEAD
+   *      recognized, so no working configuration (a hand-written `claude-2` alias
+   *      that was never registered, `claude.exe`, `/usr/local/bin/claude`) can
+   *      lose a flag it used to get.
+   *
+   * When neither tier answers the command is genuinely UNKNOWABLE from here: it
+   * could be a shell function or a wrapper script that execs `claude`, and this
+   * process cannot see inside either (see `checkCliCommandResolvable` for why an
+   * interactive-shell probe is not available). The `reason` returned says which
+   * of those it was; the caller decides between honoring the operator's explicit
+   * setting and warning that it could not.
+   */
+  private identifyClaudeCli(
+    cliCommand: string,
+    cfg: vscode.WorkspaceConfiguration,
+  ): ClaudeCliIdentity {
+    const command = cliCommand.trim();
+    if (command === '') {
+      return { known: false, reason: 'no CLI command is configured' };
+    }
+
+    // (1) Registry resolution.
+    const aliases = cfg.get<CliAlias[]>('cliAliases', []);
+    const registered = aliases.find((entry) => entry?.alias === command);
+    const parsed = registered ? parseBashCommand(registered.command) : null;
+    if (parsed && this.isClaudeBinaryName(parsed.binary)) {
+      return {
+        known: true,
+        binary: parsed.binary,
+        via: `the registered expansion of alias "${command}"`,
+      };
+    }
+
+    // (2) Name pattern — HEAD's test, unchanged, on the whole command string.
+    if (command.toLowerCase().includes('claude')) {
+      return { known: true, binary: command, via: 'the configured CLI command itself' };
+    }
+
+    if (registered && !parsed) {
+      return {
+        known: false,
+        reason: `alias "${command}" is registered in Ghola's CLI Aliases but its expansion (${registered.command}) is not a plain "VAR=value ... binary args" command, so Ghola cannot tell which binary it runs`,
+      };
+    }
+    if (parsed) {
+      return {
+        known: false,
+        reason: `alias "${command}" is registered in Ghola's CLI Aliases and expands to the binary "${parsed.binary}", which is not Claude Code's "claude"`,
+      };
+    }
+    return {
+      known: false,
+      reason: `"${command}" does not name Claude Code's "claude" binary and is not registered in Ghola's CLI Aliases, so Ghola cannot resolve which binary it runs`,
+    };
+  }
+
+  /**
+   * True when `binary` names Claude Code's own executable. Applied only to a
+   * binary `parseBashCommand` resolved out of a registered alias, which is why it
+   * can afford to be strict where the name-pattern tier cannot: take the
+   * basename (either separator, so a Windows path works too), drop a Windows
+   * executable extension, and require exactly `claude`.
+   */
+  private isClaudeBinaryName(binary: string): boolean {
+    const base = binary.split(/[\\/]/).pop() ?? '';
+    return base.toLowerCase().replace(/\.(?:exe|cmd|bat|ps1)$/, '') === 'claude';
+  }
+
+  /**
+   * True when `key` under the `ghola` section holds a value the OPERATOR wrote,
+   * as opposed to the packaged default. Every scope VS Code lets a user write is
+   * checked (user, remote, workspace, folder), including a language-scoped
+   * override, because any of them is an explicit choice.
+   *
+   * This distinction exists so a Claude-specific flag can tell "the operator asked
+   * for this" apart from "this happens to be the default". It does NOT change what
+   * any setting means or what it defaults to: `cfg.get` remains the only reader of
+   * the effective value.
+   */
+  private isExplicitlyConfigured(cfg: vscode.WorkspaceConfiguration, key: string): boolean {
+    const inspected = cfg.inspect<unknown>(key);
+    if (!inspected) return false;
+    return (
+      inspected.globalValue !== undefined ||
+      inspected.workspaceValue !== undefined ||
+      inspected.workspaceFolderValue !== undefined ||
+      inspected.globalLanguageValue !== undefined ||
+      inspected.workspaceLanguageValue !== undefined ||
+      inspected.workspaceFolderLanguageValue !== undefined
+    );
+  }
+
+  /**
+   * Pre-flight the resolved CLI command and return a list of actionable problems
+   * (empty = nothing detectably wrong). Never throws.
+   *
+   * HONEST SCOPE — this check only runs on win32, and that is deliberate:
+   *
+   *   - On bash hosts the command is usually an ALIAS, and an alias is not on
+   *     PATH. The only real test is `command -v <name>` inside the interactive
+   *     shell that sourced the rc file, which the extension host cannot run
+   *     synchronously (a non-interactive `bash -c` does not source ~/.bashrc, so
+   *     it would report "missing" for every working alias). A host-side check
+   *     there would be nothing but false alarms, so bash gets no check at all —
+   *     it does not need one either, because the bash path delivers the trigger
+   *     word as a positional argument, so a failed command types nothing after
+   *     itself.
+   *   - On win32 the answer IS knowable. PowerShell never sources a shell rc
+   *     file; a Ghola alias exists only as a function in the PowerShell profile,
+   *     and a plain binary exists only if it is on PATH. Both are checkable from
+   *     here.
+   *
+   * TELL THE OPERATOR THE SAME STORY THE WRITER DOES. Two things make that work,
+   * and neither is optional:
+   *
+   *   - the profile scan (`readDefinedAliasNames`) covers the WHOLE file, not
+   *     just Ghola's managed spans, because `renderPowerShellBlock`'s own skip
+   *     warnings tell the operator to hand-define an untranslatable alias
+   *     OUTSIDE the managed block. A managed-spans-only scan warned forever about
+   *     an alias the operator had already fixed exactly as instructed.
+   *   - when nothing defines the name, the remedy offered depends on
+   *     `powerShellSkipReason`. "Press Save" is only honest for an entry the
+   *     alias sync would actually emit; for one it refuses, Save is a no-op and
+   *     saying otherwise sends the operator round a loop that cannot terminate.
+   *
+   * The stakes are higher than a stray notification: on the one-shot
+   * Commit-and-Push path (`promptOverride` set, so `useArgPrompt` is false) a
+   * non-empty return here HOLDS BACK the phase-2 prompt with nothing but an
+   * output-channel line, so a false positive silently does nothing at all.
+   */
+  private async checkCliCommandResolvable(
+    cliCommand: string,
+    cfg: vscode.WorkspaceConfiguration,
+  ): Promise<string[]> {
+    if (cliCommand === '' || os.platform() !== 'win32') return [];
+
+    const aliases = cfg.get<CliAlias[]>('cliAliases', []);
+    const registered = aliases.find((entry) => entry?.alias === cliCommand);
+    if (registered) {
+      let defined: string[] = [];
+      try {
+        defined = await readDefinedAliasNames(cfg.get<string>('aliasFile', '~/.bashrc'));
+      } catch (err) {
+        // Cannot read the profile — say nothing rather than raise a false alarm.
+        this.logger?.appendLine(
+          `[session] CLI pre-flight: could not read the PowerShell profile (${(err as Error).message})`,
+        );
+        return [];
+      }
+      if (defined.includes(cliCommand)) return [];
+      // Nothing in the profile defines the name. Which remedy is honest depends
+      // on whether the alias sync can render this entry at all.
+      const skipReason = powerShellSkipReason(registered);
+      if (skipReason !== null) {
+        return [
+          `"${cliCommand}" is registered in Ghola's CLI Aliases but nothing in your PowerShell profile defines it, and pressing Save will not change that because Ghola cannot translate this entry: ${skipReason}`,
+        ];
+      }
+      return [
+        `"${cliCommand}" is registered in Ghola's CLI Aliases but nothing in your PowerShell profile defines it, so PowerShell cannot run it. Open Ghola's settings and press Save on the CLI Aliases list to write the managed PowerShell block, then relaunch.`,
+      ];
+    }
+
+    if (!this.isOnWindowsPath(cliCommand)) {
+      return [
+        `"${cliCommand}" was not found on PATH, so PowerShell cannot run it. Install the CLI, or register it in Ghola's CLI Aliases and pick it in the Sessions tab.`,
+      ];
+    }
+    return [];
+  }
+
+  /**
+   * True when the first token of `command` resolves on the Windows PATH.
+   * Returns `true` when the probe itself could not run — an unknown answer must
+   * never turn into a warning the operator cannot act on. Never throws.
+   *
+   * BOTH failure channels have to fail OPEN, which is why `result.error` gets its
+   * own early return rather than being folded into the status check.
+   * `spawnSync` reports most spawn failures (ENOENT on `where` itself, EACCES,
+   * EMFILE, a spawn blocked by policy) by POPULATING `result.error` and
+   * returning normally — it does not throw, so the `catch` below never sees
+   * them. Treating a populated `error` as part of the answer would make the
+   * probe report "not on PATH" for a question it never actually asked, and emit
+   * a warning about the operator's CLI that no change to their PATH could clear.
+   */
+  private isOnWindowsPath(command: string): boolean {
+    const binary = command.trim().split(/\s+/)[0];
+    if (!binary) return true;
+    try {
+      const result = childProcess.spawnSync('where', [binary], { encoding: 'utf8' });
+      if (result.error) return true;
+      return result.status === 0;
+    } catch {
+      return true;
+    }
   }
 
 }
