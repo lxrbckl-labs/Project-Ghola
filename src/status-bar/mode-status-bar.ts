@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
-import { formatMode, formatModeWithWar } from '../session/banner';
+import { formatMode } from '../session/banner';
 import { resolveTeamIdentity, type TeamIdentity } from '../session/team-identity';
 
 /**
@@ -11,8 +11,8 @@ const STATUS_BAR_CONFIG_SECTION = 'ghola.statusBar';
 const STATUS_BAR_ENABLED_KEY = 'ghola.statusBar.enabled';
 
 /**
- * Friendly display names for each raw mode token produced by
- * `formatModeWithWar`. Status-bar-only cosmetics: the banner/boot trace keep the
+ * Friendly display names for each raw mode token produced by `formatMode`.
+ * Status-bar-tooltip-only cosmetics: the banner/boot trace keep the
  * lowercase-hyphenated tokens, so this map lives here rather than in `banner.ts`.
  */
 const MODE_DISPLAY_NAMES: Record<string, string> = {
@@ -38,12 +38,12 @@ function titleCaseToken(token: string): string {
 }
 
 /**
- * Map a raw `formatModeWithWar` string to a capitalized, human-friendly form for
- * the status bar ONLY. Splits on ` + ` so a trailing ` + war` marker is mapped
- * independently, maps each token via `MODE_DISPLAY_NAMES` (falling back to
- * `titleCaseToken` for unknown tokens), then rejoins with ` + `. Examples:
- * `ticket-work` -> `Ticket Work`, `ticket-work + war` -> `Ticket Work + War`,
- * `cd` -> `Project`, `foo-bar` -> `Foo Bar`.
+ * Map a raw `formatMode` string to a capitalized, human-friendly form for the
+ * status-bar tooltip. Splits on ` + ` (retained in case a future caller feeds
+ * this a war-combined string) so a trailing marker would map independently,
+ * maps each token via `MODE_DISPLAY_NAMES` (falling back to `titleCaseToken`
+ * for unknown tokens), then rejoins with ` + `. Examples: `ticket-work` ->
+ * `Ticket Work`, `cd` -> `Project`, `foo-bar` -> `Foo Bar`.
  */
 function prettyMode(raw: string): string {
   return raw
@@ -53,19 +53,12 @@ function prettyMode(raw: string): string {
 }
 
 /**
- * Separator between the instance identity and the mode. Matches the ` · `
- * already used across the settings-panel webview's meta lines, so the status bar
- * reads like the rest of Ghola's UI.
- */
-const LABEL_SEPARATOR = ' · ';
-
-/**
  * The label used when no switchboard identity can be resolved (no workspace
- * folder open, or a folder path with no basename). Preserves the pre-identity
- * label exactly, so the degraded case is the historical one rather than an empty
- * or `undefined` identity.
+ * folder open, or a folder path with no basename). Just `Ghola` — with the
+ * mode no longer in the visible text, a trailing `:` would have nothing left
+ * to introduce.
  */
-const NO_IDENTITY_PREFIX = 'Ghola:';
+const NO_IDENTITY_LABEL = 'Ghola';
 
 /**
  * One sentence explaining where the resolved identity came from, so an operator
@@ -114,16 +107,19 @@ function describeIdentity(identity: TeamIdentity): string {
 
 /**
  * A native VS Code status-bar item showing WHICH Ghola instance this window is
- * (its Team Switchboard identity) plus the current session modality (mode) and
- * whether War Mode is active — e.g. `cmms2@win · Ticket Work + War`. The
- * identity is the part that discriminates: the operator runs 8+ windows across
- * two hosts, and every one of them on the same mode used to render a
- * byte-identical label. It reuses the banner's `formatModeWithWar` so the mode
- * half matches the launch banner and the composer byte-for-byte, takes the
- * War-Mode flag from an injected provider so it agrees with the same
- * `mode.war::enabled` source of truth the composer/launcher gate off, and takes
+ * (its Team Switchboard identity) — e.g. `cmms2@win`. The identity is the part
+ * that discriminates: the operator runs 8+ windows across two hosts, and every
+ * one of them on the same mode used to render a byte-identical label. Takes
  * the identity from `session/team-identity.ts` so it agrees with the name the
  * agent registers in the switchboard roster.
+ *
+ * The session mode (and War Mode) is no longer part of the visible text —
+ * horizontal space in the bar is scarce and the mode is already shown in the
+ * Ghola settings panel — but War Mode still gets a distinct `$(flame)` icon in
+ * place of the org icon, and both the mode and an explicit War Mode statement
+ * live in the tooltip. The War-Mode flag comes from an injected provider so it
+ * agrees with the same `mode.war::enabled` source of truth the
+ * composer/launcher gate off.
  *
  * The item lives on the Left, near the workspace/branch context, and opens the
  * Ghola settings panel on click. Callers wire `refresh()` to loader changes,
@@ -154,7 +150,25 @@ export class ModeStatusBarItem implements vscode.Disposable {
     // context on the left cluster. Higher priority = further left.
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     this.item.command = 'ghola.openSettings';
-    this.item.name = 'Ghola Mode';
+    this.item.name = 'Ghola';
+    this.applyBackground();
+  }
+
+  /**
+   * Give the item an amber pill. VS Code's `StatusBarItem.backgroundColor`
+   * only accepts `statusBarItem.errorBackground` or `statusBarItem.warningBackground`
+   * (arbitrary colors are rejected) — `warningBackground` is the amber one, which
+   * is what the operator means by "yellow". Paired with `warningForeground` so
+   * the text stays legible against the amber fill in both light and dark themes;
+   * VS Code may still override the foreground itself to guarantee contrast, but
+   * setting it explicitly keeps the intent visible here rather than relying on
+   * that fallback. Called from the constructor and from every `refresh()` so the
+   * styling can never be dropped by a future edit that reassigns `text` without
+   * reasserting it.
+   */
+  private applyBackground(): void {
+    this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    this.item.color = new vscode.ThemeColor('statusBarItem.warningForeground');
   }
 
   /**
@@ -171,9 +185,10 @@ export class ModeStatusBarItem implements vscode.Disposable {
       return;
     }
 
+    this.applyBackground();
+
     const enabledModules = this.loader.getEnabled();
     const warMode = this.getWarMode();
-    const modeLabel = formatModeWithWar(enabledModules, warMode);
 
     // `workspaceFolders` is `undefined` with no folder open and may hold several
     // in a multi-root workspace; `resolveTeamIdentity` owns the first-folder
@@ -186,19 +201,27 @@ export class ModeStatusBarItem implements vscode.Disposable {
     );
 
     // War Mode gets a distinct flame icon so it stands out at a glance; other
-    // sessions use the org icon. The `+ war` suffix is already in `modeLabel`.
+    // sessions use the org icon. This is now the ONLY war signal in the visible
+    // text — the `+ War` suffix moved to the tooltip below.
     const icon = warMode ? '$(flame)' : '$(organization)';
-    // Identity FIRST, because that is what distinguishes this window from the
-    // other seven; the mode follows because it is genuinely useful. With no
-    // identity to show, fall back to the historical `Ghola: <mode>` label.
-    const prefix = identity ? `${identity.name}${LABEL_SEPARATOR}` : `${NO_IDENTITY_PREFIX} `;
-    this.item.text = `${icon} ${prefix}${prettyMode(modeLabel)}`;
+    // Identity is the whole visible label now: the mode is genuinely useful but
+    // is already shown in the Ghola settings panel, and the bar has no
+    // horizontal room to spare. With no identity to show, fall back to the
+    // historical `Ghola` label.
+    const label = identity ? identity.name : NO_IDENTITY_LABEL;
+    this.item.text = `${icon} ${label}`;
     const identityNote = identity
       ? describeIdentity(identity)
       : 'Ghola team: unknown — no workspace folder is open, so no Team Switchboard name can be derived.';
-    this.item.tooltip = `${identityNote} Ghola mode: ${formatMode(enabledModules)}. War Mode: ${
-      warMode ? 'on' : 'off'
-    }. Click to open Ghola settings.`;
+    // The mode moved out of the visible text but not out of existence — it and
+    // an explicit War Mode statement live in the tooltip instead. War Mode is
+    // spelled out (not just the flame icon) because it carries a CRITICAL
+    // SAFETY floor forbidding all git writes, and that is not self-explanatory
+    // to someone who has not memorized what the flame means.
+    const warNote = warMode
+      ? 'War Mode: ON — all git writes (commit, push, tag, etc.) are forbidden this session.'
+      : 'War Mode: off.';
+    this.item.tooltip = `${identityNote} Ghola mode: ${prettyMode(formatMode(enabledModules))}. ${warNote} Click to open Ghola settings.`;
     this.item.show();
   }
 
