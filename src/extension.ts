@@ -11,14 +11,14 @@ import { discoverObsidianVault } from './integration/vault-discovery';
 import { startBitbucketBridge } from './integration/bitbucket-bridge-server';
 import type { GetCommentsResult, PostCommentResult } from './integration/bitbucket-bridge-server';
 import { ModuleLoader } from './modules/loader';
-import { ModuleState, migrateCommitPushEnabled } from './modules/state';
+import { ModuleState } from './modules/state';
 import { PromptComposer } from './prompts/composer';
 import { resolveLedgerRoot } from './session/host-path';
 import { SessionLauncher } from './session/launcher';
 import { BUILT_IN_CONFIGURATIONS, DEFAULT_ENABLED_IDS } from './settings-panel/built-in-configurations';
 import { ConfigurationsStore } from './settings-panel/configurations-store';
 import { SettingsPanel } from './settings-panel/host';
-import { SET_CONTEXT_KEYS, WORKSPACE_STATE_KEYS } from './state/keys';
+import { WORKSPACE_STATE_KEYS } from './state/keys';
 import {
   BitbucketTokenEntry,
   BitbucketTokenSummary,
@@ -723,10 +723,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const moduleSettingsEmitter = new vscode.EventEmitter<void>();
   context.subscriptions.push(moduleSettingsEmitter);
 
-  // ───── Ghola identity / mode / War Mode status-bar item ──────────────
+  // ───── Ghola identity / usage status-bar item ────────────────────────
   // A native status-bar indicator showing this window's Team Switchboard
-  // identity plus the current session modality and War-Mode flag (e.g.
-  // `cmms2@win · Ticket Work + War`). War Mode is NOT a
+  // identity plus, when a live Claude Code session has rendered a status line
+  // for this repository, its context size and 5-hour-window usage (e.g.
+  // `cmms2@win │ 238k · 5h 11%`). The session mode and the War-Mode flag live in
+  // the tooltip rather than the visible text; War Mode is NOT a
   // loader-toggleable module — its source of truth is the `mode.war::enabled`
   // module-setting (an Agents configuration), exactly as the launcher/banner/
   // composer read it — so we resolve it from the flattened MODULE_SETTINGS
@@ -750,7 +752,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(modeStatusBar);
   // Refresh on: module enable/disable (loader), module-settings save (covers
   // the mode.war::enabled War-Mode toggle), and the statusBar.enabled config
-  // toggle (show/hide). Initial paint below reflects the boot state.
+  // toggle (show/hide). Initial paint below reflects the boot state. The usage
+  // metrics need no wiring here — the item owns its own state-file watcher and
+  // poll timer (and disposes both), because they change on Claude Code's clock
+  // rather than on any extension-host event.
   context.subscriptions.push(loader.onDidChange(() => modeStatusBar.refresh()));
   context.subscriptions.push(moduleSettingsEmitter.event(() => modeStatusBar.refresh()));
   context.subscriptions.push(
@@ -1231,29 +1236,12 @@ export function activate(context: vscode.ExtensionContext): void {
     logger,
   });
 
-  // ───── Commit-and-Push button ───────────────────────────────────────
-  // The Commit-and-Push action lives in the Source Control view title bar
-  // (see the `scm/title` menu contribution), gated live on the
-  // tool.commit-push module via the `ghola.commitPush.enabled` context key.
-  const syncCommitPushContextKey = (): void => {
-    const enabled = loader.find('tool.commit-push')?.isEnabled === true;
-    void vscode.commands.executeCommand('setContext', SET_CONTEXT_KEYS.COMMIT_PUSH_ENABLED, enabled);
-  };
-  syncCommitPushContextKey();
-  context.subscriptions.push(loader.onDidChange(syncCommitPushContextKey));
-
   // Initial discovery (best-effort). After discover() resolves we apply any
   // user-flagged default configuration so the workspace boots into the same
   // preset they last marked as default. The dev-mode openSettings call below
   // intentionally runs after this chain so the panel renders with the applied
   // configuration in place.
-  // CHAINED ahead of discover(), not fired independently: the backfill rewrites
-  // the same `ghola.enabledModules` workspaceState key that discover() reads at
-  // its start, so racing them would let discover() snapshot the pre-migration
-  // list and leave the button hidden until the next reload. The migration never
-  // throws, so the chain always reaches discover().
-  void migrateCommitPushEnabled(moduleState, context.workspaceState, logger)
-    .then(() => loader.discover(resolveModulesDirFn(context)()))
+  void loader.discover(resolveModulesDirFn(context)())
     .then(async (handles) => {
     logger.appendLine(`[ghola] discovered ${handles.length} module(s)`);
     await seedBuiltInConfigurations(context, configurationsStore, logger);

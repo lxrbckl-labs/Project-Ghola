@@ -52,11 +52,6 @@
       {
         "command": "ghola.updateExtension",
         "title": "Ghola: Update Extension"
-      },
-      {
-        "command": "ghola.commitAndPush",
-        "title": "Ghola: Commit and Push Staged",
-        "icon": "$(wand)"
       }
     ],
     "configuration": {
@@ -134,7 +129,7 @@
         "ghola.remoteControlSessionName": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Name this session registers with Claude Code's Remote Control. Ghola ALWAYS launches with Remote Control (`--remote-control <name>`), so you can steer the running local session from your phone or from claude.ai/code; it does not conflict with `--dangerously-skip-permissions`. There is no toggle — the flag is appended to every session launch, and it is accepted and non-fatal even on a machine where Remote Control cannot actually come up. The one exception is the one-shot Commit-and-Push dispatch, deliberately excluded because that terminal sends a single prompt and exits, so a steerable remote session would have nothing to steer. Ghola always passes an explicit name because `--remote-control` takes an OPTIONAL value, and an omitted name would swallow the Initiation Command as the session name.\n\nLeave EMPTY to derive the name from the current git branch of the session's working directory — with several sessions running at once the branch is what actually tells them apart, whereas Claude Code's own `--remote-control-session-name-prefix` defaults to the hostname and makes every session on one machine look alike. A non-empty value here overrides the derived name, and it is the answer when two sessions are running on the SAME branch and would otherwise register under one name.\n\nEither way the name is normalized before it is passed: whitespace and path separators become `-`, leading dashes are dropped (a name starting with `-` would be parsed as another option), and it is capped at 80 characters. If normalization leaves nothing, Ghola falls back to the repository folder name and then to `ghola-session`, so the name is never empty — an empty name would let Claude Code bind the Initiation Command as the session name and the session would boot un-initiated.\n\n**Ghola pre-flights what it can see** and warns without ever blocking the launch: Remote Control is disabled outright when `DISABLE_TELEMETRY`, `DO_NOT_TRACK`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, or `DISABLE_GROWTHBOOK` is set in the session's environment, or when `ANTHROPIC_BASE_URL` points at a non-Anthropic host. Each warning names the variable and the layer it is set in — the environment VS Code started in, `terminal.integrated.env.<platform>`, or a `VAR=` prefix on the selected CLI alias — because that is the only actionable part; the session launches regardless.\n\n**Not observable from here, so Ghola cannot check it:** Remote Control also requires a Pro, Max, Team, or Enterprise plan authenticated through OAuth (an `ANTHROPIC_API_KEY` will not do) and, on Team and Enterprise, the organization-level Remote Control toggle. If none of Ghola's warnings fire and Remote Control still does not come up, it is one of those."
+          "markdownDescription": "Name this session registers with Claude Code's Remote Control. Ghola ALWAYS launches with Remote Control (`--remote-control <name>`), so you can steer the running local session from your phone or from claude.ai/code; it does not conflict with `--dangerously-skip-permissions`. There is no toggle — the flag is appended to every session launch, and it is accepted and non-fatal even on a machine where Remote Control cannot actually come up. Ghola always passes an explicit name because `--remote-control` takes an OPTIONAL value, and an omitted name would swallow the Initiation Command as the session name.\n\nLeave EMPTY to derive the name from the current git branch of the session's working directory — with several sessions running at once the branch is what actually tells them apart, whereas Claude Code's own `--remote-control-session-name-prefix` defaults to the hostname and makes every session on one machine look alike. A non-empty value here overrides the derived name, and it is the answer when two sessions are running on the SAME branch and would otherwise register under one name.\n\nEither way the name is normalized before it is passed: whitespace and path separators become `-`, leading dashes are dropped (a name starting with `-` would be parsed as another option), and it is capped at 80 characters. If normalization leaves nothing, Ghola falls back to the repository folder name and then to `ghola-session`, so the name is never empty — an empty name would let Claude Code bind the Initiation Command as the session name and the session would boot un-initiated.\n\n**Ghola pre-flights what it can see** and warns without ever blocking the launch: Remote Control is disabled outright when `DISABLE_TELEMETRY`, `DO_NOT_TRACK`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, or `DISABLE_GROWTHBOOK` is set in the session's environment, or when `ANTHROPIC_BASE_URL` points at a non-Anthropic host. Each warning names the variable and the layer it is set in — the environment VS Code started in, `terminal.integrated.env.<platform>`, or a `VAR=` prefix on the selected CLI alias — because that is the only actionable part; the session launches regardless.\n\n**Not observable from here, so Ghola cannot check it:** Remote Control also requires a Pro, Max, Team, or Enterprise plan authenticated through OAuth (an `ANTHROPIC_API_KEY` will not do) and, on Team and Enterprise, the organization-level Remote Control toggle. If none of Ghola's warnings fire and Remote Control still does not come up, it is one of those."
         },
         "ghola.swe.performanceCores": {
           "type": "number",
@@ -215,15 +210,6 @@
           "description": "Show the Ghola status-bar item, which leads with this window's Team Switchboard identity and follows it with the session mode — e.g. 'cmms2@win · Ticket Work + War', with a flame icon in place of the org icon while War Mode is on. The identity is derived from the git repository root at or above the first open workspace folder, with a leading 'Project-' stripped and an environment qualifier appended on every host except WSL, which holds the unqualified name ('@win', '@mac'); the Team Switchboard module's 'teamName' setting overrides it verbatim. With no workspace folder open the item falls back to its older 'Ghola: <mode>' label, and clicking it opens Ghola's settings panel."
         }
       }
-    },
-    "menus": {
-      "scm/title": [
-        {
-          "command": "ghola.commitAndPush",
-          "when": "ghola.commitPush.enabled",
-          "group": "navigation"
-        }
-      ]
     }
   },
   "scripts": {

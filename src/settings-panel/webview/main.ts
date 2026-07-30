@@ -166,16 +166,6 @@ interface UIState {
   sessionCommand: string;
   /** Value of ghola.permissionMode VS Code configuration (permission mode Claude Code launches in). */
   permissionMode: string;
-  /**
-   * Value of ghola.remoteControlSessionName VS Code configuration — the Remote
-   * Control session-name OVERRIDE, verbatim. Empty means "derive it from the git
-   * branch"; the derivation lives in the launcher, so this is never a resolved
-   * name and the input renders empty (with a placeholder) in that case.
-   *
-   * There is no enablement counterpart: Remote Control is mandatory, so the name
-   * is the only piece of it the panel has anything to say about.
-   */
-  remoteControlSessionName: string;
   /** Current SWE agent counts and model preferences pulled from `ghola.swe.*` VS Code configuration. */
   sweConfig: {
     performanceCores: number;
@@ -386,7 +376,6 @@ const state: UIState = {
   cliCommand: 'claude',
   sessionCommand: 'initiate',
   permissionMode: 'bypassPermissions',
-  remoteControlSessionName: '',
   sweConfig: { performanceCores: 2, efficiencyCores: 1, performanceCoresModel: 'opus', efficiencyCoresModel: 'sonnet' },
   qaConfig: { count: 1, model: 'sonnet' },
   configurations: [],
@@ -581,7 +570,6 @@ function handleMessage(msg: HostToWebviewMessage): void {
       state.cliCommand = msg.cliCommand ?? 'claude';
       state.sessionCommand = msg.sessionCommand ?? 'initiate';
       state.permissionMode = msg.permissionMode ?? 'bypassPermissions';
-      state.remoteControlSessionName = msg.remoteControlSessionName ?? '';
       if (msg.swe) {
         state.sweConfig = {
           performanceCores: msg.swe.performanceCores,
@@ -1061,7 +1049,7 @@ function renderGeneral(wrapper: HTMLElement): void {
   wrapper.appendChild(textEl('h1', 'Session'));
   wrapper.appendChild(textEl('p', 'Configure the command that launches your Ghola agent team, then start a session.', 'subtitle'));
 
-  // Launch row: [CLI Alias] [Initiation Command] [Permission Mode] [Remote Control Name] [Configuration] [Play]
+  // Launch row: [CLI Alias] [Initiation Command] [Permission Mode] [Configuration] [Play]
   // Package sits at the far left, Play at the far right, with the
   // label-above-input fields between them. Built first, then appended to the
   // wrapper directly under the Session description (above the alias editor).
@@ -1103,48 +1091,15 @@ function renderGeneral(wrapper: HTMLElement): void {
   permissionPicker.title = 'The permission mode Claude Code launches in for this session.';
   permissionField.appendChild(permissionPicker);
 
-  // Column 4 — Remote Control session name (ghola.remoteControlSessionName),
-  // persisted through the same generic `updateConfiguration` message the
-  // Initiation Command and permission-mode picker use.
+  // There is deliberately NO Remote Control session-name column here. Remote
+  // Control is mandatory and its name is now DERIVED, not configurable: the
+  // launcher resolves it at launch time from the terminal's actual working
+  // directory (git branch -> repo folder name -> static fallback). The old
+  // override input was removed because the panel could only ever have shown the
+  // raw override — never the resolved name — so it offered a rename nobody wanted
+  // at the cost of a permanently sticky, machine-wide value.
   //
-  // There is NO enablement switch here any more. Remote Control is mandatory, so
-  // the launcher appends `--remote-control` on every session launch and the name
-  // is the only part of it left to configure. The input was previously revealed
-  // only while that switch was on; with the switch gone there is nothing left to
-  // reveal it, so it is unconditionally visible. That also makes it a plain
-  // sibling of Column 2 — same `.session-launch-field` column with no inline
-  // flex/row overrides, and the same `.setting-input.session-command-input` for
-  // border-radius, padding, height, and `font: inherit`.
-  //
-  // Still left EMPTY rather than pre-filled with a derived name: the derivation
-  // (git branch -> repo folder -> fallback) happens in the launcher at launch
-  // time against the terminal's actual working directory, so anything shown here
-  // would be a guess. The placeholder names the default instead.
-  const remoteField = el('div', { class: 'session-launch-field' });
-  const remoteNameInp = el('input', {
-    class: 'setting-input session-command-input',
-    'aria-label': 'Remote Control session name',
-  }) as HTMLInputElement;
-  remoteNameInp.type = 'text';
-  remoteNameInp.placeholder = 'git branch';
-  // Tooltip on the control itself, matching the alias picker / Initiation Command
-  // / permission picker above — Ghola's standard hover-help mechanism.
-  remoteNameInp.title =
-    'Remote Control session name, so you can pick this session out from your phone or claude.ai/code. Defaults to the current git branch; type a name here to override it (needed when two sessions share a branch).';
-  remoteNameInp.value = state.remoteControlSessionName;
-  remoteNameInp.addEventListener('blur', () => {
-    if (remoteNameInp.value === state.remoteControlSessionName) return;
-    state.remoteControlSessionName = remoteNameInp.value;
-    vscode.postMessage({
-      type: 'updateConfiguration',
-      section: 'ghola',
-      key: 'remoteControlSessionName',
-      value: remoteNameInp.value,
-    });
-  });
-  remoteField.appendChild(remoteNameInp);
-
-  // Column 5 — Configuration dropdown
+  // Column 4 — Configuration dropdown
   const configField = el('div', { class: 'session-launch-field session-launch-field--config' });
   const configDropdown = renderConfigDropdown();
   configDropdown.title = 'The module configuration preset applied to this session.';
@@ -1170,7 +1125,6 @@ function renderGeneral(wrapper: HTMLElement): void {
   launchRow.appendChild(aliasField);
   launchRow.appendChild(sessionField);
   launchRow.appendChild(permissionField);
-  launchRow.appendChild(remoteField);
   launchRow.appendChild(configField);
   launchRow.appendChild(sessionBtn);
 

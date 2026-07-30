@@ -16,18 +16,6 @@ import type { SettingsField, SettingsSchema } from '../manifest/types';
 const GHOLA_MODE_ID = 'mode.war';
 
 /**
- * `tool.commit-push` contributes a single TPM-targeted fragment (`commit-push.md`)
- * that is one-shot BUTTON-dispatch text ("You were launched by the ... button ...
- * You are not TPM"). The Explorer "Commit and Push" button reads that file DIRECTLY
- * (see `src/commands/commitAndPush.ts`, which builds a self-contained prompt pointing
- * the dispatched agent at the module's `commit-push.md`), NOT via the composed TPM
- * manifest. Injecting it into the long-running TPM session would therefore be
- * self-contradictory dead weight, so it is excluded from the generic fragment loop
- * here. The module stays discoverable so the button can still resolve its file path.
- */
-const COMMIT_PUSH_ID = 'tool.commit-push';
-
-/**
  * Stateless composer: pure function from (agentId, settings) → composed prompt string.
  *
  * Emits `[core] + [preamble] + [Session Manifest block]`. The core and preamble
@@ -110,10 +98,6 @@ export class PromptComposer {
       // mode.war is gated by the `mode.war::enabled` setting, not loader
       // state — injected separately below, never by this generic loop.
       if (id === GHOLA_MODE_ID) continue;
-      // tool.commit-push's fragment is one-shot button-dispatch text read
-      // directly by the Commit-and-Push button, not by the persistent TPM
-      // session, never emit it into any composed manifest (see COMMIT_PUSH_ID).
-      if (id === COMMIT_PUSH_ID) continue;
 
       const fragments = handle.manifest.contributes?.promptFragments ?? [];
       // `target: "all"` fans out to every agent — include those alongside the

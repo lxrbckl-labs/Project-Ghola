@@ -824,10 +824,10 @@ export class SettingsPanel implements vscode.Disposable {
     const cliCommand = cfg.get<string>('cliCommand', 'claude');
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate');
     const permissionMode = cfg.get<string>('permissionMode', 'bypassPermissions');
-    // No `remoteControl` companion: Remote Control is mandatory, so the launcher
-    // appends `--remote-control` unconditionally and there is no enablement state
-    // to ship to the panel — only the session-name override.
-    const remoteControlSessionName = cfg.get<string>('remoteControlSessionName', '');
+    // Nothing Remote-Control-shaped is shipped to the panel: Remote Control is
+    // mandatory (the launcher appends `--remote-control` unconditionally) and its
+    // session name is derived from the git branch at launch time, so there is
+    // neither an enablement flag nor a name for the panel to render.
     const swe = {
       performanceCores: cfg.get<number>('swe.performanceCores', 2),
       efficiencyCores: cfg.get<number>('swe.efficiencyCores', 1),
@@ -847,7 +847,6 @@ export class SettingsPanel implements vscode.Disposable {
       cliCommand,
       sessionCommand,
       permissionMode,
-      remoteControlSessionName,
       swe,
       qa,
       aliases,

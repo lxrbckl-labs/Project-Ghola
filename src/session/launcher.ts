@@ -14,6 +14,8 @@ import {
 } from './alias-sync';
 import { resolveLedgerRoot } from './host-path';
 import { newSessionId, resolveAgentPromptFilePath } from './prompt-file';
+import { STATE_KEY_ENV_VAR, resolveStateKey } from './statusline-state';
+import { resolveTeamIdentity } from './team-identity';
 
 /**
  * Milliseconds to wait between launching the CLI binary and sending the
@@ -42,9 +44,9 @@ const AUTO_CD_INTO_REPO_KEY = 'autoCdIntoRepo';
 
 /**
  * Last link in the Remote Control session-name chain. Reached only when every
- * earlier candidate (the operator's override, the git branch, the repo folder
- * name) normalizes to the empty string — which is exactly why it exists: the
- * name handed to `--remote-control` must NEVER be empty. See
+ * earlier candidate (the `Project-`-stripped repository name, the git branch,
+ * the repo folder name) normalizes to the empty string — which is exactly why it
+ * exists: the name handed to `--remote-control` must NEVER be empty. See
  * `resolveRemoteControlSessionName`.
  */
 const REMOTE_CONTROL_FALLBACK_NAME = 'ghola-session';
@@ -348,7 +350,15 @@ export class SessionLauncher {
           `[session] Remote Control SKIPPED: --remote-control was not appended because ${claudeCli.reason}. Ghola resolved that binary from the alias registry, so this is positive evidence rather than a failure to resolve — re-registering the alias cannot change the answer. If "${claudeCli.resolvedNonClaudeBinary}" is in fact a wrapper that execs Claude Code, point the alias at the "claude" binary directly (or pass --remote-control from inside the wrapper) to get Remote Control back.`,
         );
       } else {
-        remoteControlName = this.resolveRemoteControlSessionName(cfg, effectiveDir, branch);
+        // `workspaceFolders` is `undefined` with no folder open and may hold
+        // several in a multi-root workspace; the first-folder decision belongs to
+        // `resolveTeamIdentity`, which is the same collapse the status-bar pill
+        // makes — so the two cannot disagree about which folder named the session.
+        remoteControlName = this.resolveRemoteControlSessionName(
+          effectiveDir,
+          branch,
+          (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+        );
         if (claudeCli.known) {
           this.logger?.appendLine(
             `[session] Remote Control: --remote-control ${remoteControlName} (identified as Claude Code via ${claudeCli.via})`,
@@ -413,6 +423,35 @@ export class SessionLauncher {
       QA_AGENT_COUNT: String(qaCount),
       QA_MODEL: qaModel,
     };
+    // Per-session statusline state key. The statusline renderers write their usage
+    // snapshot to `~/.ghola/statusline/state/<GHOLA_STATE_KEY>.json`, and the
+    // status bar in THIS window reads that same file — so the segment can only ever
+    // show this session's numbers, rather than whichever of the operator's 8+
+    // concurrent sessions rendered most recently.
+    //
+    // THE RENDERERS CONSUME THIS VERBATIM AND MUST NOT RE-DERIVE IT WHEN PRESENT.
+    // That is the entire reason it is exported instead of being left to the
+    // renderer, and it is not defensive duplication — the two derivations provably
+    // disagree in a case this fleet hits. `resolveTerminalCwd` below can open the
+    // terminal in the WSL-NATIVE CLONE of a `/mnt/c/...` workspace when
+    // `tool.fastpath-check` is enabled, so the renderer's `workspace.project_dir`
+    // walks up to a DIFFERENT git root than the workspace folder does, and the
+    // writer and reader would key on two different paths. Exporting the key makes
+    // the agreement hold BY CONSTRUCTION; the renderer's own walk survives only as
+    // the fallback for a session not launched by Ghola.
+    //
+    // Keyed on the WORKSPACE FOLDER's git root — deliberately not `effectiveDir`,
+    // which is the fast-path-translated terminal cwd. The status-bar reader lives in
+    // the extension host and has only the workspace folder, so the workspace folder
+    // is what both sides must agree on. This is the same input `resolveTeamIdentity`
+    // takes, via the same `findRepoRoot` walk, so the state key and the status bar's
+    // team name can never be derived from two different roots.
+    //
+    // Omitted entirely when no workspace folder is open: there is no repository to
+    // key on, and a renderer with no `GHOLA_STATE_KEY` falls back to its own walk.
+    const stateKey = resolveStateKey(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+    if (stateKey !== undefined) env[STATE_KEY_ENV_VAR] = stateKey;
+
     // War Mode ledger root, resolved GLOBALLY through the SHARED resolver in
     // `host-path.ts` — the same one the settings panel's War Room reader and the
     // activation-time ledger watchers use, so writer and watcher can never
@@ -913,13 +952,21 @@ export class SessionLauncher {
    *
    * The chain, first non-empty normalized candidate wins:
    *
-   *   1. `ghola.remoteControlSessionName` — an explicit override always wins.
+   *   1. The `Project-`-STRIPPED REPOSITORY NAME, and only when the repository
+   *      really carries that prefix — see `resolveProjectPrefixedName`. It sits
+   *      ahead of the branch because the branch is the WORSE discriminator for
+   *      exactly these repos: `Project-Ghola`, `Project-Mandrake`,
+   *      `Project-Merkle`, `Project-Steersman` and `JiraLinker` are all on `main`,
+   *      so a branch-named session list shows four identical `main` entries. A
+   *      repo without the prefix contributes nothing here and keeps HEAD's
+   *      behavior exactly — the `cmms0`..`cmms8` fleet is each on its own feature
+   *      branch, which is already unique and already the more informative name.
    *   2. The current git BRANCH, reused from the value already resolved for
    *      `GHOLA_BRANCH` rather than shelling out to git a second time. This is
-   *      the default because a branch is what actually distinguishes concurrent
-   *      sessions: Claude Code's own `--remote-control-session-name-prefix`
-   *      defaults to the HOSTNAME, which makes eight sessions on one machine
-   *      indistinguishable from a phone.
+   *      the default for everything else because a branch is what actually
+   *      distinguishes concurrent sessions: Claude Code's own
+   *      `--remote-control-session-name-prefix` defaults to the HOSTNAME, which
+   *      makes eight sessions on one machine indistinguishable from a phone.
    *   3. The effective working directory's BASENAME — the repo folder name. This
    *      is what covers the two explicit edge cases: a DETACHED HEAD (where
    *      `git rev-parse --abbrev-ref HEAD` prints the literal `HEAD`, which names
@@ -934,12 +981,12 @@ export class SessionLauncher {
    * signature is total without relying on that argument.
    */
   private resolveRemoteControlSessionName(
-    cfg: vscode.WorkspaceConfiguration,
     dir: string | undefined,
     branch: string,
+    workspaceFolderPaths: readonly string[],
   ): string {
     const candidates = [
-      cfg.get<string>('remoteControlSessionName', ''),
+      this.resolveProjectPrefixedName(workspaceFolderPaths),
       branch === 'HEAD' ? '' : branch,
       dir ? path.basename(dir) : '',
       REMOTE_CONTROL_FALLBACK_NAME,
@@ -949,6 +996,51 @@ export class SessionLauncher {
       if (normalized !== '') return normalized;
     }
     return REMOTE_CONTROL_FALLBACK_NAME;
+  }
+
+  /**
+   * The repository's name with a leading `Project-` stripped — `Project-Ghola` ->
+   * `Ghola`, `Project-Mandrake` -> `Mandrake` — or `''` when the repository does
+   * not carry that prefix, which is how it declines to contribute a candidate and
+   * lets `resolveRemoteControlSessionName` fall through to the branch.
+   *
+   * THE STRIP IS NOT REIMPLEMENTED HERE, DELIBERATELY. It is the same rule that
+   * names the Team Switchboard roster row and the VS Code status-bar pill, and
+   * `team-identity.ts`'s header warns against uncoordinated copies of a shared
+   * derivation rule for a concrete reason: a second copy that drifted would make
+   * the pill and the Remote Control session name disagree about the same repo, and
+   * that disagreement is invisible until it confuses somebody. So this reuses
+   * `resolveTeamIdentity` and adds no prefix test of its own.
+   *
+   * `resolveTeamIdentity` is the entry point rather than `deriveTeamName` because
+   * it is the only exported one that also reports the PRE-strip `basename`.
+   * `deriveTeamName` returns the basename UNCHANGED when the prefix is absent
+   * (`cmms3` -> `cmms3`), so on its own it cannot answer "did a strip actually
+   * happen" — and answering that by re-testing for `Project-` here is precisely
+   * the second copy the paragraph above forbids. `teamName !== basename` is the
+   * strip's own report of itself.
+   *
+   * THE BARE NAME, NEVER THE QUALIFIED ONE. `identity.name` is environment-
+   * qualified off WSL (`Ghola@win`); `identity.teamName` is the unqualified strip
+   * result, which is what the operator specified (`Project-Ghola => Ghola`).
+   *
+   * THE `teamName` OVERRIDE IS DELIBERATELY NOT CONSULTED — no `teamNameOverride`
+   * is passed, so `resolveTeamIdentity` derives. That setting lives in VS Code's
+   * `globalState`, i.e. it is MACHINE-GLOBAL and shared by every window on the
+   * host, so honoring it would give every concurrent session on this machine the
+   * same Remote Control name — reintroducing exactly the collision this candidate
+   * exists to fix.
+   *
+   * Empty and degenerate names cannot escape: a basename of exactly `Project-`
+   * strips to nothing, and `stripProjectPrefix` refuses that by keeping the
+   * unstripped basename, so `teamName === basename` and this returns `''`.
+   * `Project--` strips to `-`, which `normalizeRemoteControlName` reduces to `''`
+   * — either way the chain advances to the branch rather than emitting garbage.
+   */
+  private resolveProjectPrefixedName(workspaceFolderPaths: readonly string[]): string {
+    const identity = resolveTeamIdentity(workspaceFolderPaths);
+    if (identity === undefined) return '';
+    return identity.teamName === identity.basename ? '' : identity.teamName;
   }
 
   /**

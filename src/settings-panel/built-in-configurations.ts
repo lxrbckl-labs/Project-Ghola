@@ -46,7 +46,7 @@ const BASELINE_IDS: string[] = [
  * intentionally kept identical to the "Project" preset so a new install
  * loads a coherent set that matches a visible preset.
  */
-export const DEFAULT_ENABLED_IDS: string[] = [...BASELINE_IDS, 'mode.cd', 'tool.team-switchboard', 'tool.commit-push'];
+export const DEFAULT_ENABLED_IDS: string[] = [...BASELINE_IDS, 'mode.cd', 'tool.team-switchboard'];
 
 /**
  * The four SWT session-mode presets, seeded in array order. All carry
@@ -64,7 +64,6 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
       'tool.ac-to-testing',
       'tool.playwright',
       'tool.cross-ticket-isolation',
-      'tool.commit-push',
     ],
     settings: {
       'tool.lenses': { autoKickReviewOnColleagueBranch: true, autoKickPlanningOnFreshBranch: true },
@@ -199,7 +198,7 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
   },
   {
     name: 'Self Upgrade',
-    enabledIds: [...BASELINE_IDS, 'tool.self-upgrade', 'tool.github', 'tool.commit-push'],
+    enabledIds: [...BASELINE_IDS, 'tool.self-upgrade', 'tool.github'],
     // The composer emits a keyValue override VERBATIM (see composer.ts
     // renderParameters / projectValueForAgent): it iterates only the entries
     // present in the override and never merges the module's manifest default.

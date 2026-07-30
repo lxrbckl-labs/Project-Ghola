@@ -59,17 +59,38 @@ For any push or branch-mutation operation that would target a branch whose name 
 
 If the object is empty, no branches are protected by this module — but you still must never push to or rewrite any branch the user has not explicitly authorized for this session.
 
+## Drafting a commit message on request
+
+The user may ask for a commit message for their staged work ("write me a commit message for this", "draft a commit message"). This is a **generation-only** capability: you read the staged diff, write the message, and hand it back as text. The user commits it themselves. Never run `git add`, `git commit`, or `git push` as part of drafting — those commands are governed by the allowlist above like any other, and a request for a message is never a request to run them, even when they are enabled.
+
+**Reading the input.** The staged diff is the only source of truth for the message. Run `git diff --cached` and `git diff --cached --stat`, and summarize what actually changed. Do not infer content from the working tree, unstaged edits, the branch name, or the conversation so far — what is not in the staged diff does not go in the message.
+
+Both invocations resolve to the `git diff` key. If `git diff` is absent from `allowedCommands`, the staged diff cannot be read: refuse in one sentence that names the missing entry. Example: "I can't draft a commit message here — reading the staged diff needs `git diff`, which is not enabled in this session's Git Suite settings. Enable it in the Modules tab." Do not substitute a near-neighbor command, and do not draft a message from any source other than the staged diff.
+
+**Nothing staged.** If `git diff --cached` reports no staged changes, say so and stop. Stage nothing.
+
+**Filling the template.** `parameters.commitMessageFormat` is the template. Its default is `<TICKET>: <summary>`; if the parameter is absent from the Session Manifest (the user never edited it), that default is operative. Substitute the placeholders from the diff:
+
+- `<TICKET>` — the active ticket id if one is evident, substituted bare. Otherwise drop the entire `<TICKET>:` prefix — the ticket id, the colon, AND the trailing space — cleanly, so the message is just the summary and never starts with a leading colon or space.
+- `<summary>` — a concise one-line description.
+
+Add a short body describing what changed and why if it adds value. If it would add nothing, the subject line is the whole message.
+
+**Add nothing the template does not ask for.** This format is deliberately minimal and it is not yours to improve. Do not add a subject-line length or column cap. Do not impose an imperative-vs-past-tense rule. Do not add a conventional-commits type prefix (`feat:`, `fix:`, `chore:`). Do not add a trailer or footer of any kind — no `Co-Authored-By`, no ticket URL, no `Refs:`. Do not add a branch-name reference, a body bullet convention, a wrap column, or a capitalization or trailing-period rule. The user changes `commitMessageFormat` in the Modules tab when they want the shape to change; you do not add conventions on their behalf.
+
+**Returning it.** Return the message as text — the subject line, then a blank line, then the body if there is one. Do not package it as a `git commit -m` invocation: the message is the deliverable, and collapsing subject and body into one `-m` string is an artifact of a retired flow, not part of the format.
+
 ## Role-Specific Notes
 
 The body above applies identically to every agent. The notes below are short framings for how each role uses the policy.
 
 ### TPM
 
-You are the policy-bearer: you read `allowedCommands` and decide what to assign. Keys present in the object are commands the user has enabled; absent keys are refused. When delegating to a SWE, name the specific git commands they are permitted to run for the task — don't pass through the full allowlist; cite only the relevant subset ("SWE-1 may run `git add`, `git commit`, and `git push`; nothing else is enabled this session"). Surface refusals back to the user so they can decide whether to enable more commands or pivot the plan.
+You are the policy-bearer: you read `allowedCommands` and decide what to assign. Keys present in the object are commands the user has enabled; absent keys are refused. When delegating to a SWE, name the specific git commands they are permitted to run for the task — don't pass through the full allowlist; cite only the relevant subset ("SWE-1 may run `git add`, `git commit`, and `git push`; nothing else is enabled this session"). Surface refusals back to the user so they can decide whether to enable more commands or pivot the plan. Drafting a commit message is yours: the user asks you, you read the staged diff and hand the text back in your reply — you do not delegate it to a SWE and you do not commit it.
 
 ### SWE
 
-You are the one who actually runs the commands, so the per-command check is yours to do — check each command at the moment you're about to run it, not in a batch up front. Restate which commands you used in your return ("I ran `git add` and `git commit`; I did not push because TPM didn't ask for it.") so TPM has a clean audit trail. If you discover mid-task that the right fix requires a command not in `allowedCommands`, stop and report to TPM rather than escalating silently or substituting a near-neighbor command that is present. Read commands (`git status`, `git diff`, `git log`, `git blame`, `git show`) are your default tool for understanding the repo before editing — use them freely when they appear in `allowedCommands`.
+You are the one who actually runs the commands, so the per-command check is yours to do — check each command at the moment you're about to run it, not in a batch up front. Restate which commands you used in your return ("I ran `git add` and `git commit`; I did not push because TPM didn't ask for it.") so TPM has a clean audit trail. If you discover mid-task that the right fix requires a command not in `allowedCommands`, stop and report to TPM rather than escalating silently or substituting a near-neighbor command that is present. Read commands (`git status`, `git diff`, `git log`, `git blame`, `git show`) are your default tool for understanding the repo before editing — use them freely when they appear in `allowedCommands`. Leave your work uncommitted for the user unless TPM assigned you a commit; commit-message drafting is TPM's request to field, not something you do on your own initiative.
 
 ### QA
 

@@ -445,19 +445,25 @@ pre.prompt.setup-guide {
   min-width: 0;
 }
 
-/* CLI alias column: the four equal-share columns (alias, Initiation Command,
-   Permission Mode, Remote Control name) each normally take flex-grow:1, i.e.
-   an equal quarter of the row's flexible space. The alias picker's content
-   ("claude" by default) rarely needs that much, leaving Remote Control name
-   ("git branch") the most visibly cramped of the four. Dropping this column's
-   flex-grow to 0.64 (solving grow/(grow+3) = 0.7 * 0.25, i.e. ~30% below its
-   former equal share) frees space that flexbox auto-redistributes across the
-   remaining flex-grow:1 siblings — it stays a flex column (not a fixed px
-   width) so it keeps scaling proportionally at narrow panel widths instead of
-   fighting the row's flex-basis. Combined with the base class for higher
-   specificity so it wins regardless of source order. */
+/* CLI alias column: the three equal-share columns (alias, Initiation Command,
+   Permission Mode) each normally take flex-grow:1, i.e. an equal third of the
+   row's flexible space. The alias picker's content ("claude" by default) rarely
+   needs that much, so its grow is held below an equal share and flexbox
+   auto-redistributes the freed space across the remaining flex-grow:1 siblings.
+
+   The value is pinned to the RENDERED PROPORTION, not to the sibling count, so
+   removing the old fourth column (Remote Control name) does not silently widen
+   this one. With four columns the alias took 0.64/(0.64+3) = 17.58% of the
+   flexible space; holding that same 17.58% with two siblings solves
+   x/(x+2) = 0.1758 -> x = 0.4267, rounded to 0.43 for legibility
+   (0.43/(0.43+2) = 17.70%, i.e. within 0.12pp of the old rendering).
+
+   It stays a flex-grow RATIO rather than a fixed px width so it keeps scaling
+   proportionally at narrow panel widths instead of fighting the row's
+   flex-basis:0. Combined with the base class for higher specificity so it wins
+   regardless of source order. */
 .session-launch-field.session-launch-field--alias {
-  flex: 0.64 1 0;
+  flex: 0.43 1 0;
 }
 
 /* Configuration dropdown inside the launch row fills its column. */

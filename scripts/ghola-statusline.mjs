@@ -34,6 +34,12 @@
 //     to nothing at all in the (unreachable) worst case — and always exits 0.
 //   - Mirrors the usage snapshot to ~/.ghola/usage-state.json for the
 //     `tool.usage-observer` module (same location + shape as the .sh).
+//   - ALSO mirrors it to the per-session, KEYED file
+//     ~/.ghola/statusline/state/<key>.json, which the VS Code status bar reads.
+//     The unkeyed file above is a single path shared by every concurrent
+//     session, so it cannot be attributed to a window; the keyed one can. Both
+//     writes happen, independently — see `writeKeyedState` for the key rules and
+//     `src/session/statusline-state.ts` for the normative spec.
 //
 // Portability: the VERSION path is derived from THIS FILE's own location, never
 // from the cwd the harness runs us in, so one copy works from the repo, from the
@@ -47,6 +53,7 @@
 //   Windows: { "statusLine": { "type": "command",
 //              "command": "node C:/Users/<user>/.ghola/statusline/ghola-statusline.mjs" } }
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -185,6 +192,183 @@ function writeUsageState(tokens, contextPct, fiveHourPct) {
   }
 }
 
+// ── Per-session state key ───────────────────────────────────────────────────
+// THE SAME ALGORITHM LIVES IN THREE PLACES: here, in the `python3` block inside
+// `scripts/ghola-statusline.sh`, and in `src/session/statusline-state.ts`, which
+// is the NORMATIVE spec and carries the full reasoning for every step. Drift
+// fails SILENTLY — the writer writes one path, the status bar reads another, and
+// the segment simply never appears — so nothing below may be "improved" without
+// changing the other two in the same commit. The rules are deliberately chosen to
+// be trivially reproducible in all three languages: an explicit `[A-Z]` case fold
+// rather than `toLowerCase()`/`.lower()` (whose Unicode behavior differs between
+// them), a character class rather than any locale-aware transform, and
+// sha256/hex, which all three have in their standard library.
+const STATE_KEY_ENV_VAR = 'GHOLA_STATE_KEY';
+const STATE_KEY_HASH_LENGTH = 8;
+const STATE_KEY_SAFE_CHARS = /[^a-z0-9._-]/g;
+const STATE_KEY_BODY_MAX_LENGTH = 100;
+const STATE_KEY_EMPTY_BODY = 'root';
+/** Belt-and-braces bound on the root walk; `path.dirname` already terminates. */
+const MAX_ROOT_WALK_STEPS = 64;
+
+/**
+ * The exact string that gets hashed and folded. Steps, IN ORDER: re-slash, drop
+ * trailing `/` runs (an all-separator input survives unchanged rather than
+ * emptying), then ASCII-ONLY case folding. NTFS is case-insensitive and the two
+ * sides of this contract can each see a different casing of the same directory,
+ * so case is folded; it is folded via `[A-Z]` rather than `toLowerCase()` because
+ * that is the only spelling the three implementations agree on for non-ASCII.
+ */
+function normalizeStateKeyPath(absolutePath) {
+  const slashed = absolutePath.replace(/\\/g, '/');
+  const trimmed = slashed.replace(/\/+$/, '');
+  const withRoot = trimmed.length > 0 ? trimmed : slashed;
+  return withRoot.replace(/[A-Z]/g, (character) => character.toLowerCase());
+}
+
+/**
+ * The readable half of the key. Fold everything outside `[a-z0-9._-]` to `-`,
+ * collapse runs, keep the LAST 100 characters (the tail is the recognizable
+ * part), then trim edge hyphens — AFTER truncation, because truncation can expose
+ * one, and an absolute path always folds to a leading one.
+ */
+function foldStateKeyBody(normalizedPath) {
+  const folded = normalizedPath.replace(STATE_KEY_SAFE_CHARS, '-').replace(/-+/g, '-');
+  const capped =
+    folded.length > STATE_KEY_BODY_MAX_LENGTH
+      ? folded.slice(-STATE_KEY_BODY_MAX_LENGTH)
+      : folded;
+  const body = capped.replace(/^-+/, '').replace(/-+$/, '');
+  return body.length > 0 ? body : STATE_KEY_EMPTY_BODY;
+}
+
+/**
+ * `<folded-body>-<sha256(normalized)[0:8]>`. WHAT IS HASHED IS THE NORMALIZED
+ * PATH, NOT THE FOLDED BODY — folding is lossy (`/a/b_c` and `/a/b-c` both fold
+ * to `a-b-c`), so hashing the body would preserve the very collision the hash
+ * exists to break.
+ */
+function deriveStateKey(absolutePath) {
+  const normalized = normalizeStateKeyPath(absolutePath);
+  const hash = crypto
+    .createHash('sha256')
+    .update(normalized, 'utf8')
+    .digest('hex')
+    .slice(0, STATE_KEY_HASH_LENGTH);
+  return `${foldStateKeyBody(normalized)}-${hash}`;
+}
+
+/** `.git` EXISTS — never `isDirectory()`; it is a FILE in a worktree or submodule. */
+function hasGitEntry(dir) {
+  try {
+    return fs.existsSync(path.join(dir, '.git'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Nearest ancestor of `startPath` (inclusive) holding a `.git` entry, or
+ * `undefined`. Trailing separators come off FIRST because `path.dirname('/a/b/')`
+ * is `/a`, not `/a/b`, so an untrimmed input skips a level. Never cached: unlike
+ * an environment probe, the filesystem can change under us (`git init`), and the
+ * walk is a handful of stats the OS dentry cache already holds.
+ */
+function findRepoRoot(startPath) {
+  const trimmed = startPath.replace(/[\\/]+$/, '');
+  let current = trimmed.length > 0 ? trimmed : startPath;
+  for (let step = 0; step < MAX_ROOT_WALK_STEPS; step += 1) {
+    if (hasGitEntry(current)) return current;
+    const parent = path.dirname(current);
+    // `path.dirname` is its own fixed point at the top of the tree, so equality is
+    // the "out of parents" signal. Compared before assignment so the root itself
+    // is probed exactly once.
+    if (parent === current) return undefined;
+    current = parent;
+  }
+  return undefined;
+}
+
+/**
+ * This session's key, or `undefined` when none can be derived.
+ *
+ * `GHOLA_STATE_KEY` WINS AND IS USED VERBATIM — no normalization, no folding, no
+ * hashing, no walk. `src/session/launcher.ts` exports it, computed from the VS
+ * Code workspace folder's git root, and that is not defensive duplication: the
+ * two derivations provably disagree when the terminal is opened in the WSL-native
+ * clone of a `/mnt/c/...` workspace, because `project_dir` then walks up to a
+ * DIFFERENT root than the workspace folder does. The env var makes writer and
+ * reader agree by construction; the walk below survives only as the fallback for
+ * a session that Ghola did not launch. (Whitespace-only is treated as absent: it
+ * is not a key, and honoring it would write a file no reader ever opens.)
+ *
+ * An empty or whitespace-only `project_dir` yields NO KEY rather than a walk from
+ * nowhere — `hasGitEntry('')` probes `.git` relative to the cwd the harness
+ * happened to run us in, and a key must never depend on cwd.
+ */
+function resolveStateKey(projectDir) {
+  const envKey = process.env[STATE_KEY_ENV_VAR];
+  if (typeof envKey === 'string' && envKey.trim() !== '') return envKey;
+  if (typeof projectDir !== 'string' || projectDir.trim() === '') return undefined;
+  return deriveStateKey(findRepoRoot(projectDir) ?? projectDir);
+}
+
+/**
+ * The PER-SESSION snapshot, at `~/.ghola/statusline/state/<key>.json`. Read by
+ * the VS Code status bar (`src/status-bar/mode-status-bar.ts`) for the window it
+ * is running in — which is the whole point, and the reason this is a second write
+ * rather than a replacement for `writeUsageState` above: that file's unkeyed path
+ * is a documented cross-module contract with `tool.usage-observer` and is left
+ * exactly as it was. The two functions are kept separate, duplication and all,
+ * because their gates and their audiences differ and neither should be able to
+ * change the other by accident.
+ *
+ * Same shape, same key ORDER, and the same epoch-SECONDS `updated` as the unkeyed
+ * file, so a reader written for one can read the other. It is also BYTE-IDENTICAL
+ * to what the `.sh` writes here, which the unkeyed file is not: Python's
+ * `json.dump` defaults to `", "`/`": "` separators where `JSON.stringify` emits
+ * none, so the `.sh` passes `separators=(",", ":")` for this file only. Nothing
+ * reads bytes rather than parsed JSON, but it makes the two renderers diffable.
+ *
+ * The gate is DELIBERATELY WIDER than the unkeyed one: any of the three metrics
+ * present is enough, where the unkeyed write ignores a context percentage that
+ * arrives without a token count. The status bar's job is to show context %, so
+ * dropping a ctx-only payload would blank it for no reason. A payload with NO
+ * metric at all still writes nothing, so an empty render can never clobber a good
+ * snapshot with a bare timestamp — and the writer never gates on AGE, because
+ * staleness belongs to the reader (`STATE_STALE_AFTER_MS`).
+ */
+function writeKeyedState(key, tokens, contextPct, fiveHourPct) {
+  if (key === undefined) return;
+  if (tokens === undefined && contextPct === undefined && fiveHourPct === undefined) return;
+  let tmpPath;
+  try {
+    const stateDir = path.join(os.homedir(), '.ghola', 'statusline', 'state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    const statePath = path.join(stateDir, `${key}.json`);
+    const obj = { updated: Math.floor(Date.now() / 1000) };
+    if (tokens !== undefined) obj.session_tokens = tokens;
+    if (contextPct !== undefined) obj.context_pct = contextPct;
+    if (fiveHourPct !== undefined) obj.five_hour_pct = fiveHourPct;
+    // PID in the temp name, exactly as above: a fixed `.tmp` lets the second of
+    // two concurrent renders truncate the file the first is about to rename into
+    // place, publishing a torn snapshot.
+    tmpPath = `${statePath}.tmp.${process.pid}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(obj));
+    fs.renameSync(tmpPath, statePath);
+    tmpPath = undefined;
+  } catch {
+    // A filesystem fault here can never break the status line.
+    if (tmpPath !== undefined) {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        // Nothing more to do; leaving one stray temp file is the harmless case.
+      }
+    }
+  }
+}
+
 /** Render `<pct>%`, red at or above the fixed 85% threshold. */
 function pctSegment(prefix, pct) {
   return pct >= 85 ? `${prefix}\u001b[31m${pct}%\u001b[0m` : `${prefix}${pct}%`;
@@ -202,6 +386,7 @@ try {
   let rawTokens;
   let rawCtx;
   let rawFh;
+  let projectDir;
   let tokensStr = '';
   let pct;
   let fiveHourPct;
@@ -249,9 +434,20 @@ try {
     } catch {
       // Same isolation as above.
     }
+    try {
+      // Only consulted when GHOLA_STATE_KEY is absent, but read unconditionally so
+      // the parse stays in its own isolated block like the two above.
+      const ws = root?.workspace;
+      if (ws !== null && typeof ws === 'object' && typeof ws.project_dir === 'string') {
+        projectDir = ws.project_dir;
+      }
+    } catch {
+      // Same isolation as above.
+    }
   }
 
   writeUsageState(rawTokens, rawCtx, rawFh);
+  writeKeyedState(resolveStateKey(projectDir), rawTokens, rawCtx, rawFh);
 
   // Each segment is independent — gated on its own source field being present.
   // Segments joined with ' · ' (U+00B7); the ' | ' separator below is U+2502 and

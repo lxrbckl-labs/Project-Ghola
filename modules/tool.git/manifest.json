@@ -1,7 +1,7 @@
 {
   "id": "tool.git",
   "name": "Git Suite",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Grants agents controlled git capability through a per-command allowlist (each command tagged r/w/d with an independent enable toggle) plus a user-managed protected-branches guardrail.",
   "proactive": false,
   "category": "safety",
@@ -88,6 +88,12 @@
         "optionalValue": true,
         "keywordsPath": "protected-branches-keywords.json",
         "fullWidth": true
+      },
+      "commitMessageFormat": {
+        "type": "string",
+        "label": "Commit Message Format",
+        "description": "Single-line template the agent fills in when you ask it to draft a commit message from the staged diff. Placeholders the agent substitutes: <TICKET> for the active ticket id if known, substituted bare, and <summary> for a concise one-line description. When no ticket is known, the <TICKET>: prefix (the ticket id, the colon, and the following space) is dropped cleanly, so the message is just the summary — never a leading colon or space. Keep this on one line; the Session Manifest renders each parameter as a single line, so a multi-line template reaches the agent malformed. Drafting is generation only — the agent hands the message back as text and never stages, commits, or pushes. Changing this changes how every future drafted message is worded.",
+        "default": "<TICKET>: <summary>"
       }
     }
   }
