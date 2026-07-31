@@ -41,6 +41,42 @@
 //     writes happen, independently — see `writeKeyedState` for the key rules and
 //     `src/session/statusline-state.ts` for the normative spec.
 //
+// ── Silent mode: hide the footer line WITHOUT losing the writes ──────────
+// THIS SCRIPT IS THE WRITER OF THE TWO STATE FILES ABOVE, so deleting
+// `statusLine` from ~/.claude/settings.json is the WRONG way to hide the footer
+// line: the harness then never invokes us, nothing writes state, and the VS Code
+// status-bar pill goes empty inside its 90-second staleness window
+// (`STATE_STALE_AFTER_MS`) on BOTH hosts. To hide the line and keep the pill,
+// silence the renderer instead — it still runs, still writes both files, and
+// prints nothing:
+//   - MARKER FILE `<homedir>/.ghola/statusline/silent` — if it EXISTS, print
+//     nothing. Contents are irrelevant; existence is the whole signal and an
+//     empty file is the expected form. It sits beside the staged renderer and the
+//     VERSION stamp in that same directory, so it needs no new directory and no
+//     new path-resolution rule; the home directory is resolved with the same
+//     `os.homedir()` used for the state files.
+//   - ENV VAR `GHOLA_STATUSLINE_SILENT`, CHECKED FIRST. `1`/`true`/`yes`
+//     (case-insensitive, surrounding whitespace trimmed) means silent;
+//     `0`/`false`/`no` means NOT silent and BEATS the marker file, so one session
+//     can be un-silenced without deleting it. Unset, empty, whitespace-only, or
+//     any unrecognized value is NO SIGNAL and defers to the marker file.
+// A settings-file toggle is deliberately NOT the control surface: Ghola module
+// settings live in VS Code's `globalState`, an opaque `Memento` with no on-disk
+// representation, so a standalone script cannot read them at all. A marker file
+// is the only thing both this renderer and the operator can see.
+// SILENCE IS ABOUT STDOUT ONLY. Both state writes happen unconditionally and
+// BEFORE the print gate. And a FAILED CHECK degrades to NOT SILENT, never the
+// other way round: a permission error or a weird filesystem must not be able to
+// blank the operator's footer, and it must not abort the render either.
+// What the harness does with no output (Claude Code 2.1.220, read from the
+// bundle, and consistent with the public docs' "produce no output cause the
+// status line to go blank"): it `.trim()`s our stdout, drops blank lines, and
+// treats an empty result as ABSENT — so printing nothing and printing a bare
+// newline are indistinguishable to it. It then renders NO ROW AT ALL in the
+// default TUI, and reserves the slot with a single space only in
+// fullscreen/no-flicker mode, where the layout is fixed. That choice is the
+// harness's, not ours; we simply write zero bytes.
+//
 // Portability: the VERSION path is derived from THIS FILE's own location, never
 // from the cwd the harness runs us in, so one copy works from the repo, from the
 // installed extension directory, and from the staged copy the extension writes
@@ -374,6 +410,79 @@ function pctSegment(prefix, pct) {
   return pct >= 85 ? `${prefix}\u001b[31m${pct}%\u001b[0m` : `${prefix}${pct}%`;
 }
 
+// ── Silent mode ─────────────────────────────────────────────────────────────
+// THE SAME RULES LIVE IN `scripts/ghola-statusline.sh` — same marker path, same
+// environment variable, same precedence, same truthiness sets — and must stay
+// identical. See this file's header for the full rationale, including why the
+// control surface is a marker file rather than a module setting. Every constant
+// below is chosen to be trivially reproducible in bash: explicit ASCII token
+// lists, an explicit `[A-Z]` case fold, and a POSIX whitespace class.
+const SILENT_ENV_VAR = 'GHOLA_STATUSLINE_SILENT';
+/** `<homedir>/.ghola/statusline/silent`, spelled as segments so both hosts agree. */
+const SILENT_MARKER_SEGMENTS = ['.ghola', 'statusline', 'silent'];
+const SILENT_ENV_TRUE_VALUES = ['1', 'true', 'yes'];
+const SILENT_ENV_FALSE_VALUES = ['0', 'false', 'no'];
+/** POSIX `[:space:]`, not JS `\s`, which is wider — matching `readVersion`. */
+const POSIX_SPACE_LEADING = /^[ \t\n\v\f\r]+/;
+const POSIX_SPACE_TRAILING = /[ \t\n\v\f\r]+$/;
+
+/**
+ * The environment override: `true` (silent), `false` (explicitly NOT silent, and
+ * therefore beating the marker file), or `undefined` for NO SIGNAL.
+ *
+ * Unset, empty, whitespace-only, and unrecognized values all yield `undefined`
+ * rather than `false`, and that distinction is load-bearing: `export
+ * GHOLA_STATUSLINE_SILENT=` is absence, not an instruction, and treating it as an
+ * explicit "not silent" would make the marker file unusable in any shell that
+ * exports the variable empty. Only the three literal words in
+ * `SILENT_ENV_FALSE_VALUES` override the marker. An unrecognized value (a typo)
+ * also defers, so a mistyped `ture` can never silence the line by accident —
+ * every ambiguous input errs toward PRINTING.
+ *
+ * Case folding is `[A-Z]`-explicit rather than `toLowerCase()` for the same
+ * reason the state key folds that way: it is the only spelling this file and the
+ * `.sh`'s `case` globs agree on for non-ASCII input.
+ */
+function readSilentEnvOverride() {
+  const raw = process.env[SILENT_ENV_VAR];
+  if (typeof raw !== 'string') return undefined;
+  const value = raw
+    .replace(POSIX_SPACE_LEADING, '')
+    .replace(POSIX_SPACE_TRAILING, '')
+    .replace(/[A-Z]/g, (character) => character.toLowerCase());
+  if (SILENT_ENV_TRUE_VALUES.includes(value)) return true;
+  if (SILENT_ENV_FALSE_VALUES.includes(value)) return false;
+  return undefined;
+}
+
+/**
+ * Whether the marker file exists. ANY failure answers `false` — i.e. NOT silent —
+ * because the only safe direction for a broken check is to print. `existsSync`
+ * already swallows its own errors, so the try/catch is for `os.homedir()`, which
+ * can throw when no home directory can be determined at all.
+ */
+function hasSilentMarker() {
+  try {
+    return fs.existsSync(path.join(os.homedir(), ...SILENT_MARKER_SEGMENTS));
+  } catch {
+    return false;
+  }
+}
+
+/** Environment override first, marker file second, print by default. */
+function resolveSilent() {
+  const override = readSilentEnvOverride();
+  if (override !== undefined) return override;
+  return hasSilentMarker();
+}
+
+// Resolved BEFORE the main block, at module scope, so the last-resort fallback in
+// the `catch` at the bottom can honor it too — a silenced renderer that starts
+// shouting `[Ghola vunknown]` the moment something goes wrong would be worse than
+// no silent mode at all. `resolveSilent` cannot throw (both halves swallow their
+// own failures), so evaluating it outside the try is safe.
+const silent = resolveSilent();
+
 let version = 'unknown';
 try {
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -461,12 +570,19 @@ try {
     parts.length > 0
       ? `[Ghola v${version} \u2502 ${parts.join(' \u00b7 ')}]`
       : `[Ghola v${version}]`;
-  process.stdout.write(line);
+  // THE ONLY THING SILENT MODE SUPPRESSES. Both state writes above already
+  // happened, unconditionally, which is the entire point: the status-bar pill
+  // keeps its data while the footer row disappears. Zero bytes are written rather
+  // than a newline — the harness normalizes the two to the same "absent" anyway,
+  // but writing nothing is the honest spelling of printing nothing.
+  if (!silent) process.stdout.write(line);
 } catch {
   // Unreachable in practice — every step above handles its own failure. Degrade
-  // to the shortest sensible line and exit 0 regardless.
+  // to the shortest sensible line and exit 0 regardless — but stay silent if we
+  // were asked to be, because a fallback that ignored the flag would put the
+  // footer back at exactly the least convenient moment.
   try {
-    process.stdout.write(`[Ghola v${version}]`);
+    if (!silent) process.stdout.write(`[Ghola v${version}]`);
   } catch {
     // Even stdout is gone: emit nothing rather than throwing.
   }

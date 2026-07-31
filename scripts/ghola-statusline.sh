@@ -18,6 +18,35 @@
 #     unkeyed path is shared by every concurrent session and so cannot be
 #     attributed to a window; the keyed one can. Both writes happen.
 #
+# Silent mode: hide the footer line WITHOUT losing the writes.
+#   THIS SCRIPT IS THE WRITER of the two state files above, so deleting
+#   "statusLine" from ~/.claude/settings.json is the WRONG way to hide the footer
+#   line: the harness then never invokes us, nothing writes state, and the VS Code
+#   status-bar pill goes empty inside its 90-second staleness window on BOTH
+#   hosts. To hide the line and keep the pill, silence the renderer instead — it
+#   still runs, still writes both files, and prints nothing:
+#     - MARKER FILE <homedir>/.ghola/statusline/silent — if it EXISTS, print
+#       nothing. Contents are irrelevant; existence is the whole signal and an
+#       empty file is the expected form. It sits beside the staged renderer and
+#       the VERSION stamp in that same directory, so it needs no new directory and
+#       no new path rule. The check lives in the python3 block below so the home
+#       directory is resolved by the SAME os.path.expanduser("~") that resolves
+#       the state files, rather than by a second rule.
+#     - ENV VAR GHOLA_STATUSLINE_SILENT, CHECKED FIRST. 1/true/yes
+#       (case-insensitive, surrounding whitespace trimmed) means silent;
+#       0/false/no means NOT silent and BEATS the marker file, so one session can
+#       be un-silenced without deleting it. Unset, empty, whitespace-only, or any
+#       unrecognized value is NO SIGNAL and defers to the marker file.
+#   Identical rules, path, and precedence live in scripts/ghola-statusline.mjs,
+#   which carries the long-form rationale — including why the control surface is a
+#   marker file and not a module setting (Ghola module settings live in VS Code's
+#   globalState, an opaque Memento with no on-disk form, so no standalone script
+#   can read them).
+#   SILENCE IS ABOUT STDOUT ONLY: both state writes happen unconditionally and
+#   before the print gate. A FAILED CHECK degrades to NOT SILENT, never the other
+#   way round — if python3 dies the marker field arrives empty and the line prints,
+#   because a broken check must not be able to blank the operator's footer.
+#
 # Portability: derives the VERSION path from the script's own location (parent
 # dir's VERSION file), so it works regardless of the cwd the harness runs it in.
 #
@@ -42,13 +71,18 @@ version="$( { tr -d '[:space:]' < "$VERSION_FILE"; } 2>/dev/null)"
 payload="$(cat 2>/dev/null)" || payload=""
 
 # --- 3. Ask python3 to do all the JSON work in one shot.
-# Output on stdout: "<tokens_str_or_empty>|<pct_or_empty>|<five_hour_pct_or_empty>"
+# Output on stdout, four pipe-separated fields:
+#   "<tokens_str_or_empty>|<pct_or_empty>|<five_hour_pct_or_empty>|<silent_marker_or_empty>"
 parsed="$(PAYLOAD="$payload" python3 - <<'PY' 2>/dev/null
 import hashlib, json, os, re, sys
 
 tokens_str = ""
 pct = ""
 five_hour_pct = ""
+# "1" when the silent-mode marker file exists, "" otherwise (INCLUDING on any
+# failure to look). Reported rather than acted on: the printing lives in bash, and
+# the environment override that outranks this field is evaluated there.
+silent_marker = ""
 
 # Raw numeric values (or None) mirrored into the usage-state file below so the
 # tool.usage-observer module can read them; the display strings above are for
@@ -308,15 +342,68 @@ except Exception:
         except Exception:
             pass
 
-sys.stdout.write(f"{tokens_str}|{pct}|{five_hour_pct}")
+# --- Silent-mode marker probe -----------------------------------------------
+# LAST, and deliberately AFTER both state writes above, so it cannot influence
+# them: silence is a stdout concern only. Reported to bash as a field rather than
+# acted on here, because the printing happens there.
+#
+# expanduser("~") is the SAME home resolution the two writes above use, which is
+# the reason this probe lives inside the python3 block at all: doing it in bash
+# with $HOME would be a second, subtly different rule.
+#
+# Any failure yields "" — i.e. NOT silent. The only safe direction for a broken
+# check is to print, so an unreadable directory or a permission error must fall
+# through to the normal line rather than swallow it.
+try:
+    if os.path.exists(os.path.expanduser("~/.ghola/statusline/silent")):
+        silent_marker = "1"
+except Exception:
+    silent_marker = ""
+
+sys.stdout.write(f"{tokens_str}|{pct}|{five_hour_pct}|{silent_marker}")
 PY
 )"
 
-# Defensive split (if python3 failed, parsed is empty -> all segments empty).
+# Defensive split (if python3 failed, parsed is empty -> all four fields empty,
+# which for the last one means NOT silent: a dead parser can never mute the line).
 tokens_str="${parsed%%|*}"
 rest="${parsed#*|}"
 pct="${rest%%|*}"
-five_hour_pct="${rest#*|}"
+rest="${rest#*|}"
+five_hour_pct="${rest%%|*}"
+silent_marker="${rest#*|}"
+
+# --- 3b. Resolve silent mode: environment override FIRST, marker file second ---
+# The env var is normalized here in pure bash — no filesystem, no subprocess, so
+# this step cannot fail and cannot be lost when python3 is unavailable.
+#
+# Trim surrounding POSIX whitespace with the standard parameter-expansion idiom
+# (a real trim, not `tr -d`, which would also eat whitespace in the MIDDLE of a
+# value and so disagree with the .mjs on an input like "t rue").
+_silent_env="${GHOLA_STATUSLINE_SILENT-}"
+_silent_env="${_silent_env#"${_silent_env%%[![:space:]]*}"}"
+_silent_env="${_silent_env%"${_silent_env##*[![:space:]]}"}"
+
+# Case-insensitive match spelled as explicit ASCII character classes rather than
+# ${var,,} or `tr '[:upper:]' '[:lower:]'`: both are locale-sensitive, and the
+# .mjs folds with an explicit [A-Z] class for exactly the same reason the state-key
+# algorithm does. "" means NO SIGNAL, not "not silent" — unset, empty,
+# whitespace-only, and unrecognized values all defer to the marker file, so a
+# shell that exports the variable empty cannot disable the marker, and a typo can
+# never silence the line by accident. Every ambiguous input errs toward PRINTING.
+case "$_silent_env" in
+    1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss])  _silent_override="1" ;;
+    0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo])  _silent_override="0" ;;
+    *)                                _silent_override="" ;;
+esac
+
+# An explicit override wins in BOTH directions, so `GHOLA_STATUSLINE_SILENT=0`
+# un-silences a single session without deleting the marker file.
+if [ -n "$_silent_override" ]; then
+    silent="$_silent_override"
+else
+    silent="$silent_marker"
+fi
 
 # --- 4. Format the output line ---
 # Each segment is independent — gates on its own source field being non-empty.
@@ -338,13 +425,21 @@ if [ -n "$five_hour_pct" ]; then
         parts+=("$(printf '5h %s%%' "$five_hour_pct")")
     fi
 fi
-if [ "${#parts[@]}" -gt 0 ]; then
-    joined="${parts[0]}"
-    for i in "${!parts[@]}"; do
-        [ "$i" -eq 0 ] && continue
-        joined="${joined} $(printf '\302\267') ${parts[$i]}"
-    done
-    printf '[Ghola v%s \342\224\202 %s]' "$version" "$joined"
-else
-    printf '[Ghola v%s]' "$version"
+# --- 5. Emit it, unless silenced ---
+# THE ONLY THING SILENT MODE SUPPRESSES. Both state writes already happened inside
+# the python3 block above, which is the entire point: the status-bar pill keeps its
+# data while the footer row disappears. Nothing at all is written — not a newline —
+# though the harness trims stdout and drops blank lines, so it would treat the two
+# identically.
+if [ "$silent" != "1" ]; then
+    if [ "${#parts[@]}" -gt 0 ]; then
+        joined="${parts[0]}"
+        for i in "${!parts[@]}"; do
+            [ "$i" -eq 0 ] && continue
+            joined="${joined} $(printf '\302\267') ${parts[$i]}"
+        done
+        printf '[Ghola v%s \342\224\202 %s]' "$version" "$joined"
+    else
+        printf '[Ghola v%s]' "$version"
+    fi
 fi

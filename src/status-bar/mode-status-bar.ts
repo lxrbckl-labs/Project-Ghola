@@ -17,19 +17,16 @@ const STATUS_BAR_CONFIG_SECTION = 'ghola.statusBar';
 const STATUS_BAR_ENABLED_KEY = 'ghola.statusBar.enabled';
 
 /**
- * Separator between the IDENTITY and the metrics group: U+2502 BOX DRAWINGS
- * LIGHT VERTICAL, one space either side. Two separators rather than one because
- * a single glyph would have to carry two different relationships at once —
- * `cmms1 · 238k · 5h 11%` reads as three peers, when the identity is a heading
- * and the metrics are its contents. These are the SAME two glyphs, in the same
- * roles, that `scripts/ghola-statusline.mjs` already uses for the terminal
- * footer (`[Ghola v0.31.0 │ 238k · 62% · 5h 11%]`), so the pill and the footer
- * are visually the same statement in two places.
+ * The one delimiter used throughout the visible label — between the IDENTITY
+ * and the metrics group, and between two metrics alike: U+00B7 MIDDLE DOT, one
+ * space either side. An earlier revision used a distinct glyph (U+2502 BOX
+ * DRAWINGS LIGHT VERTICAL) for the identity/metrics boundary, on the theory
+ * that the identity is a heading over the metrics as its contents; the
+ * operator asked for one delimiter throughout instead, so `cmms1@win · 34k ·
+ * 5h 3%` now reads as a flat sequence of peers rather than a heading plus
+ * contents.
  */
-const IDENTITY_SEPARATOR = ' │ ';
-
-/** Separator BETWEEN two metrics: U+00B7 MIDDLE DOT, spaced. Matches the footer. */
-const METRIC_SEPARATOR = ' · ';
+const LABEL_SEPARATOR = ' · ';
 
 /**
  * How often the state file is re-read on a timer.
@@ -158,7 +155,7 @@ function describeIdentity(identity: TeamIdentity): string {
 
 /**
  * The metrics half of the visible label, INCLUDING its leading
- * `IDENTITY_SEPARATOR`, or `''` when there is nothing to show.
+ * `LABEL_SEPARATOR`, or `''` when there is nothing to show.
  *
  * `undefined` (no state key derivable) and `'stale'`/`'absent'` all render the
  * EMPTY STRING — no `—`, no `?`, and no separator either. That is a deliberate
@@ -173,7 +170,7 @@ function describeIdentity(identity: TeamIdentity): string {
  * needs a Pro/Max `rate_limits` block and only exists after the session's first
  * API response, while `session_tokens` exists from the first render. Whichever
  * is present is shown; when neither is, the group and its separator vanish
- * together rather than leaving a dangling `│`.
+ * together rather than leaving a dangling `·`.
  *
  * The token count goes through `formatTokenCount` — phase 1's port of the
  * renderers' `fmt_tokens` — and NOT through a local reimplementation, so the
@@ -185,7 +182,7 @@ function formatMetricsSegment(snapshot: StatuslineStateSnapshot | undefined): st
   if (snapshot.sessionTokens !== undefined) parts.push(formatTokenCount(snapshot.sessionTokens));
   if (snapshot.fiveHourPct !== undefined) parts.push(`5h ${snapshot.fiveHourPct}%`);
   if (parts.length === 0) return '';
-  return `${IDENTITY_SEPARATOR}${parts.join(METRIC_SEPARATOR)}`;
+  return `${LABEL_SEPARATOR}${parts.join(LABEL_SEPARATOR)}`;
 }
 
 /**
