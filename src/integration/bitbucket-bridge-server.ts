@@ -8,12 +8,24 @@
  * That single write is narrow on purpose. The bridge can add a comment to an
  * issue and nothing else — no issue creation, no transitions, no field edits,
  * and no editing or deleting of any existing comment. It is the plumbing for
- * the `integration.jira-comment-write` module, which is where the actual
- * authorization lives; agents are forbidden from Jira mutations by their core
- * hard rules unless that module is enabled. Neither product's
- * API token ever leaves the extension
- * host: the agent only ever holds a per-session bearer token that authenticates
- * it to THIS server, and the server calls the host-side code on its behalf.
+ * the Jira Comment Write flow in `integration.atlassian-suite`, which is where
+ * the actual authorization lives; agents are forbidden from Jira mutations by
+ * their core hard rules unless that flow's `enableJiraCommentWrite` gate is on.
+ *
+ * THAT GATE IS ENFORCED HERE, NOT ONLY IN PROSE. The write is injected as a
+ * RESOLVER (`PostCommentResolver`) rather than a bare function, and the resolver
+ * is called on EVERY `/post-comment` request. When the gate is off it hands back
+ * `undefined` and this file refuses the route outright — there is no function to
+ * call, so an agent that ignores the module markdown still cannot post. Resolving
+ * per request (rather than capturing a function once at activation) is what makes
+ * flipping the setting off take effect immediately instead of at the next window
+ * reload. The refusal is a 403 `capability-disabled` naming the setting, never a
+ * bare 404 and never a silent success. Nothing about comment READING
+ * (`/get-comments`) consults the gate.
+ *
+ * Neither product's API token ever leaves the extension host: the agent only
+ * ever holds a per-session bearer token that authenticates it to THIS server,
+ * and the server calls the host-side code on its behalf.
  *
  * BRIDGE COORDINATES FILE — why it exists:
  *   The server binds an EPHEMERAL port and mints a FRESH bearer token on every
@@ -63,6 +75,7 @@ import * as path from 'path';
 import type * as vscode from 'vscode';
 import type { BitbucketPrClient } from './bitbucket-pr-client';
 import type { RequestFailure } from './atlassian-client';
+import { JIRA_COMMENT_WRITE_DISABLED_MESSAGE } from './jira-comment-write-gate';
 
 /** Hard cap on inbound request bodies. The agent's payloads are tiny JSON
  *  objects; anything larger is treated as abuse and rejected with 413. */
@@ -137,11 +150,35 @@ export interface PostCommentResult {
 }
 
 /** Host-side Jira comment POSTer injected by the extension. This is the only
- *  WRITE the Jira side of this bridge exposes, and it exists to serve the
- *  `integration.jira-comment-write` module — the module carries the
- *  authorization, this type is only the plumbing. Same containment contract as
+ *  WRITE the Jira side of this bridge exposes, and it exists to serve the Jira
+ *  Comment Write flow in `integration.atlassian-suite` — that module carries
+ *  the authorization, this type is only the plumbing. Same containment contract as
  *  the read fetchers: the Jira token never leaves the extension host. */
 export type PostCommentFn = (key: string, body: string) => Promise<PostCommentResult>;
+
+/**
+ * Per-request supplier of the Jira comment POSTer, and the mechanism that makes
+ * `integration.atlassian-suite`'s `enableJiraCommentWrite` gate REAL rather than
+ * advisory.
+ *
+ * The extension returns the poster only while the gate is open (module enabled
+ * AND the setting affirmatively `true`) and `undefined` otherwise; see
+ * `jira-comment-write-gate.ts` for the decision. This file treats `undefined` as
+ * "capability withheld" and refuses `/post-comment` without touching Jira.
+ *
+ * Called on every request on purpose: a guardrail you must reload the window to
+ * apply is a guardrail people forget to apply. A resolver that THROWS is also
+ * treated as withheld — unknown is never permission.
+ */
+export type PostCommentResolver = () => PostCommentFn | undefined;
+
+/**
+ * Refusal body sent when `/post-comment` is hit with the capability withheld.
+ * `status` is its own value (not `unknown-error`) so the wrapper can print a
+ * tailored, actionable refusal instead of a generic transport failure; the
+ * caller supplies the operator-facing `message`.
+ */
+const CAPABILITY_DISABLED_STATUS = 'capability-disabled';
 
 /** Handle returned to the caller so it can inject the env and dispose the
  *  server on extension shutdown. */
@@ -187,7 +224,7 @@ export function startBitbucketBridge(
   client: BitbucketPrClient,
   getTicket: GetTicketFn,
   getComments: GetCommentsFn,
-  postComment: PostCommentFn,
+  resolvePostComment: PostCommentResolver,
   coordinatesPath?: string,
   logger?: vscode.OutputChannel,
 ): Promise<BitbucketBridgeHandle | null> {
@@ -196,7 +233,7 @@ export function startBitbucketBridge(
     const expectedAuth = Buffer.from(`Bearer ${token}`);
 
     const server = http.createServer((req, res) => {
-      handleRequest(req, res, client, getTicket, getComments, postComment, expectedAuth).catch(() => {
+      handleRequest(req, res, client, getTicket, getComments, resolvePostComment, expectedAuth).catch(() => {
         // Defensive: handleRequest already wraps its own body in try/catch, but a
         // failure before/around that (or in the catch itself) must never leak.
         sendJson(res, 500, { status: 'unknown-error', message: 'bridge error' });
@@ -328,7 +365,7 @@ async function handleRequest(
   client: BitbucketPrClient,
   getTicket: GetTicketFn,
   getComments: GetCommentsFn,
-  postComment: PostCommentFn,
+  resolvePostComment: PostCommentResolver,
   expectedAuth: Buffer,
 ): Promise<void> {
   try {
@@ -407,10 +444,19 @@ async function handleRequest(
     }
 
     // Jira comment POST — the single Jira WRITE this bridge serves, and the
-    // plumbing behind the `integration.jira-comment-write` module. Reaching
-    // this route is not by itself authorization: the module is what authorizes
-    // an agent to invoke it, and an operator who has not enabled the module has
-    // no workflow that calls the wrapper verb.
+    // plumbing behind the Jira Comment Write flow in
+    // `integration.atlassian-suite`. Reaching this route is not by itself
+    // authorization: that flow is what authorizes an agent to invoke it, and an
+    // operator who has not turned on its `enableJiraCommentWrite` setting does
+    // not merely lack a workflow that calls the wrapper verb — the capability is
+    // WITHHELD below, so the verb cannot work at all.
+    //
+    // THE GATE IS CHECKED FIRST, ahead of argument validation, so a withheld
+    // capability refuses identically for a well-formed and a malformed call and
+    // no work happens before the refusal. `resolvePostComment` runs per request:
+    // toggling the setting off takes effect on the very next call, no reload.
+    // Both `undefined` and a THROWING resolver mean withheld — the enabled path
+    // requires a resolver that affirmatively hands back a function.
     //
     // Two distinct caller errors, both 400 because both mean "you sent me
     // something unusable" rather than "Jira said no":
@@ -421,6 +467,21 @@ async function handleRequest(
     // A well-formed request that Jira rejects is a 200 with `posted: false`
     // plus an `error`, keeping "bad call" and "call failed" separable.
     if (route === '/post-comment') {
+      let postComment: PostCommentFn | undefined;
+      try {
+        postComment = resolvePostComment();
+      } catch {
+        // A resolver that blew up tells us nothing about the operator's intent,
+        // and "we could not tell" must never read as "go ahead".
+        postComment = undefined;
+      }
+      if (typeof postComment !== 'function') {
+        sendJson(res, 403, {
+          status: CAPABILITY_DISABLED_STATUS,
+          message: JIRA_COMMENT_WRITE_DISABLED_MESSAGE,
+        });
+        return;
+      }
       const key = typeof args.key === 'string' ? args.key.trim() : '';
       if (!key) {
         sendJson(res, 400, { status: 'unknown-error', message: 'key must be a non-empty string' });

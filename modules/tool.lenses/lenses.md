@@ -39,17 +39,19 @@ When `parameters.autoKickReviewOnColleagueBranch` is true, TPM decides review-vs
 
 **Precedence:**
 
-1. **PRIMARY — PR author vs operator handle.** When a PR for the branch was resolved (its `prAuthor` is available — e.g. from the session-bootstrap `related-pr` probe field, or a direct `find-pr` lookup) AND `tool.operator-profile` is loaded with a non-empty `bitbucketUsername`, compare `prAuthor` against `bitbucketUsername` **case-insensitively, after trimming whitespace**:
+1. **PRIMARY — PR author vs operator handle.** When a PR for the branch was resolved (its `prAuthor` is available — e.g. from the session-bootstrap `related-pr` probe field, or a direct `find-pr` lookup) AND **`integration.atlassian-suite`** is loaded with a non-empty `bitbucketUsername`, compare `prAuthor` against `bitbucketUsername` **case-insensitively, after trimming whitespace**. Read the handle from `integration.atlassian-suite`'s `parameters` block — **not** from `tool.operator-profile`, which no longer carries it; if a `bitbucketUsername` key nonetheless appears under `tool.operator-profile`, it is stale residue and must be ignored:
    - **Not equal** — this is a review session (you are reviewing someone else's PR). Fire: announce `Detected a review session — PR #<id> authored by <prAuthor> on \`<branch>\`. Deploying lens-driven review.` and immediately dispatch the security/logic/quality lens trio per the Review Mode section below.
    - **Equal** — author mode; the trigger does not fire (it is your own PR, regardless of whose commits a merge dragged in).
-2. **FALLBACK — git commit authors.** Only when no PR/handle is available (no PR resolved, or `tool.operator-profile` / `bitbucketUsername` absent or empty) does TPM fall back to the git-commit-author check, running the read-only commands:
+2. **FALLBACK — git commit authors.** Only when no PR/handle is available — no PR resolved, OR `integration.atlassian-suite` not loaded, OR its `bitbucketUsername` absent or empty — does TPM fall back to the git-commit-author check. (A session without `integration.atlassian-suite` cannot resolve a `prAuthor` at all, since the PR lookup is that module's probe, so a missing suite lands here either way.) The fallback runs the read-only commands:
 
    ```
    git log <base>..HEAD --format='%ae'   # authors of branch commits
    git config user.email                  # current user
    ```
 
-   and applying this decision table:
+   The "current user" email is the operator's own git commit email: prefer **`tool.git`**'s `gitEmail` parameter when it is loaded and non-empty, and only fall back to running `git config user.email` when it is not. Both invocations remain subject to `tool.git`'s `allowedCommands` like any other git command; if a needed read is not enabled, the fallback cannot resolve an author identity and the trigger silently does not fire.
+
+   With an operator email in hand, apply this decision table:
 
    - **No commits ahead of base** — trigger does not fire (the planning trigger may pick this up instead).
    - **All commits by current user** — author mode; trigger does not fire.

@@ -12,7 +12,11 @@ import type { PromptComposer } from '../prompts/composer';
 import { syncAliasFile, validateAlias, type CliAlias } from '../session/alias-sync';
 import { resolveLedgerRoot } from '../session/host-path';
 import { resolveAgentPromptFilePath } from '../session/prompt-file';
-import { readModuleSettings, writeModuleSettings } from '../state/module-settings';
+import {
+  mergeChangedModuleSettings,
+  readModuleSettings,
+  writeModuleSettings,
+} from '../state/module-settings';
 import type { ConfigurationsStore } from './configurations-store';
 import {
   readLinqpadConnections,
@@ -75,6 +79,14 @@ function withoutInjectedFeedbackPath(
 
 export class SettingsPanel implements vscode.Disposable {
   private panel?: vscode.WebviewPanel;
+  /**
+   * Last-known `panel.visible` for the current panel, so the
+   * `onDidChangeViewState` handler in `adoptPanel` can react to a false -> true
+   * transition ONLY. That event also fires on column moves and active/inactive
+   * changes (where `visible` never leaves `true`), and every one of those must
+   * NOT trigger a `postSettings`. Reset to `false` on dispose.
+   */
+  private panelWasVisible = false;
   private readonly disposables: vscode.Disposable[] = [];
   /**
    * Cached "modified vs active configuration" flag. Recomputed whenever
@@ -241,11 +253,35 @@ export class SettingsPanel implements vscode.Disposable {
    */
   private adoptPanel(panel: vscode.WebviewPanel): void {
     this.panel = panel;
+    this.panelWasVisible = panel.visible;
     panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'resources', 'icon-source.png');
 
     panel.onDidDispose(
       () => {
         this.panel = undefined;
+        this.panelWasVisible = false;
+      },
+      null,
+      this.disposables,
+    );
+
+    // Re-push settings whenever the panel comes back ON SCREEN. Needed because
+    // `retainContextWhenHidden: true` means the webview script never re-runs
+    // (so its one-shot `getSettings` at load fires exactly once), while the
+    // underlying `globalState` map is machine-wide and another window may have
+    // changed it in the meantime.
+    //
+    // The FALSE -> TRUE transition guard is load-bearing: this event also fires
+    // on editor-column moves and active/inactive changes, where `visible` stays
+    // true throughout. Comparing against the tracked previous value means those
+    // fire the event but not a `postSettings`, so dragging the tab between
+    // groups or clicking around cannot produce a postSettings storm.
+    panel.onDidChangeViewState(
+      () => {
+        const nowVisible = panel.visible;
+        const becameVisible = nowVisible && !this.panelWasVisible;
+        this.panelWasVisible = nowVisible;
+        if (becameVisible) this.postSettings();
       },
       null,
       this.disposables,
@@ -366,13 +402,19 @@ export class SettingsPanel implements vscode.Disposable {
         this.postSettings();
         break;
       case 'saveSettings':
-        await this.saveSettings(msg.values);
+        await this.saveSettings(msg.values, msg.changedKeys);
         break;
       case 'getComposedPrompt':
         this.postComposedPrompt(msg.agent);
         break;
       case 'reloadModules':
         await vscode.commands.executeCommand('ghola.reloadModules');
+        // Re-push settings VALUES too, not just the re-discovered module list.
+        // `globalState` is machine-wide, so the panel's `settingsValues` may be
+        // a stale snapshot of what another window has since changed; the Modules
+        // tab's refresh control is the operator's explicit "resync me" gesture,
+        // so it must resync values as well as modules.
+        this.postSettings();
         break;
       case 'copyNewModulePrompt':
         await this.copyNewModulePrompt();
@@ -855,9 +897,34 @@ export class SettingsPanel implements vscode.Disposable {
     });
   }
 
-  private async saveSettings(values: Record<string, unknown>): Promise<void> {
+  /**
+   * Persist module setting values.
+   *
+   * `changedKeys` (when the webview names it) is the anti-clobber path: the
+   * incoming `values` map is a SNAPSHOT the webview took when it last loaded
+   * settings, and `globalState` is shared by every VS Code window on the
+   * machine. Writing the snapshot back wholesale therefore erases whatever a
+   * sibling window changed since — so instead we re-read the live map here and
+   * fold ONLY the named keys onto it (see `mergeChangedModuleSettings`, which
+   * also documents the delete-vs-empty-string semantics).
+   *
+   * When `changedKeys` is absent the legacy whole-map replace is preserved
+   * verbatim, so callers that cannot name their key behave exactly as before.
+   */
+  private async saveSettings(
+    values: Record<string, unknown>,
+    changedKeys?: string[],
+  ): Promise<void> {
     try {
-      await writeModuleSettings(this.context.globalState, values);
+      const next =
+        changedKeys === undefined
+          ? values
+          : mergeChangedModuleSettings(
+              readModuleSettings(this.context.globalState, this.context.workspaceState),
+              values,
+              changedKeys,
+            );
+      await writeModuleSettings(this.context.globalState, next);
       this.post({ type: 'settingsSaved', ok: true });
       // Module settings changed — the modified flag may have flipped.
       this.recomputeModified();

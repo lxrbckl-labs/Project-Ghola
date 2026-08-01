@@ -46,7 +46,10 @@
 //   node scripts/bb-bridge.mjs get-ticket    --key <KEY>
 //   node scripts/bb-bridge.mjs get-comments  --key <ISSUE-KEY>
 //   node scripts/bb-bridge.mjs post-comment  --key <ISSUE-KEY>
-//       (comment body piped via stdin; requires integration.jira-comment-write)
+//       (comment body piped via stdin; requires the atlassian-suite
+//        enableJiraCommentWrite gate, which the extension HOST enforces — with
+//        it off the capability is withheld and this verb exits 1 with a
+//        `capability-disabled` refusal, having sent nothing to Jira)
 //   node scripts/bb-bridge.mjs health
 //       (liveness only — authenticated, but calls neither Jira nor Bitbucket)
 //
@@ -813,6 +816,24 @@ async function callBridge(routePath, body) {
     const message = (parsed && typeof parsed.message === 'string')
       ? parsed.message
       : (text ? text.slice(0, 200) : res.statusText || 'bridge error');
+    // A host-side CAPABILITY GATE refusal, not a failure. Only `/post-comment`
+    // can produce this today (the extension withholds the Jira comment-write
+    // function unless integration.atlassian-suite's enableJiraCommentWrite
+    // setting is on), and it must not be reported through the generic
+    // `bridge-error` line below: that line reads like a dead bridge or a bad
+    // token and sends the reader off checking transport, when the real answer is
+    // "the operator has not enabled this and no request was ever made". The
+    // server's own message names the module, the setting, and the Modules-tab
+    // label, so it is printed verbatim as the actionable part.
+    if (parsed && parsed.status === 'capability-disabled') {
+      printJson({ status: 'capability-disabled', httpStatus: res.status, message });
+      console.error(
+        `bb-bridge: ${routePath} REFUSED — this capability is disabled host-side. Nothing was sent to Atlassian.\n`
+        + `bb-bridge: ${message}\n`
+        + 'bb-bridge: Retrying cannot help; the setting has to be turned on first.',
+      );
+      process.exit(1);
+    }
     printJson({ status: 'bridge-error', httpStatus: res.status, message });
     process.exit(1);
   }
@@ -1059,10 +1080,15 @@ async function cmdGetComments(flags) {
 //
 // Authorization is NOT this script's job and must not be inferred from the
 // verb's mere existence. Agents are forbidden from mutating ticketing systems
-// by their core hard rules; the `integration.jira-comment-write` module is what
-// contributes the capability, and it requires the operator to have seen and
-// approved the exact comment text first. If that module is not enabled, this
-// verb is not to be invoked.
+// by their core hard rules; the Jira Comment Write flow in
+// `integration.atlassian-suite` is what contributes the capability, and only
+// when the operator has turned on its `enableJiraCommentWrite` setting (which
+// defaults to off). It then further requires the operator to have seen and
+// approved the exact comment text. With that gate off, this verb is not to be
+// invoked — and as of the host-side enforcement it also CANNOT work: the
+// extension withholds the comment-write function from the bridge, so the route
+// answers 403 `capability-disabled` and this verb exits 1 without Jira ever
+// being contacted (see the `capability-disabled` branch in callBridge).
 //
 // The BODY IS READ FROM STDIN, never a --body flag, matching `reply` and
 // `create-pr`. That is a security property, not a style choice: a flag value
@@ -1140,10 +1166,11 @@ Usage:
                                             (read-only; zero comments still exits 0)
   node scripts/bb-bridge.mjs post-comment  --key <ISSUE-KEY>
                                             (comment body read from stdin)
-                                            (Jira WRITE — requires the
-                                             integration.jira-comment-write
-                                             module and operator approval of
-                                             the exact text; never auto-retry)
+                                            (Jira WRITE — requires the Atlassian
+                                             Suite module's "Enable Jira Comment
+                                             Write" setting to be on, plus
+                                             operator approval of the exact
+                                             text; never auto-retry)
   node scripts/bb-bridge.mjs health
                                             (liveness only: authenticated, but
                                              calls neither Jira nor Bitbucket —

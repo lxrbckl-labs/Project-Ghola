@@ -44,7 +44,7 @@ const AUTO_CD_INTO_REPO_KEY = 'autoCdIntoRepo';
 
 /**
  * Last link in the Remote Control session-name chain. Reached only when every
- * earlier candidate (the `Project-`-stripped repository name, the git branch,
+ * earlier candidate (this instance's qualified team identity, the git branch,
  * the repo folder name) normalizes to the empty string — which is exactly why it
  * exists: the name handed to `--remote-control` must NEVER be empty. See
  * `resolveRemoteControlSessionName`.
@@ -74,21 +74,18 @@ const REMOTE_CONTROL_BLOCKING_ENV_VARS = [
 ];
 
 /**
- * Optional per-launch overrides. When omitted, `launch()` behaves exactly as the
- * default Sessions-tab play button: it creates the `Ghola Session` terminal,
- * writes the GHOLA_{TPM,SWE,QA}_PROMPT_FILE scaffolding, and sends the trigger
- * word as phase-2 input. `promptOverride` switches to a one-shot dispatch mode
- * (used by the Commit-and-Push button) that skips the agent-prompt-file
- * scaffolding and sends a self-contained prompt instead of the trigger word.
+ * Optional per-launch overrides. EVERY launch now behaves as the default
+ * Sessions-tab play button does: it creates the `Ghola Session` terminal, writes
+ * the GHOLA_{TPM,SWE,QA}_PROMPT_FILE scaffolding, and sends the trigger word as
+ * phase-2 input. A `promptOverride` field used to switch `launch()` into a
+ * second, one-shot dispatch mode for the Commit-and-Push button; that button and
+ * its `tool.commit-push` module are retired and nothing sets the option any
+ * more, so the option and every branch on it were removed rather than left as an
+ * unreachable second mode.
  */
 interface LaunchOptions {
   /** Terminal name; defaults to the existing session terminal name. */
   terminalName?: string;
-  /**
-   * When set: skip the TPM/SWE/QA env-prompt-file scaffolding and send THIS
-   * string as the phase-2 message instead of the configured trigger word.
-   */
-  promptOverride?: string;
 }
 
 /**
@@ -168,11 +165,6 @@ export class SessionLauncher {
   }
 
   async launch(options?: LaunchOptions): Promise<void> {
-    // One-shot dispatch mode: a caller (e.g. the Commit-and-Push button) wants a
-    // self-contained prompt delivered to a fresh CLI, NOT a full TPM session.
-    const promptOverride = options?.promptOverride;
-    const oneShot = typeof promptOverride === 'string';
-
     const enabled = this.loader.getEnabled();
 
     const shellPath = this.pickShell();
@@ -266,11 +258,11 @@ export class SessionLauncher {
     // If the session resolves to `self-upgrade` while some other repo is open,
     // refuse to launch outright — no terminal, no command. This is stronger than
     // the agent-side warn-and-refuse (which stays as a backstop for CLI-launched
-    // sessions). The `!oneShot` guard explicitly excludes one-shot dispatch
-    // (e.g. Commit-and-Push), which carries a `promptOverride` but does not
-    // change modules and so can incidentally resolve `sessionMode` to
-    // `self-upgrade`; only full TPM sessions are gated here.
-    if (sessionMode === 'self-upgrade' && !oneShot && !this.isProjectGholaRepo(effectiveDir)) {
+    // sessions). The gate is UNCONDITIONAL: every launch is a full TPM session
+    // now that the one-shot dispatch mode is gone, so there is no longer a
+    // module-preserving dispatch that could incidentally resolve `sessionMode` to
+    // `self-upgrade` and need excluding here.
+    if (sessionMode === 'self-upgrade' && !this.isProjectGholaRepo(effectiveDir)) {
       const where = effectiveDir ?? '<no workspace open>';
       const message = `Self Upgrade can only run in the Project-Ghola repository. Open Project-Ghola as your workspace and relaunch (current: ${where}).`;
       this.logger?.appendLine(`[session] refusing Self Upgrade launch: not Project-Ghola (${where})`);
@@ -331,12 +323,13 @@ export class SessionLauncher {
     // only ever probed non-interactively — so `checkRemoteControlGating` below
     // stays as the operator-facing warning for the observable half of the gating.
     //
-    // `oneShot` is excluded deliberately, and mandatory does not change that
-    // reasoning: the Commit-and-Push terminal is a transient single-prompt
-    // dispatch, and registering it as a steerable remote session would leave a
-    // phantom entry there is nothing to steer.
+    // A CONFIGURED CLI COMMAND IS THE ONLY PRECONDITION LEFT. This block used to
+    // be gated on `!oneShot` as well, so the transient Commit-and-Push terminal
+    // never registered a steerable remote session there was nothing to steer;
+    // that dispatch mode is retired, so every launch that has a CLI command to
+    // run now reaches the identity check below.
     let remoteControlName = '';
-    if (!oneShot && cliCommand !== '') {
+    if (cliCommand !== '') {
       // `resolvedNonClaudeBinary` is present ONLY in outcome 2 above. Testing it
       // behind `!claudeCli.known` reads the field off the `known: false` variant and
       // leaves `claudeCli.known` itself meaning exactly what it meant to `permFlag`.
@@ -389,9 +382,9 @@ export class SessionLauncher {
     const qaCount = cfg.get<number>('qa.count', 1);
     const qaModel = cfg.get<string>('qa.model', 'sonnet');
 
-    // Base env shared by all launches. The GHOLA_{TPM,SWE,QA}_PROMPT_FILE
-    // scaffolding is only needed for a full TPM session that may spawn
-    // subagents, so it is omitted in one-shot dispatch mode.
+    // Base env for every launch. The GHOLA_{TPM,SWE,QA}_PROMPT_FILE scaffolding
+    // is added further down, UNCONDITIONALLY: every launch is a full TPM session
+    // that may spawn subagents.
     const env: Record<string, string> = {
       GHOLA_ROOT: this.extensionPath,
       // Deterministic input for the startup sequence: the extension's own
@@ -480,21 +473,20 @@ export class SessionLauncher {
     if (this.bridgeFile) env.GHOLA_BRIDGE_FILE = this.bridgeFile;
     if (this.bridgeUrl) env.GHOLA_BRIDGE_URL = this.bridgeUrl;
     if (this.bridgeToken) env.GHOLA_BRIDGE_TOKEN = this.bridgeToken;
-    if (!oneShot) {
-      // Paths written by SettingsPanel.writeAllAgentPromptFiles() immediately
-      // before launch. Keyed on the workspace folder AND this extension-host
-      // instance (see resolveAgentPromptFilePath), so neither two windows on
-      // different folders NOR two windows/profiles on the SAME folder can
-      // overwrite each other's composed prompts while an agent is reading them.
-      // Resolving here rather than accepting the writer's return value is safe
-      // precisely because both sides key on process-scoped inputs. The SWE/QA
-      // files exist so TPM can read them via its Read tool and inject the
-      // content into the prompt passed to the Agent tool when spawning a SWE or
-      // QA subagent.
-      env.GHOLA_TPM_PROMPT_FILE = resolveAgentPromptFilePath('tpm');
-      env.GHOLA_SWE_PROMPT_FILE = resolveAgentPromptFilePath('swe');
-      env.GHOLA_QA_PROMPT_FILE = resolveAgentPromptFilePath('qa');
-    }
+
+    // Paths written by SettingsPanel.writeAllAgentPromptFiles() immediately
+    // before launch. Keyed on the workspace folder AND this extension-host
+    // instance (see resolveAgentPromptFilePath), so neither two windows on
+    // different folders NOR two windows/profiles on the SAME folder can
+    // overwrite each other's composed prompts while an agent is reading them.
+    // Resolving here rather than accepting the writer's return value is safe
+    // precisely because both sides key on process-scoped inputs. The SWE/QA
+    // files exist so TPM can read them via its Read tool and inject the
+    // content into the prompt passed to the Agent tool when spawning a SWE or
+    // QA subagent.
+    env.GHOLA_TPM_PROMPT_FILE = resolveAgentPromptFilePath('tpm');
+    env.GHOLA_SWE_PROMPT_FILE = resolveAgentPromptFilePath('swe');
+    env.GHOLA_QA_PROMPT_FILE = resolveAgentPromptFilePath('qa');
 
     // Singleton terminal: dispose any already-open terminal with the same name
     // (by name-match, so stale duplicates from prior builds are cleared too)
@@ -516,13 +508,12 @@ export class SessionLauncher {
       env,
     });
 
-    // Auto-pin genuine Ghola Sessions. ARM the pin BEFORE `show()` so we never
+    // Auto-pin the session terminal. ARM the pin BEFORE `show()` so we never
     // miss the activation event it triggers (see pinSessionTerminal for the race
-    // this closes). Gated on `!oneShot` so the transient one-shot 'Ghola Commit'
-    // terminal is never pinned — only genuine sessions are.
-    if (!oneShot) {
-      this.pinSessionTerminal(terminal);
-    }
+    // this closes). Unconditional: the transient one-shot 'Ghola Commit' terminal
+    // this used to be gated against is retired, so every terminal created here is
+    // a genuine session.
+    this.pinSessionTerminal(terminal);
     // `show()` with preserveFocus left at its default (false) so the terminal
     // TAKES focus and becomes the active editor. A previous `show(true)`
     // (preserveFocus=true) revealed the terminal without focusing it, leaving
@@ -536,20 +527,21 @@ export class SessionLauncher {
     //   1) Send `cliCommand` (default: "claude") as a shell command. The
     //      terminal executes it and the CLI process starts.
     //   2) Wait CLI_BOOT_DELAY_MS for the CLI to be ready to accept stdin.
-    //   3) Send the phase-2 message AS USER INPUT to the running CLI. By
-    //      default this is `sessionCommand` (the trigger word, e.g. "initiate")
-    //      whose meaning is defined by the user's CLI configuration. In
-    //      one-shot dispatch mode it is `promptOverride` — a self-contained
-    //      prompt sent verbatim instead of the trigger word.
-    const phaseTwoMessage = oneShot ? promptOverride : sessionCommand;
+    //   3) Send the phase-2 message AS USER INPUT to the running CLI. This is
+    //      ALWAYS `sessionCommand` (the trigger word, e.g. "initiate") whose
+    //      meaning is defined by the user's CLI configuration; the one-shot
+    //      dispatch mode that used to substitute a self-contained prompt here is
+    //      retired, which is why this is a plain alias rather than a choice.
+    const phaseTwoMessage = sessionCommand;
     // Race-free trigger-word delivery: on bash (WSL/Linux) or PowerShell
     // (Windows) with a real CLI and a non-empty trigger word, pass the word as
     // the CLI's positional prompt arg so `claude` submits it as turn 1 with no
     // boot-delay race — and so nothing is ever typed after a command the shell
     // could not resolve. Each shell gets its own quoting (bash escapes an
-    // embedded single quote as '\'', PowerShell by doubling it). One-shot
-    // dispatch and the no-CLI shell path keep the timed phase-2 sendText below
-    // (a multi-KB one-shot prompt must never go on the command line).
+    // embedded single quote as '\'', PowerShell by doubling it). The no-CLI shell
+    // path keeps its own direct phase-2 sendText below; the TIMED sendText between
+    // the two is now a retained fallback rather than a live path, because one-shot
+    // dispatch — its only other caller — is gone (see the note on it).
     //
     // An UNDEFINED `shellPath` on a non-win32 host counts as bash-equivalent, and
     // that closes the last Enter-key gap. `pickShell()` returns undefined there
@@ -583,23 +575,33 @@ export class SessionLauncher {
     // unambiguously the prompt — hence the flag stays BEFORE `${quoted}`.
     // `resolveRemoteControlSessionName` cannot return an empty string, so the only
     // way `remoteControlName` is empty here is the block above having declined to
-    // resolve one at all, which happens in exactly three cases: a one-shot
-    // dispatch, no CLI command configured, or a command Ghola POSITIVELY resolved
-    // to a binary that is not `claude`. There is still no Remote-Control-is-off
-    // setting — the flag is mandatory — so this ternary encodes those three
-    // exclusions and nothing else.
+    // resolve one at all, which happens in exactly two cases: no CLI command
+    // configured, or a command Ghola POSITIVELY resolved to a binary that is not
+    // `claude`. (A one-shot dispatch was a third case until that mode was
+    // removed.) There is still no Remote-Control-is-off setting — the flag is
+    // mandatory — so this ternary encodes those two exclusions and nothing else.
     const remoteFlag =
       remoteControlName === ''
         ? ''
         : ` --remote-control ${isPwshShell ? this.pwshQuote(remoteControlName) : this.shellQuote(remoteControlName)}`;
-    const useArgPrompt = !oneShot && !!cliCommand && (isBashShell || isPwshShell) && !!phaseTwoMessage;
+    const useArgPrompt = !!cliCommand && (isBashShell || isPwshShell) && !!phaseTwoMessage;
     if (useArgPrompt) {
       const quoted = isPwshShell
-        ? this.pwshQuote(phaseTwoMessage!)
-        : this.shellQuote(phaseTwoMessage!);
+        ? this.pwshQuote(phaseTwoMessage)
+        : this.shellQuote(phaseTwoMessage);
       terminal.sendText(`${cliCommand}${permFlag}${remoteFlag} ${quoted}`, true);
     } else if (cliCommand) {
       terminal.sendText(`${cliCommand}${permFlag}${remoteFlag}`, true);
+      // RETAINED AS A FALLBACK, not because it is reachable today. Reaching the
+      // two branches below needs `useArgPrompt` false with a non-empty
+      // `phaseTwoMessage`, and with one-shot dispatch gone the only remaining way
+      // to get that is a shell family that is neither bash-equivalent nor
+      // PowerShell — which `pickShell()` cannot currently return (win32 always
+      // yields pwsh/powershell, and every non-win32 result, `undefined` included,
+      // counts as bash per `isBashShell`). Deliberately kept rather than deleted:
+      // if `pickShell()` ever learns a third shell family, this timed send is the
+      // only thing that still delivers the trigger word to it.
+      //
       // Only arm the blind timer when pre-flight found nothing wrong. When the
       // CLI plainly cannot start, the phase-2 message would land in the shell as
       // a bogus command rather than as CLI input, so hold it back and say why.
@@ -952,25 +954,35 @@ export class SessionLauncher {
    *
    * The chain, first non-empty normalized candidate wins:
    *
-   *   1. The `Project-`-STRIPPED REPOSITORY NAME, and only when the repository
-   *      really carries that prefix — see `resolveProjectPrefixedName`. It sits
-   *      ahead of the branch because the branch is the WORSE discriminator for
-   *      exactly these repos: `Project-Ghola`, `Project-Mandrake`,
-   *      `Project-Merkle`, `Project-Steersman` and `JiraLinker` are all on `main`,
-   *      so a branch-named session list shows four identical `main` entries. A
-   *      repo without the prefix contributes nothing here and keeps HEAD's
-   *      behavior exactly — the `cmms0`..`cmms8` fleet is each on its own feature
-   *      branch, which is already unique and already the more informative name.
+   *   1. This instance's QUALIFIED TEAM IDENTITY — the very string the Team
+   *      Switchboard roster row and the VS Code status-bar pill render (`Ghola` in
+   *      WSL, `cmms1@win` on the native-Windows host); see
+   *      `resolveQualifiedTeamName`. It sits ahead of the branch because the
+   *      branch is the WORSE discriminator for this fleet in BOTH directions:
+   *      `Project-Ghola`, `Project-Mandrake`, `Project-Merkle`,
+   *      `Project-Steersman` and `JiraLinker` are all on `main`, so a
+   *      branch-named session list shows five identical `main` entries — and the
+   *      `cmms0`..`cmms8` clones are NOT reliably one-feature-branch-each either
+   *      (an earlier revision of this comment asserted they were, and the operator
+   *      confirmed that with eight windows open they collide). A per-clone,
+   *      per-environment identity cannot collide either way: it is a function of
+   *      each window's own repo path and its own host.
    *   2. The current git BRANCH, reused from the value already resolved for
-   *      `GHOLA_BRANCH` rather than shelling out to git a second time. This is
-   *      the default for everything else because a branch is what actually
-   *      distinguishes concurrent sessions: Claude Code's own
+   *      `GHOLA_BRANCH` rather than shelling out to git a second time. Candidate 1
+   *      answers for every window that has a workspace folder open, so this is the
+   *      SAFETY NET rather than the common case — reached when no folder is open,
+   *      or when the derived identity normalizes away. It is still a far better
+   *      name than letting the CLI generate one: Claude Code's own
    *      `--remote-control-session-name-prefix` defaults to the HOSTNAME, which
    *      makes eight sessions on one machine indistinguishable from a phone.
    *   3. The effective working directory's BASENAME — the repo folder name. This
-   *      is what covers the two explicit edge cases: a DETACHED HEAD (where
-   *      `git rev-parse --abbrev-ref HEAD` prints the literal `HEAD`, which names
-   *      no branch) and a NON-GIT workspace (where `readGitBranch` returns `''`).
+   *      used to be what covered the two explicit edge cases, a DETACHED HEAD
+   *      (where `git rev-parse --abbrev-ref HEAD` prints the literal `HEAD`, which
+   *      names no branch) and a NON-GIT workspace (where `readGitBranch` returns
+   *      `''`); candidate 1 now answers both, because it never consults HEAD and
+   *      falls back to the workspace folder when no repo root is found above it.
+   *      It survives as the layer beneath candidate 1, reached when NO workspace
+   *      folder is open but an effective dir was still resolved.
    *   4. `REMOTE_CONTROL_FALLBACK_NAME` — a static constant, reached when there is
    *      no workspace at all or when every earlier candidate normalizes away.
    *
@@ -986,7 +998,7 @@ export class SessionLauncher {
     workspaceFolderPaths: readonly string[],
   ): string {
     const candidates = [
-      this.resolveProjectPrefixedName(workspaceFolderPaths),
+      this.resolveQualifiedTeamName(workspaceFolderPaths),
       branch === 'HEAD' ? '' : branch,
       dir ? path.basename(dir) : '',
       REMOTE_CONTROL_FALLBACK_NAME,
@@ -999,48 +1011,73 @@ export class SessionLauncher {
   }
 
   /**
-   * The repository's name with a leading `Project-` stripped — `Project-Ghola` ->
-   * `Ghola`, `Project-Mandrake` -> `Mandrake` — or `''` when the repository does
-   * not carry that prefix, which is how it declines to contribute a candidate and
-   * lets `resolveRemoteControlSessionName` fall through to the branch.
+   * This instance's Team Switchboard identity, taken WHOLE from
+   * `resolveTeamIdentity` — `Ghola` in WSL, `cmms1@win` on the native-Windows host
+   * — or `''` when no workspace folder is open, which is how it declines to
+   * contribute a candidate and lets `resolveRemoteControlSessionName` fall through
+   * to the branch.
    *
-   * THE STRIP IS NOT REIMPLEMENTED HERE, DELIBERATELY. It is the same rule that
-   * names the Team Switchboard roster row and the VS Code status-bar pill, and
+   * THE QUALIFIED NAME, NOT THE BARE ONE, and that is the whole fix rather than a
+   * detail. This candidate used to return `identity.teamName` and only when the
+   * directory actually carried a `Project-` prefix, which made it decline outright
+   * for every clone in the `cmms0`..`cmms8` fleet and dropped the chain onto the
+   * branch — and the branch is not unique across those windows, which the operator
+   * confirmed for eight concurrent sessions. `identity.name` cannot collide the
+   * same way: it is a function of each window's own repo path (so two clones at two
+   * paths differ) AND of its own host (so the WSL and the native-Windows copy of
+   * ONE clone differ too, `cmms1` against `cmms1@win`).
+   *
+   * `@` IS SAFE IN THIS POSITION, verified rather than assumed before shipping it.
+   * In the installed Claude Code (2.1.220) `--remote-control [name]` is declared
+   * with `.argParser((v) => v || true)` — no validation, no character set — and the
+   * value reaches the bridge as `initialName`, where it becomes the session TITLE
+   * under the single rule `title must be non-empty`. The one sanitizer anywhere in
+   * that path, `sanitizeSessionNamePrefix`
+   * (`.toLowerCase().replace(/[^a-z0-9]+/g, '-')`), is applied ONLY to the
+   * AUTO-GENERATED prefix (the hostname, or
+   * `CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX`), which an explicit name bypasses
+   * entirely; `claude --help` documents no constraint either. `@` is also a literal
+   * inside both quoters below (bash `'...'`, and PowerShell `'...'`, where `@` is
+   * special only in `@(`, `@{` and `@"` here-strings), so the `-` spelling of the
+   * qualifier was not needed and is not used.
+   *
+   * THE DERIVATION IS NOT REIMPLEMENTED HERE, DELIBERATELY. It is the same rule
+   * that names the Team Switchboard roster row and the VS Code status-bar pill, and
    * `team-identity.ts`'s header warns against uncoordinated copies of a shared
    * derivation rule for a concrete reason: a second copy that drifted would make
    * the pill and the Remote Control session name disagree about the same repo, and
-   * that disagreement is invisible until it confuses somebody. So this reuses
-   * `resolveTeamIdentity` and adds no prefix test of its own.
+   * that disagreement is invisible until it confuses somebody. Taking
+   * `identity.name` whole is stronger than reusing the rule — the pill and this
+   * name are now the SAME STRING, not two applications of one rule that could
+   * diverge.
    *
-   * `resolveTeamIdentity` is the entry point rather than `deriveTeamName` because
-   * it is the only exported one that also reports the PRE-strip `basename`.
-   * `deriveTeamName` returns the basename UNCHANGED when the prefix is absent
-   * (`cmms3` -> `cmms3`), so on its own it cannot answer "did a strip actually
-   * happen" — and answering that by re-testing for `Project-` here is precisely
-   * the second copy the paragraph above forbids. `teamName !== basename` is the
-   * strip's own report of itself.
+   * THERE IS NO OVERRIDE TO CONSULT, and that is true fleet-wide.
+   * `tool.team-switchboard` used to declare a `teamName` setting; this candidate
+   * deliberately never read it, because that setting lived in VS Code's
+   * `globalState`, i.e. it was MACHINE-GLOBAL and shared by every window on the
+   * host, so honoring it would have given every concurrent session on this
+   * machine the same Remote Control name — reintroducing exactly the collision
+   * this candidate exists to fix. The setting has since been removed outright for
+   * that same reason, so `resolveTeamIdentity` now derives for every caller.
    *
-   * THE BARE NAME, NEVER THE QUALIFIED ONE. `identity.name` is environment-
-   * qualified off WSL (`Ghola@win`); `identity.teamName` is the unqualified strip
-   * result, which is what the operator specified (`Project-Ghola => Ghola`).
+   * Empty and degenerate names cannot escape. `resolveTeamIdentity` returns
+   * `undefined` — never an empty name — when no folder is open or when nothing
+   * along the way yields a basename, and a basename of exactly `Project-` strips to
+   * nothing, which `stripProjectPrefix` refuses by keeping the unstripped basename.
+   * `Project--` yields `-`, which `normalizeRemoteControlName` reduces to `''`.
+   * Every one of those advances the chain to the branch rather than emitting
+   * garbage or an empty flag value.
    *
-   * THE `teamName` OVERRIDE IS DELIBERATELY NOT CONSULTED — no `teamNameOverride`
-   * is passed, so `resolveTeamIdentity` derives. That setting lives in VS Code's
-   * `globalState`, i.e. it is MACHINE-GLOBAL and shared by every window on the
-   * host, so honoring it would give every concurrent session on this machine the
-   * same Remote Control name — reintroducing exactly the collision this candidate
-   * exists to fix.
-   *
-   * Empty and degenerate names cannot escape: a basename of exactly `Project-`
-   * strips to nothing, and `stripProjectPrefix` refuses that by keeping the
-   * unstripped basename, so `teamName === basename` and this returns `''`.
-   * `Project--` strips to `-`, which `normalizeRemoteControlName` reduces to `''`
-   * — either way the chain advances to the branch rather than emitting garbage.
+   * ONE COLLISION SURVIVES, inherited whole from the `#N` gap `team-identity.ts`'s
+   * header documents: two clones of ONE repo at two paths with the SAME basename,
+   * inside one environment, still render identically, because the roster's integer
+   * suffix is assigned by registration ORDER and is not derivable from local state.
+   * That is not this fleet's layout (`cmms0`..`cmms8` have distinct basenames), and
+   * closing it here would mean reading the vault roster from the extension host —
+   * the vault I/O `team-identity.ts` exists to avoid.
    */
-  private resolveProjectPrefixedName(workspaceFolderPaths: readonly string[]): string {
-    const identity = resolveTeamIdentity(workspaceFolderPaths);
-    if (identity === undefined) return '';
-    return identity.teamName === identity.basename ? '' : identity.teamName;
+  private resolveQualifiedTeamName(workspaceFolderPaths: readonly string[]): string {
+    return resolveTeamIdentity(workspaceFolderPaths)?.name ?? '';
   }
 
   /**
@@ -1243,10 +1280,13 @@ export class SessionLauncher {
    *     alias sync would actually emit; for one it refuses, Save is a no-op and
    *     saying otherwise sends the operator round a loop that cannot terminate.
    *
-   * The stakes are higher than a stray notification: on the one-shot
-   * Commit-and-Push path (`promptOverride` set, so `useArgPrompt` is false) a
-   * non-empty return here HOLDS BACK the phase-2 prompt with nothing but an
-   * output-channel line, so a false positive silently does nothing at all.
+   * A FALSE POSITIVE IS NOT FREE, on two counts. It raises a warning notification
+   * the operator cannot act on, and a non-empty return here also gates the timed
+   * phase-2 send — which HOLDS BACK the prompt with nothing but an output-channel
+   * line, so on that path a false positive silently does nothing at all. That
+   * hold-back was the one-shot Commit-and-Push path's only delivery route; the
+   * mode is retired and the timed send survives as a fallback (see the note on
+   * it), so the notification is the live cost today. Stay conservative on both.
    */
   private async checkCliCommandResolvable(
     cliCommand: string,
@@ -1319,8 +1359,8 @@ export class SessionLauncher {
    * Pre-flight the part of Claude Code's Remote Control gating that is actually
    * OBSERVABLE from the extension host, returning a list of actionable problems
    * (empty = nothing detectably wrong). Never throws. Called on every launch that
-   * gets the flag (i.e. every non-one-shot launch with a CLI command); the caller
-   * warns and launches anyway.
+   * gets the flag (i.e. every launch with a CLI command Ghola has not POSITIVELY
+   * resolved to a non-Claude binary); the caller warns and launches anyway.
    *
    * INFORMATION, NOT A GATE. Remote Control is mandatory, so a problem found here
    * cannot be "fixed" by turning something off in Ghola — the operator has no such
@@ -1363,9 +1403,13 @@ export class SessionLauncher {
    * answer it truthfully — so no probe is attempted. Guessing would produce exactly
    * the warning-nobody-can-act-on that `isOnWindowsPath`'s fail-open comment
    * argues against. That gating is documented in
-   * `ghola.remoteControlSessionName`'s `markdownDescription` instead — now the only
-   * Remote Control setting there is — so a feature that silently does not come up
-   * is at least explained on the one control the operator still has.
+   * `ghola.remoteControlSessionName`'s `markdownDescription` instead. That setting
+   * is itself RETIRED AND INERT — nothing reads it, and the session name is derived
+   * automatically by `resolveRemoteControlSessionName` — so it is not a control the
+   * operator has any more; its `markdownDescription` is retained purely as REFERENCE
+   * DOCUMENTATION, and it is the one place the unobservable half of the gating is
+   * written down, which is why a feature that silently does not come up is still
+   * explained somewhere.
    */
   private checkRemoteControlGating(
     cliCommand: string,

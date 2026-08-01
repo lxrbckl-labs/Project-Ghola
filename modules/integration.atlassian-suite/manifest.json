@@ -1,8 +1,8 @@
 {
   "id": "integration.atlassian-suite",
   "name": "Atlassian Suite",
-  "version": "0.4.1",
-  "description": "Manages Atlassian credentials (email, Jira base URL, Bitbucket workspace, a single Jira token plus an ordered list of Bitbucket API tokens with round-robin failover, all in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, and per-token validation. Also answers natural language sprint and board questions by forming JQL and querying Jira read only via the Atlassian MCP.",
+  "version": "0.7.0",
+  "description": "Manages Atlassian credentials and identity handles (email, Jira base URL, Bitbucket workspace, Bitbucket username, Jira account id, a single Jira token plus an ordered list of Bitbucket API tokens with round-robin failover, all in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, and per-token validation. Answers natural language sprint and board questions by forming JQL and querying Jira read only via the Atlassian MCP, and creates Bitbucket pull requests behind a confirmation gate. Also contributes the one Jira write Ghola permits — POSTing a comment to an existing issue, off by default behind the Enable Jira Comment Write setting, and once enabled still TPM-only, never autonomous, and gated on the operator approving the exact comment text. Post only: no editing, deleting, transitioning, or issue creation.",
   "proactive": false,
   "category": "integration",
   "kind": "capability",
@@ -31,6 +31,18 @@
         "label": "Bitbucket Workspace",
         "description": "Bitbucket Cloud workspace slug (the organization slug, e.g. herzog-technologies) that scopes every branch and PR lookup. When set, this value takes priority; leave it blank to auto-detect the slug from origin's git remote URL. CRITICAL: a wrong or renamed slug makes find-pr query the wrong workspace and silently report no PR even when one exists — if PR lookups come up empty, verify this matches your actual Bitbucket workspace.",
         "default": "herzog-technologies"
+      },
+      "bitbucketUsername": {
+        "type": "string",
+        "label": "Bitbucket Username",
+        "description": "The operator's Bitbucket account username/nickname (the handle, not the display name), used to detect REVIEW mode: when the open PR's author is NOT this handle, the session is reviewing someone else's work rather than authoring. Empty disables identity-based review detection (falls back to the git-author heuristic). This is a non-secret identifier, not a credential.",
+        "default": ""
+      },
+      "jiraAccountId": {
+        "type": "string",
+        "label": "Jira Account / Username",
+        "description": "The operator's Jira account identifier. Reserved for future identity-based review detection via ticket assignee/reporter; not yet wired. Optional.",
+        "default": ""
       },
       "boardId": {
         "type": "string",
@@ -68,6 +80,32 @@
         "label": "Create PRs as Draft",
         "default": true,
         "description": "When on, new pull requests are created as drafts so you can mark them ready for review after prep. Turn off to create ready-for-review PRs directly."
+      },
+      "enableJiraCommentWrite": {
+        "type": "boolean",
+        "label": "Enable Jira Comment Write",
+        "default": false,
+        "description": "The outer gate on this suite's one Jira write. While this is off — and off is the default — every request to post a Jira comment is refused outright, however it is phrased and whatever Require Operator Approval is set to. Turning it on grants exactly one capability: posting a new comment to an existing issue. Every other Jira mutation stays refused — creating, cloning, or transitioning an issue, assigning it, changing any field, and editing or deleting any comment including one the agent posted itself. This gate decides whether comment posting exists at all; Require Operator Approval below decides whether each individual post is previewed and confirmed first."
+      },
+      "attributionSuffix": {
+        "type": "string",
+        "label": "Attribution Suffix",
+        "multiline": true,
+        "default": "\n\n---\nPosted via Ghola on behalf of the ticket owner.",
+        "description": "Appended verbatim to every Jira comment this module posts, so a teammate reading the ticket can tell the comment was agent-authored rather than typed by a person. Shown to the operator as part of the approval preview, since it is part of what gets posted. Set to an empty string to disable attribution entirely — not recommended, as unattributed agent comments on a shared ticket are a transparency problem, and the operator is the one whose name is on the account."
+      },
+      "requireOperatorApproval": {
+        "type": "boolean",
+        "label": "Require Operator Approval",
+        "default": true,
+        "description": "When on, TPM must show the operator the full, final Jira comment text and receive an explicit confirmation before posting. This is the comment-write capability's central safety gate and should be left on. It exists as a setting only so the value is visible and auditable in the panel; turning it off removes the last check between a drafted comment and a permanent, publicly-visible write on a shared ticket, and no workflow in this module is designed to run without it."
+      },
+      "commentPolishPrompt": {
+        "type": "string",
+        "label": "Comment Polish Prompt",
+        "multiline": true,
+        "default": "Write a concise, professional Jira comment stating the update plainly. No hedging, no double-dashes, no severity ratings.",
+        "description": "The instruction TPM applies when drafting a Jira comment body from raw session material (a SWE report, a QA verdict, a status update). Governs tone and shape only — it never changes the approval gate, and the operator always sees and approves the final text the prompt produced."
       }
     }
   }

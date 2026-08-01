@@ -588,6 +588,16 @@ function handleMessage(msg: HostToWebviewMessage): void {
       state.selectedAlias = msg.selectedAlias ?? '';
       state.aliasFile = msg.aliasFile ?? '~/.bashrc';
       state.dirty = false;
+      // Discard every cached keyValue draft so each table re-seeds from the
+      // payload we just installed. `appendKeyValueEditor` seeds a draft from
+      // `settingsValues` ONLY when the draft is `undefined` and then reads from
+      // the draft forever after — so a refresh that skipped this would update
+      // `settingsValues` while every keyValue table (tool.git::allowedCommands,
+      // mode.support::appMap, ...) kept rendering its stale seed, making the
+      // whole refresh silently half-work. Same reasoning as the single-key
+      // `delete` in `handleSupportDiscoveryResult`, applied map-wide because
+      // this payload replaces the map wholesale.
+      state.keyValueDrafts = {};
       render();
       break;
     case 'aliasesLoaded':
@@ -919,6 +929,19 @@ function setSection(id: SectionId): void {
     state.warRoomRequested = true;
     postRequestWarRoom();
   }
+  // Re-read module setting VALUES on every entry into a tab that renders them.
+  // Exactly the stale-payload problem documented for the War Room just above,
+  // but for `state.settingsValues`: the webview posts `getSettings` once at
+  // script load, and `retainContextWhenHidden: true` means that script never
+  // re-runs for the life of the panel — so without this, a panel opened hours
+  // ago keeps rendering the map as it looked then. The store is `globalState`
+  // (machine-wide), so another VS Code window may have changed it since.
+  // Modules renders the per-module field editors; Agents renders the War Mode
+  // block off the same map. One post per tab-entry; the reply
+  // (`settingsLoaded`) re-renders.
+  if ((id === 'modules' || id === 'agents') && state.activeSection !== id) {
+    vscode.postMessage({ type: 'getSettings' });
+  }
   // Clear inline configuration name editor and manage panel on any tab leave —
   // both are tab-scoped ephemeral UI states.
   if (state.activeSection !== id) {
@@ -1221,11 +1244,15 @@ function renderModuleListView(wrapper: HTMLElement): void {
   );
   searchWrap.appendChild(uploadBtn);
 
+  // Refresh control: re-discovers modules AND re-reads setting values from the
+  // host (see the `reloadModules` case in host.ts). The value resync matters
+  // because settings live in machine-wide `globalState` — this is the operator's
+  // explicit gesture for pulling in changes made from another VS Code window.
   const reloadBtn = el('button', {
     class: 'icon-button framed',
     type: 'button',
-    'aria-label': 'Reload modules',
-    title: 'Reload modules',
+    'aria-label': 'Reload modules and refresh settings',
+    title: 'Reload modules and refresh settings',
   }) as HTMLButtonElement;
   reloadBtn.innerHTML = REFRESH_ICON_SVG;
   reloadBtn.addEventListener('click', () =>
@@ -2543,7 +2570,7 @@ function renderModuleSettingField(
         .filter((kw) => selected.has(kw))
         .join(', ');
       state.settingsValues[key] = nextStr;
-      persistSettings();
+      persistSettings(key);
     };
 
     if (field.description) {
@@ -2571,7 +2598,7 @@ function renderModuleSettingField(
         checked: !!current,
         onChange: (next) => {
           state.settingsValues[key] = next;
-          persistSettings();
+          persistSettings(key);
         },
         ariaLabel: field.label,
       }),
@@ -2607,7 +2634,7 @@ function renderModuleSettingField(
     row.appendChild(select);
     select.addEventListener('change', () => {
       state.settingsValues[key] = readInputValue();
-      persistSettings();
+      persistSettings(key);
     });
   } else if (field.type === 'number') {
     const inp = el('input', { class: 'setting-input' }) as HTMLInputElement;
@@ -2619,7 +2646,7 @@ function renderModuleSettingField(
     row.appendChild(inp);
     inp.addEventListener('change', () => {
       state.settingsValues[key] = readInputValue();
-      persistSettings();
+      persistSettings(key);
     });
   } else if (field.type === 'string' && field.multiline === true) {
     // Multi-line string — render a textarea. Same value binding, same auto-save
@@ -2636,7 +2663,7 @@ function renderModuleSettingField(
     row.appendChild(ta);
     ta.addEventListener('change', () => {
       state.settingsValues[key] = readInputValue();
-      persistSettings();
+      persistSettings(key);
     });
   } else {
     // string, path, or unknown — render text input.
@@ -2647,7 +2674,7 @@ function renderModuleSettingField(
     row.appendChild(inp);
     inp.addEventListener('change', () => {
       state.settingsValues[key] = readInputValue();
-      persistSettings();
+      persistSettings(key);
     });
   }
 
@@ -2719,7 +2746,7 @@ function appendMultiSelectField(
         .filter((kw) => selected.has(kw))
         .join(', ');
       state.settingsValues[key] = next;
-      persistSettings();
+      persistSettings(key);
     });
     const txt = el('span', { class: 'multi-select-label' });
     txt.textContent = entry.keyword;
@@ -2807,10 +2834,11 @@ function appendKeyValueEditor(
   }
   const draft = state.keyValueDrafts[key]!;
 
-  // Auto-save: every mutation immediately persists the draft.
+  // Auto-save: every mutation immediately persists the draft. Scoped to this
+  // field's key so a save here cannot overwrite settings another window changed.
   const persistDraft = (): void => {
     state.settingsValues[key] = { ...draft };
-    persistSettings();
+    persistSettings(key);
   };
 
   // ── Table of existing entries ──────────────────────────────────────
@@ -3438,9 +3466,27 @@ function appendKeywordsTable(
   parent.appendChild(block);
 }
 
-/** Persist the current settingsValues to the host. */
-function persistSettings(): void {
-  vscode.postMessage({ type: 'saveSettings', values: state.settingsValues });
+/**
+ * Persist the current settingsValues to the host.
+ *
+ * `changedKeys` names the `moduleId::fieldKey` entries THIS save committed. It
+ * matters because `state.settingsValues` is a snapshot taken when the panel last
+ * loaded settings, while the underlying store is `globalState` — shared by every
+ * VS Code window on the machine. Posting the bare snapshot makes the host
+ * replace the whole map, silently erasing anything another window changed since;
+ * naming the changed keys makes the host re-read the live map and fold only
+ * those keys onto it instead (see `mergeChangedModuleSettings`).
+ *
+ * Always name the key(s) you just committed. Calling with no arguments omits the
+ * field entirely (never sends `[]`), which the host reads as "replace the whole
+ * map" — the legacy behavior, and a clobber risk.
+ */
+function persistSettings(...changedKeys: string[]): void {
+  vscode.postMessage({
+    type: 'saveSettings',
+    values: state.settingsValues,
+    changedKeys: changedKeys.length > 0 ? changedKeys : undefined,
+  });
 }
 
 interface ToggleOptions {
@@ -3592,15 +3638,18 @@ function renderGholaConfigBlock(): HTMLElement {
 
   // Master switch — a locally-constructed boolean field (not part of the
   // module's contributes.settings schema) bound to mode.war::enabled.
-  // Auto-save: persist the whole settings map on every change so the Ghola
-  // block saves live like the SWE/QA fields, rather than batching behind a
-  // Save button. saveSettings writes the entire map to the SAME MODULE_SETTINGS
-  // store getComposeSettings()/isGholaEnabled() read `mode.war::*` from, so
-  // firing it per-change is an idempotent whole-map live save. Scoped to this
-  // block via renderField's optional onCommit hook; other callers omit it and
-  // keep their batched Save button.
-  const commitGhola = () => {
-    vscode.postMessage({ type: 'saveSettings', values: state.settingsValues });
+  // Auto-save: persist on every change so the Ghola block saves live like the
+  // SWE/QA fields, rather than batching behind a Save button. saveSettings
+  // writes to the SAME MODULE_SETTINGS store getComposeSettings()/
+  // isGholaEnabled() read `mode.war::*` from, so firing it per-change is an
+  // idempotent live save. Scoped to this block via renderField's optional
+  // onCommit hook; other callers omit it and keep their batched Save button.
+  //
+  // The hook receives the committed key and forwards it as `changedKeys`, so
+  // this save folds only that one setting onto the live global map instead of
+  // replacing the map with this panel's (possibly stale) snapshot.
+  const commitGhola = (committedKey: string) => {
+    persistSettings(committedKey);
   };
 
   const masterEnabled = gholaEnabled();
@@ -3612,14 +3661,21 @@ function renderGholaConfigBlock(): HTMLElement {
 
   // Master toggle commit: when the switch has just been flipped to OFF, force
   // the three boolean sub-values to false in the store (a number field like
-  // maxConcurrentGholas has no false, so it is left untouched), then live-save
-  // the whole map. renderField's onChange already wrote the new `enabled` value
-  // and calls render() after this hook, so the block re-renders showing the
-  // sub-controls disabled + unchecked.
-  const commitMaster = () => {
+  // maxConcurrentGholas has no false, so it is left untouched), then live-save.
+  // renderField's onChange already wrote the new `enabled` value and calls
+  // render() after this hook, so the block re-renders showing the sub-controls
+  // disabled + unchecked.
+  //
+  // `changed` accumulates EVERY key this handler wrote — the master key plus any
+  // sub-toggle it forced to false — so the scoped save commits all of them and
+  // nothing else. Missing one here would silently drop that forced `false`.
+  const commitMaster = (committedKey: string) => {
+    const changed = [committedKey];
     if (state.settingsValues['mode.war::enabled'] !== true) {
       for (const key of gholaBooleanKeys) {
-        state.settingsValues[scopedKey('mode.war', key)] = false;
+        const scoped = scopedKey('mode.war', key);
+        state.settingsValues[scoped] = false;
+        changed.push(scoped);
       }
     } else {
       // Transition to ENABLED: War Mode is no longer a Modules-tab row, so
@@ -3643,7 +3699,7 @@ function renderGholaConfigBlock(): HTMLElement {
         }
       }
     }
-    commitGhola();
+    persistSettings(...changed);
   };
 
   const enableField: SettingsField = {
@@ -6013,11 +6069,15 @@ function renderWarRoomGholaDetail(
  * batched Save-button flow unchanged; only the Ghola block opts into
  * auto-save. Number fields deliberately commit on `change` (blur/Enter), not on
  * every keystroke, so intermediate typing does not spam saves.
+ *
+ * The hook receives this field's `key` so the caller can tell the host exactly
+ * which setting changed (see `persistSettings`) rather than posting an
+ * unscoped whole-map save that would clobber other windows' edits.
  */
 function renderField(
   key: string,
   field: SettingsField,
-  onCommit?: () => void,
+  onCommit?: (committedKey: string) => void,
   disabled?: boolean,
   valueOverride?: unknown,
 ): HTMLElement {
@@ -6041,7 +6101,7 @@ function renderField(
         onChange: (next) => {
           state.settingsValues[key] = next;
           state.dirty = true;
-          onCommit?.();
+          onCommit?.(key);
           render();
         },
         ariaLabel: field.label,
@@ -6061,7 +6121,7 @@ function renderField(
     select.addEventListener('change', () => {
       state.settingsValues[key] = select.value;
       state.dirty = true;
-      onCommit?.();
+      onCommit?.(key);
       render();
     });
     wrap.appendChild(select);
@@ -6075,7 +6135,7 @@ function renderField(
       state.dirty = true;
     });
     if (onCommit) {
-      inp.addEventListener('change', () => onCommit());
+      inp.addEventListener('change', () => onCommit(key));
     }
     wrap.appendChild(inp);
   } else {
@@ -6088,7 +6148,7 @@ function renderField(
       state.dirty = true;
     });
     if (onCommit) {
-      inp.addEventListener('change', () => onCommit());
+      inp.addEventListener('change', () => onCommit(key));
     }
     wrap.appendChild(inp);
   }

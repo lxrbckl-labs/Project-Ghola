@@ -298,6 +298,159 @@ for v in GHOLA_TPM_PROMPT_FILE GHOLA_SWE_PROMPT_FILE GHOLA_QA_PROMPT_FILE; do
   if [ -z "$f" ] || [ ! -r "$f" ]; then env_state="fail"; missing="${missing:+$missing,}$v"; fi
 done
 
+# 2b. statusline health (READ-ONLY: never writes, stages, or repairs harness config)
+# Closes the one silent failure `modules/tool.statusline/statusline.md` admits it
+# cannot close from inside a renderer, and that file ("A residual silent failure")
+# names THIS probe as the right home for the signal.
+#
+# Both renderers now emit ZERO BYTES by default, so the footer is no longer a
+# symptom of anything: the ONLY reason they still run is the state write to
+# `~/.ghola/statusline/state/<key>.json` that feeds the VS Code status-bar pill.
+# `ghola-statusline.sh` parses the harness payload with `python3` and falls back to
+# `node <dir>/ghola-statusline.mjs` when that python3 will not run — but with
+# NEITHER interpreter resolvable nothing is written, nothing errors, nothing is
+# logged, and the pill just empties once the reader's 90-second staleness window
+# passes. There is no visible symptom anywhere and nothing to grep, which is why
+# the condition has to surface at boot instead.
+#
+# ONE field, `statusline_health`, with a five-token closed vocabulary:
+#   ok       — a Ghola renderer is configured and an interpreter that can run it
+#              resolves: `.mjs` + node, or `.sh` + node (which arms the fallback
+#              writer even if python3 is dead), or `.sh` + python3 + node.
+#   at-risk  — `.sh` configured, python3 resolves, node does NOT. It renders and
+#              writes state TODAY, but the fallback writer is disarmed, so a
+#              python3 that later stops running takes the pill with it, silently.
+#   broken   — no interpreter can run the configured renderer (`.sh` with neither,
+#              `.mjs` with no node). Nothing writes state: THIS is the silent case.
+#   none     — a USER-LEVEL settings file WAS read and no candidate carries a
+#              `statusLine` command, so the harness invokes no renderer at all. A
+#              CONFIRMED absence, which is why it takes the user-level file: see
+#              `sl_user_from` below for why a project file alone cannot license it.
+#   unknown  — nothing was confirmed: no settings file was readable, the
+#              `statusLine` block yielded no command, or the command names neither
+#              Ghola renderer. NEVER a health claim; see the module's rendering.
+#
+# Unlike `bridge_state` / `vault_state` / `detail_file_form`, this field is emitted
+# UNCONDITIONALLY, `ok` included. Those are absent-means-healthy; this one cannot
+# be, because absent has to keep meaning "an older probe wrote this digest". That
+# is the same rule those fields follow, reached from the other side: a check that
+# went unanswered and a check that came back healthy must never collapse together.
+#
+# The parse is deliberately PURE BASH — no `node`, no `python3`, no `jq`. Using an
+# interpreter to detect a missing interpreter is the one thing that cannot work: in
+# the `broken` case there is nothing left to parse with. So the file is read with
+# `$(<file)` (a bash redirection, not a subprocess) and sliced with parameter
+# expansion. It is a targeted extraction, not a JSON parser: take everything after
+# the `"statusLine"` key, bound it at the next `}` so a `"command"` belonging to a
+# `hooks` entry can never be picked up, then lift the first quoted value after
+# `"command"`. Anything that does not yield a value degrades to `unknown`.
+#
+# The renderer is identified by FILENAME SUBSTRING, never by resolving the path.
+# The command can be `node C:/Users/x/.ghola/statusline/ghola-statusline.mjs`, a
+# bare repo path (this operator's live WSL config), or carry `\\`-escaped Windows
+# separators; the basename survives all three with no filesystem test at all.
+#
+# Candidates are tried in the harness's own precedence order FOR THIS KEY, and the
+# first file that actually CARRIES a statusLine command wins — a project settings
+# file that exists but says nothing about the statusline must not mask the
+# user-level one, which is how the merge behaves for a single key.
+# `$CLAUDE_CONFIG_DIR` comes before `$HOME` because it RELOCATES the whole config
+# directory when set (it IS set in this operator's live environment), so preferring
+# `$HOME` would read a file the harness never reads and report a confident `none`.
+# Two limits, recorded rather than guessed at: an enterprise `managed-settings.json`
+# outranks every file below and is not consulted, and the project candidates are
+# derived from `$PWD` because that is the surface the harness resolves them from.
+statusline_health="unknown"
+sl_node="no"; sl_py="no"
+command -v node >/dev/null 2>&1 && sl_node="yes"
+command -v python3 >/dev/null 2>&1 && sl_py="yes"
+# Ordered candidate list, built the same guarded way as the vault roots in block 8:
+# a missing input DROPS its candidate instead of composing a nonsense path.
+sl_files=()
+[ -n "$PWD" ] && sl_files+=("$PWD/.claude/settings.local.json" "$PWD/.claude/settings.json")
+# `sl_user_from` is the index where the USER-LEVEL candidates begin, and it exists
+# to keep the `none` verdict honest. A project settings file that says nothing
+# about the statusline rules NOTHING out — the user-level file is where this
+# operator's `statusLine.command` actually lives — so a run that could read only
+# the project file (e.g. an unset `HOME`) must answer `unknown`, not assert a
+# confirmed absence about a file it never opened. Only a readable USER-LEVEL
+# candidate licenses `none`; a positive hit is still taken from whichever file
+# carries it, project files first, because that is the harness's precedence.
+sl_user_from="${#sl_files[@]}"
+[ -n "$CLAUDE_CONFIG_DIR" ] && sl_files+=("$CLAUDE_CONFIG_DIR/settings.json")
+[ -n "$HOME" ] && sl_files+=("$HOME/.claude/settings.json")
+if [ "$shell_os" = "windows" ] && [ -n "$USERPROFILE" ]; then
+  # Same reasoning as block 8's windows arm: Git Bash inherits `%USERPROFILE%` in
+  # `C:\...` form, and step 1 of `translate_path` alone repairs the separators.
+  sl_files+=("$(translate_path "$USERPROFILE")/.claude/settings.json")
+fi
+sl_user_seen="no"; sl_key="no"; sl_cmd=""; _sl_i=0
+# Guarded expansion (empty array), matching block 8 — this probe must never error.
+if [ "${#sl_files[@]}" -gt 0 ]; then
+  for _sl_f in "${sl_files[@]}"; do
+    if [ "$_sl_i" -ge "$sl_user_from" ]; then _sl_user="yes"; else _sl_user="no"; fi
+    _sl_i=$((_sl_i + 1))
+    # `-f` before `-r`: a DIRECTORY passes `-r`, and `$(<dir)` would write to
+    # stderr, which this probe must never do.
+    [ -f "$_sl_f" ] && [ -r "$_sl_f" ] || continue
+    [ "$_sl_user" = "yes" ] && sl_user_seen="yes"
+    _sl_raw=""
+    # Braced group so the stderr redirect covers the command substitution. Do NOT
+    # fold it into `$(<"$_sl_f" 2>/dev/null)`: a second redirect defeats bash's
+    # read-a-file special case, which silently yields the EMPTY string instead.
+    { _sl_raw="$(<"$_sl_f")"; } 2>/dev/null
+    _sl_after="${_sl_raw#*\"statusLine\"}"
+    # Unchanged means the key is absent from THIS file; keep looking, because a
+    # lower-precedence file may still configure it.
+    [ "$_sl_after" = "$_sl_raw" ] && continue
+    sl_key="yes"
+    # Bound the slice at the statusLine object's closing brace BEFORE hunting for
+    # `"command"`. With no brace at all the extraction is not trustworthy, so it
+    # yields nothing and the field degrades to `unknown`.
+    case "$_sl_after" in *\}*) _sl_obj="${_sl_after%%\}*}" ;; *) _sl_obj="" ;; esac
+    # The key is matched WITH its colon, and that is load-bearing rather than
+    # tidy: the sibling `"type": "command"` puts the bare token `"command"` in
+    # this same object BEFORE the real key, so matching the token alone lifts the
+    # word `command` as the renderer path and reports a healthy host as
+    # `unknown`. Two spellings are tried because JSON permits whitespace before
+    # the colon; anything more exotic yields no value and degrades to `unknown`.
+    for _sl_pat in '"command":' '"command" :'; do
+      case "$_sl_obj" in
+        *"$_sl_pat"*)
+          sl_cmd="${_sl_obj#*"$_sl_pat"}"  # ` "<cmd>", ...` remains
+          sl_cmd="${sl_cmd#*\"}"           # through the opening quote
+          sl_cmd="${sl_cmd%%\"*}"          # up to the closing quote
+          break ;;
+      esac
+    done
+    break
+  done
+fi
+if [ -n "$sl_cmd" ]; then
+  case "$sl_cmd" in
+    *ghola-statusline.mjs*) _sl_target="mjs" ;;
+    *ghola-statusline.sh*)  _sl_target="sh" ;;
+    *)                      _sl_target="other" ;;
+  esac
+  case "$_sl_target" in
+    mjs)
+      # The `.mjs` needs node and nothing else; python3 is irrelevant to it.
+      if [ "$sl_node" = "yes" ]; then statusline_health="ok"; else statusline_health="broken"; fi ;;
+    sh)
+      # node FIRST: it alone is sufficient, because the fallback writer covers a
+      # python3 that will not run. python3 alone renders today but is unbacked.
+      if [ "$sl_node" = "yes" ]; then statusline_health="ok"
+      elif [ "$sl_py" = "yes" ]; then statusline_health="at-risk"
+      else statusline_health="broken"; fi ;;
+    *) statusline_health="unknown" ;;   # a command that is not a Ghola renderer
+  esac
+elif [ "$sl_key" = "no" ] && [ "$sl_user_seen" = "yes" ]; then
+  statusline_health="none"
+fi
+# Every other outcome — no readable user-level settings file, or a `statusLine`
+# block that yielded no command — keeps the initialized `unknown`, which is the
+# honest answer for a check that could not be completed.
+
 # 3. team
 perf="${SWE_PERFORMANCE_CORES:-2}"; eff="${SWE_EFFICIENCY_CORES:-1}"; qa="${QA_AGENT_COUNT:-1}"
 pm="${SWE_PERFORMANCE_MODEL:-opus}"; em="${SWE_EFFICIENCY_MODEL:-sonnet}"; qm="${QA_MODEL:-sonnet}"
@@ -367,7 +520,13 @@ fi
 # Jira pull is gated on mode: a non-ticket mode (support, cd) is not
 # ticket-scoped, so it is a clean skip (ticket_state=skipped) with no bridge call.
 key=""
-[ -n "$branch" ] && key="$(printf '%s' "$branch" | grep -oiE '[A-Z][A-Z0-9]+-[0-9]+' | head -1 | tr 'a-z' 'A-Z')"
+# CLAUDE.md rule 7: capture the producer's output first, then slice the
+# variable with `head`, so an early-exiting consumer never SIGPIPEs a live
+# producer if `set -o pipefail` is ever added to this file.
+if [ -n "$branch" ]; then
+  _key_matches="$(printf '%s' "$branch" | grep -oiE '[A-Z][A-Z0-9]+-[0-9]+')"
+  [ -n "$_key_matches" ] && key="$(head -1 <<<"$_key_matches" | tr 'a-z' 'A-Z')"
+fi
 ticket_state="none"; ticket_status=""; ticket_summary=""
 if [ "$non_ticket_mode" = "yes" ]; then
   ticket_state="skipped"
@@ -591,8 +750,18 @@ if [ "$non_ticket_mode" != "yes" ] && [ -n "$vault" ] && [ -n "$key" ]; then
   notes_file="$vault/$proj/$num.md"
   if [ -f "$notes_file" ]; then
     notes_exists="yes"
-    handoff_date="$(grep -oE '## Session Handoff \(([^)]+)\)' "$notes_file" 2>/dev/null | tail -1 | sed -E 's/.*\(([^)]+)\).*/\1/')"
-    { echo "----- NOTES HANDOFF ($notes_file) -----"; awk '/^## Session Handoff/{p=1} p' "$notes_file" 2>/dev/null | tail -60; } >> "$detail"
+    # CLAUDE.md rule 7: capture each producer's output first, then slice the
+    # variable with `tail`, so this stays correct if `set -o pipefail` is ever
+    # added to this file. `_handoffs` empty -> handoff_date stays "" (matches
+    # the original's empty-in/empty-out); `_handoff_block` empty -> the `tail`
+    # call is skipped entirely so no phantom blank line is written to `detail`.
+    _handoffs="$(grep -oE '## Session Handoff \(([^)]+)\)' "$notes_file" 2>/dev/null)"
+    [ -n "$_handoffs" ] && handoff_date="$(tail -1 <<<"$_handoffs" | sed -E 's/.*\(([^)]+)\).*/\1/')"
+    _handoff_block="$(awk '/^## Session Handoff/{p=1} p' "$notes_file" 2>/dev/null)"
+    {
+      echo "----- NOTES HANDOFF ($notes_file) -----"
+      [ -n "$_handoff_block" ] && tail -60 <<<"$_handoff_block"
+    } >> "$detail"
   fi
 fi
 
@@ -601,6 +770,13 @@ emit version "$version"
 emit now "$now"
 emit session_mode "${mode_session:-unconstrained}"
 emit env_state "$env_state"; [ -n "$missing" ] && emit env_missing "$missing"
+# Emitted UNCONDITIONALLY and grouped with the environment fields, because the
+# `environment` step is what renders it (see block 2b for the vocabulary and for
+# why this field cannot use the absent-means-healthy convention `bridge_state`,
+# `vault_translated`, `vault_canonicalized`, `vault_state` and `detail_file_form`
+# all follow). `ok` is the healthy value and the module renders NO line for it, so
+# a healthy boot trace is unchanged even though the digest gained a line.
+emit statusline_health "$statusline_health"
 emit team "${perf}p/${eff}e/${qa}qa"
 emit team_models "perf=${pm},eff=${em},qa=${qm}"
 emit work_repo "${repo:-none}"

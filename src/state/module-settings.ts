@@ -45,6 +45,47 @@ export async function writeModuleSettings(
 }
 
 /**
+ * Fold ONLY the named keys of `incoming` onto a copy of `base`, leaving every
+ * other key of `base` exactly as it was.
+ *
+ * Why this exists: `globalState` is shared by every VS Code window on the
+ * machine, but the settings panel's webview holds a SNAPSHOT of the map taken
+ * when it last loaded settings. Writing that whole snapshot back (what
+ * `saveSettings` did unconditionally before this helper) erases anything a
+ * sibling window changed in the meantime — one blurred field in window B would
+ * silently revert every edit made in window A. Passing `base` as a FRESH read
+ * of the live map and restricting the copy to the keys the save actually
+ * touched makes concurrent edits to DIFFERENT keys commutative, so neither
+ * window can clobber the other.
+ *
+ * Per-key semantics (deliberately two distinct operations — conflating them
+ * would either resurrect a cleared value or wipe an intentional empty):
+ * - key present in `incoming`, including `''` -> stored verbatim, empty string included.
+ * - key absent from `incoming`, or present with the value `undefined` -> DELETED
+ *   from the merged map. This is how a cleared field arrives: the webview sets
+ *   `undefined` (e.g. an emptied number input) and the postMessage JSON
+ *   serialization then drops the key entirely, so both forms mean "cleared" and
+ *   must behave identically.
+ *
+ * Pure — neither argument is mutated, and nothing is persisted; the caller
+ * hands the result to `writeModuleSettings`.
+ */
+export function mergeChangedModuleSettings(
+  base: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+  changedKeys: readonly string[],
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...base };
+  for (const key of changedKeys) {
+    const present =
+      Object.prototype.hasOwnProperty.call(incoming, key) && incoming[key] !== undefined;
+    if (present) merged[key] = incoming[key];
+    else delete merged[key];
+  }
+  return merged;
+}
+
+/**
  * One-time, idempotent migration: fold any legacy per-workspace settings into
  * the global store (fill-if-absent, so an older per-workspace value never
  * clobbers a value the operator has already set globally), then clear the

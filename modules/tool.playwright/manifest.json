@@ -1,8 +1,8 @@
 {
   "id": "tool.playwright",
   "name": "Playwright",
-  "version": "0.4.0",
-  "description": "Lets QA and SWE agents write Playwright test specs from testing procedures produced by tool.ac-to-testing, and during ticket work the tester can also generate annotated verification videos and AC walkthrough docs on request; specs, config, and walkthroughs live outside the work repo under a durable per-repo scope directory, while test-results, the HTML report, videos, and the Edge profile are nested one level deeper under a per-session run directory, so concurrent Playwright sessions in different repos AND in the same repo cannot contaminate each other's output.",
+  "version": "0.6.0",
+  "description": "Lets QA and SWE agents write Playwright test specs from testing procedures produced by tool.ac-to-testing, and during ticket work the tester can also generate annotated verification videos and AC walkthrough docs on request; specs, config, and walkthroughs live outside the work repo under a durable per-repo scope directory, while test-results, the HTML report, videos, and the Edge profile are nested one level deeper under a per-session run directory, so concurrent Playwright sessions in different repos AND in the same repo cannot contaminate each other's output. Verification videos record from a context created only after sign-in and app bootstrap have finished, and each produced .webm is stream-copy remuxed afterwards when ffmpeg is available, so a video neither opens on a blank viewport nor carries a wrong container duration. A blank-video report is triaged by checking the container header first, since that one command separates the blank-lead-in cause from the bad-header cause and tells the agent which fix applies; the checks and the byte-step measurement that sizes a lead-in run on Playwright's own bundled ffmpeg, so they work on a machine with no system ffmpeg and no ffprobe at all.",
   "proactive": false,
   "category": "utility",
   "kind": "capability",
@@ -68,7 +68,7 @@
         "label": "Verification Video",
         "default": "on-request",
         "options": ["on-request", "always", "off"],
-        "description": "Controls whether the tester records annotated Playwright videos of the AC flow. on-request records only when the user or TPM asks. always records whenever specs are generated during ticket work. off never records. Applies only in ticket or project work where a ticket id is in scope."
+        "description": "Controls whether the tester records annotated Playwright videos of the AC flow. on-request records only when the user or TPM asks. always records whenever specs are generated during ticket work. off never records. Applies only in ticket or project work where a ticket id is in scope. Two behaviors ride along with any recording and are deliberately NOT separately toggleable: setup work (browser launch, SSO sign-in, the warm-up navigation, first-run interstitials) is kept outside the recording context so the video does not open on a blank viewport, and each produced .webm is stream-copy remuxed with ffmpeg afterwards to correct its container duration. The remux is skipped, with a note in the run report, only when NO ffmpeg resolves at all - neither one on PATH nor Playwright's own bundled build, which is present wherever playwright install has run; the raw video is still the deliverable in that case. Set this to off to suppress both along with the video itself."
       },
       "annotateVideoSteps": {
         "type": "boolean",

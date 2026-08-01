@@ -1,7 +1,7 @@
 {
   "id": "tool.team-switchboard",
   "name": "Team Switchboard",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Enables cross-team agent communication via a shared Obsidian switchboard — a roster of active teams plus per-team inboxes; the agent heartbeats its presence and checks its inbox on demand, when the operator asks about cross-team comms.",
   "proactive": false,
   "category": "orchestration",
@@ -18,12 +18,6 @@
         "label": "Comms root directory",
         "default": "",
         "description": "Absolute path to the shared _AgentComms/ directory. Leave empty to derive <obsidian-vault-root>/_AgentComms/ at runtime, resolving the vault root from tool.obsidian-notes' Vault Path first and the GHOLA_VAULT environment variable second; the derived location sits inside the vault exception tool.cwd-discipline already seeds, whereas a path set here pointing outside the vault needs its own Allowed Exception Paths entry. ALL teams must point at the same absolute location for cross-team messaging to work — if even one team uses a different path, its messages land in an isolated subtree no other team will see."
-      },
-      "teamName": {
-        "type": "string",
-        "label": "Team name override",
-        "default": "",
-        "description": "The name this team registers in the roster and is addressed by in inboxes. Leave empty to auto-derive from the repo or project basename (leading 'Project-' stripped), with a #N suffix appended automatically when two sessions resolve to the same name. Set explicitly when the auto-derived name is ambiguous or you want a stable name that survives repo renames."
       },
       "staleAfterDays": {
         "type": "number",

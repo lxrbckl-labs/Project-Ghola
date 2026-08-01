@@ -9,7 +9,8 @@ import { adfToPlainText } from './integration/adf-to-text';
 import { BitbucketPrClient } from './integration/bitbucket-pr-client';
 import { discoverObsidianVault } from './integration/vault-discovery';
 import { startBitbucketBridge } from './integration/bitbucket-bridge-server';
-import type { GetCommentsResult, PostCommentResult } from './integration/bitbucket-bridge-server';
+import type { GetCommentsResult, PostCommentFn, PostCommentResult } from './integration/bitbucket-bridge-server';
+import { isJiraCommentWriteEnabled } from './integration/jira-comment-write-gate';
 import { ModuleLoader } from './modules/loader';
 import { ModuleState } from './modules/state';
 import { PromptComposer } from './prompts/composer';
@@ -737,18 +738,14 @@ export function activate(context: vscode.ExtensionContext): void {
     const flat = readModuleSettings(context.globalState, context.workspaceState);
     return flat['mode.war::enabled'] === true;
   };
-  // The Team Switchboard `teamName` override, resolved from the same flattened
-  // store for the same reason: a non-empty value is, per that module's doc, "the
-  // canonical team name for this session", so the status bar must honour it or
-  // it will disagree with the roster row the agent actually registers. Read
-  // defensively — the stored value is `unknown`, and only a string can be a
-  // name. The `moduleSettingsEmitter` refresh below already covers the save.
-  const readTeamNameOverride = (): string | undefined => {
-    const flat = readModuleSettings(context.globalState, context.workspaceState);
-    const value = flat['tool.team-switchboard::teamName'];
-    return typeof value === 'string' ? value : undefined;
-  };
-  const modeStatusBar = new ModeStatusBarItem(loader, readWarMode, readTeamNameOverride);
+  // The identity itself needs no provider: `resolveTeamIdentity` derives it from
+  // this window's own workspace folder, with no operator override to read. The
+  // Team Switchboard module used to declare a `teamName` setting that was passed
+  // in here, and it was removed deliberately — module settings live in
+  // `globalState`, which is shared by every window on the machine, so a single
+  // override would have given all of the operator's concurrent windows the same
+  // pill and erased the discriminator the pill exists for.
+  const modeStatusBar = new ModeStatusBarItem(loader, readWarMode);
   context.subscriptions.push(modeStatusBar);
   // Refresh on: module enable/disable (loader), module-settings save (covers
   // the mode.war::enabled War-Mode toggle), and the statusBar.enabled config
@@ -1044,10 +1041,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // a sanitized result shape goes back to the agent.
   //
   // Authorization does NOT live here. Agent cores forbid ticketing-system
-  // mutations outright; the `integration.jira-comment-write` module is what
-  // lifts that for a session, and it requires the operator to approve the exact
+  // mutations outright; the Jira Comment Write flow in
+  // `integration.atlassian-suite` is what lifts that for a session — and only
+  // when the operator has turned on its `enableJiraCommentWrite` setting, which
+  // defaults to off. Even then it requires the operator to approve the exact
   // comment text before anything is posted. This closure is the plumbing that
-  // module drives, not a licence to post.
+  // flow drives, not a licence to post.
   //
   // Note the failure contract: `posted: false` with an error can mean the post
   // definitely failed OR that it timed out ambiguously and may have landed.
@@ -1079,10 +1078,39 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  // HOST-SIDE ENFORCEMENT of `integration.atlassian-suite`'s
+  // `enableJiraCommentWrite` gate. The bridge asks this resolver for the poster
+  // on EVERY `/post-comment` request; while the gate is shut it gets `undefined`
+  // and refuses the route with nothing to call. That is the difference between
+  // the gate the operator approved and the strongly-worded suggestion it was:
+  // previously the capability was wired in unconditionally and only the module's
+  // markdown asked an agent not to use it, so ignoring the markdown was enough
+  // to post.
+  //
+  // Per-request, not activation-time, so turning the setting OFF applies to the
+  // next call rather than at the next window reload. Both inputs are read live:
+  // `loader.find(...)?.isEnabled` reflects the current Modules-tab state (the
+  // loader mutates the handle on enable/disable) and `readModuleSettings` re-reads
+  // the flat map, which is also why a sibling window's save is picked up.
+  //
+  // Module enablement is checked as well as the value, because the value lives in
+  // `globalState` while enablement is per-workspace — a `true` left over from a
+  // window where the suite is on must not hold the gate open in one where it is
+  // off. `isJiraCommentWriteEnabled` never throws and treats every non-`true`
+  // outcome as OFF; see `jira-comment-write-gate.ts`.
+  const resolveJiraPostComment = (): PostCommentFn | undefined =>
+    isJiraCommentWriteEnabled({
+      isModuleEnabled: () => loader.find(ATLASSIAN_MODULE_ID)?.isEnabled,
+      readSettings: () => readModuleSettings(context.globalState, context.workspaceState),
+    })
+      ? jiraPostComment
+      : undefined;
+
   // Loopback bridge: exposes `bitbucketPrClient` (Bitbucket PR ops),
   // `jiraGetTicket` (Jira ticket reads), `jiraGetComments` (Jira comment reads)
-  // and `jiraPostComment` (the single Jira write, gated by the
-  // `integration.jira-comment-write` module) to the CLI agent over a per-session
+  // and `resolveJiraPostComment` (the single Jira write, WITHHELD per request
+  // unless `integration.atlassian-suite`'s `enableJiraCommentWrite` setting is
+  // on) to the CLI agent over a per-session
   // bearer-authenticated HTTP server bound to 127.0.0.1. The Bitbucket and Jira
   // API tokens stay host-side; the agent only receives the loopback URL +
   // bearer token via the session env (wired into the launcher below). When the
@@ -1116,7 +1144,7 @@ export function activate(context: vscode.ExtensionContext): void {
       bitbucketPrClient,
       jiraGetTicket,
       jiraGetComments,
-      jiraPostComment,
+      resolveJiraPostComment,
       bridgeCoordinatesPath,
       logger,
     );

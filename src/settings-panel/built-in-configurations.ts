@@ -37,6 +37,18 @@ const BASELINE_IDS: string[] = [
   'tool.pr-prep',
   'tool.time',
   'tool.ghola-ledger',
+  // Personalization (name / persona / persona intensity) plus one session-hygiene
+  // setting, the compaction-proposal threshold (compactProposalThresholdPct) -
+  // not personalization itself. The operator's identity handles used for
+  // review-vs-author detection are NOT here: as of
+  // tool.operator-profile 0.3.0 `bitbucketUsername` and `jiraAccountId` belong
+  // to integration.atlassian-suite and `gitEmail` belongs to tool.git.
+  // `gitEmail` is therefore reachable in every preset (tool.git is in this
+  // baseline); the two Atlassian handles are reachable only in the presets that
+  // also enable integration.atlassian-suite (Ticket Work and Sardaukar). That
+  // is deliberate, not a gap - a session without the suite has no PR-lookup
+  // probe, so it can never resolve a `pr_author` to compare the handle against,
+  // and the git-based fallback is the only path available to it regardless.
   'tool.operator-profile',
   'tool.usage-observer',
 ];

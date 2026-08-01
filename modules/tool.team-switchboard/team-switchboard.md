@@ -6,7 +6,7 @@ When this module is loaded, the session participates in a shared cross-team comm
 
 Locate this module's entry in the Session Manifest. Its `parameters` object may appear as `(defaults)`, be absent entirely, or be a live JSON object.
 
-- If the entry shows `(defaults)` or a parameter key is absent, the default for that parameter applies. Defaults: `commsRoot` = `""` (derive at runtime), `teamName` = `""` (auto-derive), `staleAfterDays` = `14`, `checkInboxOnBoot` = `false`, `heartbeatOnBoot` = `false`, `handledMessageRetentionDays` = `3`, `detectParentProject` = `true`, `mergeDeadChildren` = `true`. There is no automatic session-start run — `checkInboxOnBoot` and `heartbeatOnBoot` only matter once the operator has already asked for an on-demand switchboard check; they control whether that on-demand check includes the inbox summary / roster heartbeat, not whether anything happens at session start.
+- If the entry shows `(defaults)` or a parameter key is absent, the default for that parameter applies. Defaults: `commsRoot` = `""` (derive at runtime), `staleAfterDays` = `14`, `checkInboxOnBoot` = `false`, `heartbeatOnBoot` = `false`, `handledMessageRetentionDays` = `3`, `detectParentProject` = `true`, `mergeDeadChildren` = `true`. There is no automatic session-start run — `checkInboxOnBoot` and `heartbeatOnBoot` only matter once the operator has already asked for an on-demand switchboard check; they control whether that on-demand check includes the inbox summary / roster heartbeat, not whether anything happens at session start.
 - If `parameters` is a live object, read each key present and fall back to the documented default for any key that is missing.
 
 ### Resolving `commsRoot`
@@ -18,12 +18,18 @@ Locate this module's entry in the Session Manifest. Its `parameters` object may 
 
 Deriving under the vault keeps the comms root inside a directory `tool.cwd-discipline` already authorizes (`${tool.obsidian-notes:vaultPath}/**` and `${GHOLA_VAULT}/**` are seeded exceptions). A non-empty `commsRoot` pointing anywhere else is an out-of-cwd path with no seeded authorization — it needs its own `allowedExceptionPaths` entry, and absent one the switchboard writes are refused like any other out-of-cwd write.
 
-### Resolving `teamName`
+### Resolving the team name
 
-`parameters.teamName` is the name this team registers and is addressed by.
+**The team name is always derived. There is no parameter for it and no operator override** — derivation is the single rule, and it is not overridable by design. Ghola's status-bar pill and its Remote Control session name derive from this same rule, so all three agree about a given repo without anyone having to keep a setting in sync.
 
-- Non-empty string: use it as-is. This is the canonical team name for this session.
-- Empty string or absent: auto-derive from the repo or project basename. Strip the leading `Project-` prefix case-insensitively (prefix only — the remainder keeps its original casing). For example: `Project-Ghola` -> `Ghola`, `project-swt` -> `SWT`. To disambiguate duplicate instances: check the roster. If a row already has your derived name AND your repo path, the row is yours — reuse it. If a row has your derived name but a DIFFERENT repo path, you are a new instance — take the lowest unused integer suffix (`Ghola#2`, `Ghola#3`, etc.).
+Derive it as follows:
+
+1. **Start from the git repository root**, not the folder that happens to be open. Walk up from the workspace folder to the nearest ancestor holding a `.git` entry (a directory in a plain clone, a file in a worktree or submodule — either counts). This matters for nested layouts: `.../repos/cmms1/cmms-api` and `.../repos/cmms2/cmms-api` both reduce to `cmms-api` if you take the open folder, which is a collision, whereas their repo roots give the distinct `cmms1` and `cmms2` — and those are also what the roster's `Repo path` column records. If no `.git` is found above it, fall back to the workspace folder itself.
+2. **Take that path's basename and strip a leading `Project-`** case-insensitively, prefix only, with the remainder keeping its original casing: `Project-Ghola` -> `Ghola`, `project-swt` -> `swt`, `cmms2` -> `cmms2`, `My-Project-Thing` -> `My-Project-Thing` (not a prefix, so untouched). A basename of exactly `Project-` would strip to nothing, so it keeps its unstripped form.
+3. **Qualify by environment** per "Environment delineation" in the canonical vault `_Switchboard.md`: WSL is the incumbent and holds the unqualified name, and every other environment appends `@<env>` — `@win`, `@mac`, `@linux`. Detect your own environment; never ask and never assume. The qualifier is idempotent: a name that already ends in one of those four tokens is never given a second one, so a repo directory literally named `cmms1@win` renders `cmms1@win`, not `cmms1@win@win`.
+4. **Disambiguate duplicate instances against the roster.** If a row already has your derived name AND your repo path, the row is yours — reuse it. If a row has your derived name but a DIFFERENT repo path, you are a new instance — take the lowest unused integer suffix (`Ghola#2`, `Ghola#3`, etc.).
+
+If a `teamName` key nonetheless appears in this module's `parameters` block, it is a stale leftover from a removed setting: **ignore it** and derive as above.
 
 The inbox filename is the slug of the team name: lowercased, spaces and punctuation replaced with hyphens. For example: `Ghola` -> `inbox-ghola.md`, `Ghola#2` -> `inbox-ghola-2.md`.
 
@@ -169,7 +175,7 @@ Do not recreate files that already exist — check first, create only if absent.
 
 Because this module is on-demand with `trigger: user-request`, TPM does NOT perform the sequence below automatically. It runs ONLY when the operator explicitly asks about cross-team comms — e.g. "check the switchboard," "any mail?," "check my inbox," "register us on the switchboard," or similar. When such a request comes in, perform the following steps.
 
-**Step 1 — Resolve identity and location.** Resolve `commsRoot` and `teamName` per the rules above. If either cannot be resolved, surface the blockage to the operator and skip the remaining steps.
+**Step 1 — Resolve identity and location.** Resolve `commsRoot` and derive the team name per the rules above. If either cannot be resolved, surface the blockage to the operator and skip the remaining steps.
 
 **Step 2 — Bootstrap if needed.** Run the self-heal check. Create any missing files.
 

@@ -21,7 +21,8 @@ compose time.
 
 Retired modules (do not recreate): `reference.hello-ghola`, `tool.wsl-migrate`,
 `mode.preview`, `mode.edge-case-hunt`, `mode.review`, `mode.planning`,
-`tool.untrusted-jira`, `tool.clipboard-image`, `tool.commit-push`.
+`tool.untrusted-jira`, `tool.clipboard-image`, `tool.commit-push`,
+`integration.jira-comment-write`.
 
 ## Build and dev workflow
 

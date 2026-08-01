@@ -194,8 +194,8 @@ export interface IssueCommentsResult {
 }
 
 /** Result shape for `postIssueComment` — the ONE Jira write path in the
- *  extension, and only reachable when the operator has enabled the
- *  `integration.jira-comment-write` module.
+ *  extension, and only reachable when the operator has turned on
+ *  `integration.atlassian-suite`'s `enableJiraCommentWrite` setting.
  *
  *  `posted: true` means Jira accepted the comment and returned its id. Any
  *  other outcome sets `error`, and `posted` is then FALSE-but-uncertain in
@@ -589,9 +589,9 @@ export class AtlassianClient {
   /**
    * `POST ${jiraBase}/rest/api/3/issue/${key}/comment` — add a comment to an
    * issue. This is the extension's ONLY Jira mutation. Every other Jira path
-   * here is a read, and this one exists solely to serve the
-   * `integration.jira-comment-write` module; with that module disabled nothing
-   * reaches this method.
+   * here is a read, and this one exists solely to serve
+   * `integration.atlassian-suite`'s Jira Comment Write flow; with that module's
+   * `enableJiraCommentWrite` gate off nothing reaches this method.
    *
    * `bodyText` is PLAIN TEXT. Jira demands an ADF document, so the text is
    * wrapped by `plainTextToAdf` — paragraphs on blank lines, no markdown
@@ -956,10 +956,10 @@ export class AtlassianClient {
       // touches `withBitbucketFailover`. The remaining risk is the HUMAN, and it
       // was this message: "try again" is the one instruction guaranteed to
       // produce the duplicate that all that care was taken to prevent. It is
-      // worse here than anywhere else, because `integration.jira-comment-write`
-      // has the operator approve the exact text first — so re-running feels
-      // pre-authorized and the second comment is indistinguishable from the
-      // first.
+      // worse here than anywhere else, because the Jira Comment Write flow in
+      // `integration.atlassian-suite` has the operator approve the exact text
+      // first — so re-running feels pre-authorized and the second comment is
+      // indistinguishable from the first.
       //
       // Reads are untouched and keep their "try again" wording byte for byte: a
       // GET that timed out changed nothing and is genuinely safe to repeat.

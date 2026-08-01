@@ -397,7 +397,30 @@ export type WebviewToHostMessage =
   | { type: 'getModules' }
   | { type: 'toggleModule'; id: string; enabled: boolean }
   | { type: 'getSettings' }
-  | { type: 'saveSettings'; values: Record<string, unknown> }
+  /**
+   * Persist module setting VALUES. `values` is the webview's whole
+   * `settingsValues` map; `changedKeys` names only the `moduleId::fieldKey`
+   * entries this particular save actually committed.
+   *
+   * Why `changedKeys` exists: the webview's map is a snapshot taken when its
+   * panel last loaded settings, and `globalState` is shared by every VS Code
+   * window on the machine. Writing the whole snapshot back therefore ERASES
+   * anything another window changed in the meantime. When `changedKeys` is
+   * present the host re-reads the live map and copies only those keys onto it
+   * (see `mergeChangedModuleSettings`), so a stale snapshot can no longer
+   * clobber a sibling window's edits.
+   *
+   * Per-key semantics, for each key named in `changedKeys`:
+   * - present in `values` (including `''`) -> stored as given, empty string included;
+   * - absent from `values`, or present as `undefined` -> DELETED from the map.
+   *
+   * Those two are deliberately distinct: conflating them would either resurrect
+   * a cleared value or wipe an intentionally-empty one.
+   *
+   * `changedKeys` is OMITTED (never sent as `[]`) by callers that cannot name
+   * their key; the host then falls back to the legacy whole-map replace.
+   */
+  | { type: 'saveSettings'; values: Record<string, unknown>; changedKeys?: string[] }
   | { type: 'getComposedPrompt'; agent: string }
   | { type: 'reloadModules' }
   | { type: 'copyNewModulePrompt' }

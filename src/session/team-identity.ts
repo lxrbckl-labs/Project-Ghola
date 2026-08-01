@@ -244,27 +244,15 @@ function trimTrailingSeparators(candidate: string): string {
  * four legal qualifiers, in which case it is returned untouched.
  *
  * THE IDEMPOTENCE IS THE POINT. It makes `cmms1@win@win` unrepresentable no
- * matter where the name came from: an operator's `teamName` override that
- * already spells out their roster identity, or (pathologically) a repo
- * directory literally named `cmms1@win`. This does not change WHICH
- * environments qualify — that decision stays in `resolveTeamIdentity`.
+ * matter where the name came from — pathologically, a repo directory literally
+ * named `cmms1@win`, which renders `cmms1@win` rather than gaining a second
+ * qualifier. This does not change WHICH environments qualify — that decision
+ * stays in `resolveTeamIdentity`.
  */
 function qualify(teamName: string, environment: HostEnvironment): string {
   const lower = teamName.toLowerCase();
   const alreadyQualified = HOST_ENVIRONMENTS.some((env) => lower.endsWith(`@${env}`));
   return alreadyQualified ? teamName : `${teamName}@${environment}`;
-}
-
-/**
- * A `teamName` override reduced to "present" or "absent". Whitespace-only is
- * absent, matching the manifest's `""` default and the module doc's "Empty
- * string or absent: auto-derive"; the surviving value is trimmed because a
- * roster name with edge whitespace would not match the row it is meant to name.
- */
-function normalizeOverride(override: string | undefined): string | undefined {
-  if (override === undefined) return undefined;
-  const trimmed = override.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /** Where the path that named the team came from. */
@@ -275,11 +263,18 @@ export interface TeamIdentity {
   /** The rendered switchboard name — `Ghola`, `cmms2@win`. */
   readonly name: string;
   /**
-   * The AUTO-DERIVED unqualified team name: `repoPath`'s basename with a leading
-   * `Project-` stripped, before any `@env` and before any override. It is what
-   * `name` would have been with no `teamName` override set, so a tooltip can
-   * disclose what an override replaced. When `overridden` is false this is
-   * simply `name` minus the qualifier.
+   * The unqualified team name: `repoPath`'s basename with a leading `Project-`
+   * stripped, before any `@env`. It is `name` minus the qualifier, carried
+   * separately so a tooltip can report the strip (`basename !== teamName`)
+   * independently of the qualifier, and so `qualified` below can be computed as
+   * `name !== teamName` rather than by re-testing the suffix.
+   *
+   * NO CALLER RENDERS THE BARE NAME AS AN IDENTITY any more, and one used to: the
+   * Remote Control session-name derivation in `session/launcher.ts` took
+   * `teamName`, which is exactly what made the WSL and the native-Windows copy of
+   * one clone register under a single Remote Control name. It takes `name` now.
+   * `teamName` survives as the strip's own report of itself, for the tooltip and
+   * for `qualified` — not as a name anything shows.
    */
   readonly teamName: string;
   /**
@@ -299,8 +294,6 @@ export interface TeamIdentity {
   readonly workspaceFolderPath: string;
   /** Whether `repoPath` is a discovered repo root or the workspace-folder fallback. */
   readonly rootSource: TeamIdentityRootSource;
-  /** True when `name` came verbatim from the `teamName` override, not from derivation. */
-  readonly overridden: boolean;
   /** This host's environment. */
   readonly environment: HostEnvironment;
   /** True when `@env` was appended, i.e. this host is not the incumbent. */
@@ -316,13 +309,6 @@ export interface TeamIdentityOptions {
    * host we are not currently running on.
    */
   readonly environment?: HostEnvironment;
-  /**
-   * The operator's `tool.team-switchboard::teamName` setting, if any. It lives in
-   * the `globalState` Memento, which this pure module must not reach into, so the
-   * caller reads it and passes it down — same shape as the war-mode provider the
-   * status bar already takes.
-   */
-  readonly teamNameOverride?: string;
   /** The `.git` probe, injectable for the same reason as `environment`. */
   readonly hasGitEntry?: (dir: string) => boolean;
 }
@@ -381,17 +367,19 @@ export function resolveTeamIdentity(
   // and a plain-Linux host that quietly borrowed the WSL name would reproduce
   // exactly the two-agents-one-inbox failure the qualifier was added to stop.
   //
-  // AN EXPLICIT OVERRIDE IS VERBATIM AND UNQUALIFIED. The module doc calls a
-  // non-empty `teamName` "the canonical team name for this session", and the
-  // roster's qualifier is PART of that name — an operator who types `cmms1@win`
-  // has already stated their full roster identity, and one who types `cmms1`
-  // has stated they want the bare name. Appending `@win` to either would be the
-  // status bar overruling the operator on the one field whose entire purpose is
-  // to overrule the status bar. So the override short-circuits the qualifier
-  // outright; `qualify`'s idempotence then makes `@win@win` unrepresentable even
-  // on the derived path (a directory literally named `cmms1@win`).
-  const override = normalizeOverride(options.teamNameOverride);
-  const name = override ?? (environment === 'wsl' ? teamName : qualify(teamName, environment));
+  // DERIVATION IS THE ONLY RULE — there is deliberately no operator override.
+  // `tool.team-switchboard` once declared a `teamName` setting that was honoured
+  // verbatim here, and it was removed: module settings live in VS Code's
+  // `globalState` (`readModuleSettings` merges with global winning, and
+  // `writeModuleSettings` writes global ONLY — there is no per-workspace write
+  // path), which is per-extension and shared by every window on the machine. So
+  // one override would have renamed ALL of the operator's concurrent windows at
+  // once, collapsing the very discriminator this module exists to supply. A
+  // derived name cannot do that, because it is a function of each window's own
+  // repo path. The Remote Control session-name derivation in
+  // `session/launcher.ts` reached the same conclusion independently and has
+  // never consulted an override.
+  const name = environment === 'wsl' ? teamName : qualify(teamName, environment);
   return {
     name,
     teamName,
@@ -399,13 +387,11 @@ export function resolveTeamIdentity(
     repoPath,
     workspaceFolderPath,
     rootSource,
-    overridden: override !== undefined,
     environment,
-    // True exactly when this call appended a qualifier — never for an override,
-    // whose name is passed through untouched (and which may differ from
-    // `teamName` for reasons that have nothing to do with the qualifier), and
-    // never when the derived name already carried one.
-    qualified: override === undefined && name !== teamName,
+    // True exactly when this call appended a qualifier — false on WSL, and false
+    // when the derived name already carried one of its own (a directory literally
+    // named `cmms1@win`), which `qualify` passes through untouched.
+    qualified: name !== teamName,
     folderCount: workspaceFolderPaths.length,
   };
 }

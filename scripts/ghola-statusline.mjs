@@ -5,6 +5,26 @@
 // contract. Both files are kept: the `.sh` remains in place for back-compat and
 // for anyone whose settings already point at it.
 //
+// ── THIS FILE IS ALSO THE `.sh`'s FALLBACK WRITER ────────────────────────
+// The `.sh` performs its two state writes INSIDE its `python3` heredoc, so a host
+// with no usable `python3` wrote nothing at all — silently, exit 0, zero bytes, and
+// with the footer blank by default the only symptom was a VS Code status-bar pill
+// that emptied 90 seconds later. Its step 3a now detects that (its heredoc's last
+// act is a one-byte report, so an EMPTY report proves the block never finished) and
+// re-runs the render as `node <its own dir>/ghola-statusline.mjs`, piping in the
+// payload it already captured and discarding the delegate's stdout.
+// WHAT THAT MEANS FOR THIS FILE:
+//   - It is resolved BY SIBLING PATH from the `.sh`. Renaming or moving it out of
+//     `scripts/` silently disarms that fallback; the `.sh` just skips the attempt.
+//   - Both state writes must stay unconditional and must stay driven purely by
+//     stdin + the environment, because in that path nothing else configures them.
+//   - `python3` remains the `.sh`'s PRIMARY parser and is not bypassed when `node`
+//     is present, so the two renderers stay independently exercised and the
+//     `python3` heredoc stays the live third implementation that
+//     `scripts/ghola-statusline-parity.mjs` checks.
+// Nothing in this file changed for it, and nothing here should special-case being
+// invoked that way: the delegated run is an ordinary run.
+//
 // ── Why a Node port exists ───────────────────────────────────────────────
 // The `.sh` renderer only works on the WSL host, for four stacked reasons that
 // all bite on native Windows:
@@ -19,19 +39,44 @@
 // already ships `scripts/` and `VERSION`, so this file needs no repo checkout.
 //
 // ── Behavior (identical to the .sh) ──────────────────────────────────────
-//   - Emits exactly one line on stdout, with NO trailing newline.
-//   - Always shows [Ghola v<version>].
-//   - When the JSON payload on stdin carries context_window.total_input_tokens +
-//     total_output_tokens and/or context_window.used_percentage and/or
-//     rate_limits.five_hour.used_percentage, each of those segments is appended
-//     independently — e.g. [Ghola v0.25.0 | 142k · 62% · 5h 41%] (the real
-//     separator is U+2502, spelled literally below).
-//   - Context % and 5h % render red (\033[31m) at >= 85%. No other color is
-//     emitted; any other tint the operator sees is their terminal styling the
-//     custom row, not this script.
-//   - On ANY error it must NOT fail and must NOT print error text: it degrades
-//     to [Ghola v<version>], or [Ghola vunknown] if VERSION is unreadable, or
-//     to nothing at all in the (unreachable) worst case — and always exits 0.
+//   - BY DEFAULT IT PRINTS NOTHING AT ALL — zero bytes, exit 0. Silent mode is
+//     now the DEFAULT rather than an opt-in; see the silent-mode section below.
+//     Everything in the next few bullets describes the line that is emitted only
+//     when the operator explicitly asks for it back with
+//     `GHOLA_STATUSLINE_SILENT=0`. THE STATE WRITES STILL HAPPEN ON EVERY RUN,
+//     which is now this renderer's whole reason to exist.
+//   - When un-silenced it emits exactly one line on stdout, with NO trailing
+//     newline.
+//   - That line is EXACTLY `[Ghola v<version>]`. Nothing else is ever appended:
+//     there is no metrics group, no U+2502 separator, no U+00B7 join, and no
+//     color of any kind. Any tint the operator sees is their terminal styling
+//     the custom row, not this script.
+//   - THE FOOTER RENDERS NO USAGE METRICS AT ALL. It used to close with a
+//     metrics group — `[Ghola v0.25.0 | 62% · 5h 41%]` — carrying the context
+//     percentage and the 5-hour rolling-window percentage, and before those an
+//     absolute token count. All three are gone from the rendered line, in three
+//     separate steps. The token figure went first: it was the same measurement
+//     as the context percentage printed twice (`142k` alongside `62%` recovers
+//     nothing the percentage does not already say) and the field behind it
+//     (context_window.total_input_tokens + total_output_tokens) stopped meaning
+//     "cumulative session spend" in Claude Code v2.1.132, where it became the
+//     size of the CURRENT context window. The two percentages then went for a
+//     different reason: the VS Code status-bar pill now displays the usage stats
+//     (`cmms2@win · 34k · 5h 3%`), so the footer was printing the same numbers a
+//     second time. It is reduced to a session marker. THIS IS A DISPLAY
+//     DECISION ONLY, and the same change is made in the `.sh`.
+//   - EVERY VALUE IS STILL COMPUTED AND STILL WRITTEN. `session_tokens`,
+//     `context_pct`, and `five_hour_pct` all still land in both state files
+//     below, with the same key set, the same key order, and the same timestamp
+//     they always had. That on-disk shape is a cross-module contract with
+//     tool.usage-observer AND the feed the status-bar pill reads, so it must not
+//     move when a rendered segment does. Beyond the silent-mode marker, those
+//     two writes are now this renderer's ONLY purpose past printing the version
+//     — which is exactly why the computations below have no visible consumer and
+//     must not be "cleaned up" as dead code.
+//   - On ANY error it must NOT fail and must NOT print error text: it prints
+//     nothing (the default) and always exits 0. Un-silenced it degrades to
+//     [Ghola v<version>], or [Ghola vunknown] if VERSION is unreadable.
 //   - Mirrors the usage snapshot to ~/.ghola/usage-state.json for the
 //     `tool.usage-observer` module (same location + shape as the .sh).
 //   - ALSO mirrors it to the per-session, KEYED file
@@ -41,33 +86,47 @@
 //     writes happen, independently — see `writeKeyedState` for the key rules and
 //     `src/session/statusline-state.ts` for the normative spec.
 //
-// ── Silent mode: hide the footer line WITHOUT losing the writes ──────────
+// ── Silent mode: THE DEFAULT. No footer line, and the writes still happen ─
+// THE OPERATOR WANTS NO FOOTER ROW AT ALL, so silence is the DEFAULT and there is
+// nothing to switch on to get it. What used to be the opt-in path is now the
+// normal path, which is deliberate: it is already the tested path, and inverting
+// one default keeps the change reversible instead of deleting the render.
 // THIS SCRIPT IS THE WRITER OF THE TWO STATE FILES ABOVE, so deleting
-// `statusLine` from ~/.claude/settings.json is the WRONG way to hide the footer
-// line: the harness then never invokes us, nothing writes state, and the VS Code
-// status-bar pill goes empty inside its 90-second staleness window
-// (`STATE_STALE_AFTER_MS`) on BOTH hosts. To hide the line and keep the pill,
-// silence the renderer instead — it still runs, still writes both files, and
-// prints nothing:
-//   - MARKER FILE `<homedir>/.ghola/statusline/silent` — if it EXISTS, print
-//     nothing. Contents are irrelevant; existence is the whole signal and an
-//     empty file is the expected form. It sits beside the staged renderer and the
-//     VERSION stamp in that same directory, so it needs no new directory and no
-//     new path-resolution rule; the home directory is resolved with the same
-//     `os.homedir()` used for the state files.
-//   - ENV VAR `GHOLA_STATUSLINE_SILENT`, CHECKED FIRST. `1`/`true`/`yes`
-//     (case-insensitive, surrounding whitespace trimmed) means silent;
-//     `0`/`false`/`no` means NOT silent and BEATS the marker file, so one session
-//     can be un-silenced without deleting it. Unset, empty, whitespace-only, or
-//     any unrecognized value is NO SIGNAL and defers to the marker file.
+// `statusLine` from ~/.claude/settings.json is STILL the WRONG way to get a blank
+// footer even though the footer is now blank by default: the harness then never
+// invokes us, nothing writes state, and the VS Code status-bar pill goes empty
+// inside its 90-second staleness window (`STATE_STALE_AFTER_MS`) on BOTH hosts.
+// The renderer must keep being invoked, keep running, and keep writing; it simply
+// prints nothing. THE STATE WRITES ARE NOW THIS FILE'S PURPOSE — see the warning
+// on `writeUsageState` / `writeKeyedState` about not "cleaning up" the
+// computations that feed them.
+// The controls, in precedence order:
+//   - ENV VAR `GHOLA_STATUSLINE_SILENT`, CHECKED FIRST and the ONLY thing that can
+//     change the outcome. `0`/`false`/`no` (case-insensitive, surrounding
+//     whitespace trimmed) means NOT silent and is the escape hatch that puts the
+//     bracket back for one session. `1`/`true`/`yes` means silent, which is what
+//     would have happened anyway. Unset, empty, whitespace-only, or any
+//     unrecognized value is NO SIGNAL and falls through to the default.
+//   - MARKER FILE `<homedir>/.ghola/statusline/silent` — still probed, still
+//     answers "silent" when it exists, and now REDUNDANT: it can only ever ask for
+//     the behavior that already happens. It is kept rather than removed so an
+//     operator who created one still gets exactly what they asked for, and so
+//     `SILENT_BY_DEFAULT` below is the single line that restores a printing
+//     default. Contents are irrelevant; existence is the whole signal.
 // A settings-file toggle is deliberately NOT the control surface: Ghola module
 // settings live in VS Code's `globalState`, an opaque `Memento` with no on-disk
-// representation, so a standalone script cannot read them at all. A marker file
-// is the only thing both this renderer and the operator can see.
+// representation, so a standalone script cannot read them at all. An environment
+// variable and a marker file are the only things both this renderer and the
+// operator can see.
 // SILENCE IS ABOUT STDOUT ONLY. Both state writes happen unconditionally and
-// BEFORE the print gate. And a FAILED CHECK degrades to NOT SILENT, never the
-// other way round: a permission error or a weird filesystem must not be able to
-// blank the operator's footer, and it must not abort the render either.
+// BEFORE the print gate.
+// NOTE THE FAIL-SAFE DIRECTION INVERTED WITH THE DEFAULT. It used to be that a
+// FAILED CHECK degraded to NOT SILENT, so a broken probe could never blank the
+// footer. Now the safe direction is the other way: a failure yields NO SIGNAL,
+// which falls through to the silent default, because printing a bracket the
+// operator asked to be rid of is the wrong answer and there is no longer a footer
+// to protect. A failure still never aborts the render and never suppresses a
+// state write, which is the invariant that actually matters.
 // What the harness does with no output (Claude Code 2.1.220, read from the
 // bundle, and consistent with the public docs' "produce no output cause the
 // status line to go blank"): it `.trim()`s our stdout, drops blank lines, and
@@ -133,12 +192,18 @@ function asPyNumber(v) {
   return undefined;
 }
 
-/** `fmt_tokens` from the .sh: 999 -> "999", 142000 -> "142k", 1500000 -> "1.5M". */
-function fmtTokens(n) {
-  if (n < 1000) return String(n);
-  if (n < 1000000) return `${Math.floor(n / 1000)}k`;
-  return `${(n / 1000000).toFixed(1)}M`;
-}
+// NOTE: there is no `fmtTokens` here any more, and no `pctSegment` either. The
+// `k`/`M` abbreviation existed only to render the token segment, and `pctSegment`
+// only to render the two percentages with their red-at-85 tint; both went with the
+// segments they formatted rather than being left behind as dead code. `session_tokens`,
+// `context_pct`, and `five_hour_pct` are all still COMPUTED below and still written
+// into both state files, because that on-disk shape is a cross-module contract with
+// `tool.usage-observer` and with the VS Code status bar that outlived the display.
+// The abbreviation rule the pill needs lives on in `formatTokenCount` in
+// `src/session/statusline-state.ts` — that function is live and has a caller, because
+// the pill DOES render an absolute token figure (`cmms2@win · 34k · 5h 3%`); this
+// footer is the surface that stopped. The `.sh`'s `fmt_tokens` and its two percentage
+// branches were removed in the same changes as this file's.
 
 /**
  * Read the Ghola version string, stripping ALL whitespace exactly as the .sh's
@@ -405,10 +470,10 @@ function writeKeyedState(key, tokens, contextPct, fiveHourPct) {
   }
 }
 
-/** Render `<pct>%`, red at or above the fixed 85% threshold. */
-function pctSegment(prefix, pct) {
-  return pct >= 85 ? `${prefix}\u001b[31m${pct}%\u001b[0m` : `${prefix}${pct}%`;
-}
+// NOTE: there is no `pctSegment` here any more either. It rendered `<pct>%` with the
+// fixed red-at-85 tint for the two percentage segments; with those segments gone it had
+// no caller, and the red escape it emitted was the only color this renderer ever
+// produced. Nothing below writes an ANSI sequence.
 
 // ── Silent mode ─────────────────────────────────────────────────────────────
 // THE SAME RULES LIVE IN `scripts/ghola-statusline.sh` — same marker path, same
@@ -418,6 +483,17 @@ function pctSegment(prefix, pct) {
 // below is chosen to be trivially reproducible in bash: explicit ASCII token
 // lists, an explicit `[A-Z]` case fold, and a POSIX whitespace class.
 const SILENT_ENV_VAR = 'GHOLA_STATUSLINE_SILENT';
+/**
+ * SILENCE IS THE DEFAULT. With no environment override and no marker file, this is
+ * the answer, so the renderer emits zero bytes on an ordinary invocation while
+ * still performing both state writes.
+ *
+ * It is a named constant rather than a bare `true` in `resolveSilent` because it is
+ * the ONE line an operator (or a future agent) flips to restore a printing footer,
+ * and because it is the thing the `.sh`'s `_SILENT_BY_DEFAULT` has to agree with.
+ * The rendering code it gates is deliberately left intact for the same reason.
+ */
+const SILENT_BY_DEFAULT = true;
 /** `<homedir>/.ghola/statusline/silent`, spelled as segments so both hosts agree. */
 const SILENT_MARKER_SEGMENTS = ['.ghola', 'statusline', 'silent'];
 const SILENT_ENV_TRUE_VALUES = ['1', 'true', 'yes'];
@@ -433,11 +509,12 @@ const POSIX_SPACE_TRAILING = /[ \t\n\v\f\r]+$/;
  * Unset, empty, whitespace-only, and unrecognized values all yield `undefined`
  * rather than `false`, and that distinction is load-bearing: `export
  * GHOLA_STATUSLINE_SILENT=` is absence, not an instruction, and treating it as an
- * explicit "not silent" would make the marker file unusable in any shell that
- * exports the variable empty. Only the three literal words in
- * `SILENT_ENV_FALSE_VALUES` override the marker. An unrecognized value (a typo)
- * also defers, so a mistyped `ture` can never silence the line by accident —
- * every ambiguous input errs toward PRINTING.
+ * explicit "not silent" would put the bracket back in every shell that exports the
+ * variable empty. Only the three literal words in `SILENT_ENV_FALSE_VALUES` turn
+ * the line back on; an unrecognized value (a typo such as `flase`) defers to the
+ * default, so a misspelling can never resurrect the footer by accident. Every
+ * ambiguous input now errs toward SILENCE, which is the inverse of what it used to
+ * do and follows the default rather than contradicting it.
  *
  * Case folding is `[A-Z]`-explicit rather than `toLowerCase()` for the same
  * reason the state key folds that way: it is the only spelling this file and the
@@ -456,10 +533,12 @@ function readSilentEnvOverride() {
 }
 
 /**
- * Whether the marker file exists. ANY failure answers `false` — i.e. NOT silent —
- * because the only safe direction for a broken check is to print. `existsSync`
- * already swallows its own errors, so the try/catch is for `os.homedir()`, which
- * can throw when no home directory can be determined at all.
+ * Whether the marker file exists. ANY failure answers `false` — meaning only "this
+ * probe contributes nothing", NOT "print": the default below decides that, and it
+ * is silent. `existsSync` already swallows its own errors, so the try/catch is for
+ * `os.homedir()`, which can throw when no home directory can be determined at all.
+ * A broken probe therefore cannot change the outcome in either direction, which is
+ * the property that survived the default inversion.
  */
 function hasSilentMarker() {
   try {
@@ -469,18 +548,28 @@ function hasSilentMarker() {
   }
 }
 
-/** Environment override first, marker file second, print by default. */
+/**
+ * Environment override first, marker file second, SILENT by default.
+ *
+ * The override is the only thing that can change the answer, because the other two
+ * terms both say "silent": `GHOLA_STATUSLINE_SILENT=0` is the escape hatch that
+ * puts the bracket back, and everything else — marker present, marker absent, probe
+ * broken, variable unset — resolves to silence. The marker is still consulted so a
+ * marker the operator already created keeps meaning what it said.
+ */
 function resolveSilent() {
   const override = readSilentEnvOverride();
   if (override !== undefined) return override;
-  return hasSilentMarker();
+  return hasSilentMarker() || SILENT_BY_DEFAULT;
 }
 
 // Resolved BEFORE the main block, at module scope, so the last-resort fallback in
 // the `catch` at the bottom can honor it too — a silenced renderer that starts
 // shouting `[Ghola vunknown]` the moment something goes wrong would be worse than
-// no silent mode at all. `resolveSilent` cannot throw (both halves swallow their
-// own failures), so evaluating it outside the try is safe.
+// no silent mode at all, and now that silence is the DEFAULT that fallback is the
+// path a broken render actually takes. `resolveSilent` cannot throw (both halves
+// swallow their own failures), so evaluating it outside the try is safe. Expect
+// `true` here on an ordinary invocation.
 const silent = resolveSilent();
 
 let version = 'unknown';
@@ -490,22 +579,26 @@ try {
 
   const payload = readPayload();
 
-  // Raw numeric values (or undefined) mirrored into the usage-state file; the
-  // display strings are derived from them for the status line itself.
+  // Raw numeric values (or undefined) mirrored into the two state files. ALL THREE
+  // ARE WRITE-ONLY NOW: `rawTokens`, `rawCtx`, and `rawFh` feed `session_tokens`,
+  // `context_pct`, and `five_hour_pct` in both state files and NONE of them is
+  // displayed. The rendered line is the version and nothing else, so the parsing
+  // below exists purely to keep those two writes fed — the status-bar pill reads the
+  // keyed one, and blanking it is the failure this arrangement is built to avoid.
+  // There are deliberately no separate `pct`/`fiveHourPct` display locals any more;
+  // the rounded values land straight in the raw fields the writes consume.
   let rawTokens;
   let rawCtx;
   let rawFh;
   let projectDir;
-  let tokensStr = '';
-  let pct;
-  let fiveHourPct;
 
   if (payload.trim() !== '') {
     let parsed;
     try {
       parsed = JSON.parse(payload);
     } catch {
-      // Malformed JSON -> every segment stays empty, version-only output.
+      // Malformed JSON -> every metric stays undefined, so nothing is written and
+      // the line is the same version-only output every other path produces.
     }
     const root = parsed !== null && typeof parsed === 'object' ? parsed : undefined;
     try {
@@ -517,14 +610,16 @@ try {
         if (ti !== undefined && to !== undefined) {
           // `int()` in the .sh truncates toward zero before summing.
           const total = Math.trunc(ti) + Math.trunc(to);
-          if (total >= 0) {
-            tokensStr = fmtTokens(total);
-            rawTokens = total;
-          }
+          // Captured for the two state writes only — the `>= 0` gate is kept
+          // because `readCount` on the reader side rejects a negative anyway, and
+          // writing one would only put a value on disk that nothing will accept.
+          if (total >= 0) rawTokens = total;
         }
         if (up !== undefined) {
-          pct = Math.max(0, pyRound(up));
-          rawCtx = pct;
+          // Rounded and clamped exactly as before, and for the same reason the .sh
+          // still does it: this is the value that goes ON DISK as `context_pct`, and
+          // the status-bar pill's reader expects the same integer it always got.
+          rawCtx = Math.max(0, pyRound(up));
         }
       }
     } catch {
@@ -536,8 +631,9 @@ try {
       if (fh !== null && typeof fh === 'object') {
         const fhUp = asPyNumber(fh.used_percentage);
         if (fhUp !== undefined) {
-          fiveHourPct = Math.max(0, pyRound(fhUp));
-          rawFh = fiveHourPct;
+          // Same as `rawCtx` above: rounded for the on-disk `five_hour_pct`, not for
+          // any rendered text.
+          rawFh = Math.max(0, pyRound(fhUp));
         }
       }
     } catch {
@@ -558,23 +654,24 @@ try {
   writeUsageState(rawTokens, rawCtx, rawFh);
   writeKeyedState(resolveStateKey(projectDir), rawTokens, rawCtx, rawFh);
 
-  // Each segment is independent — gated on its own source field being present.
-  // Segments joined with ' · ' (U+00B7); the ' | ' separator below is U+2502 and
-  // appears only when at least one segment is present.
-  const parts = [];
-  if (tokensStr !== '') parts.push(tokensStr);
-  if (pct !== undefined) parts.push(pctSegment('', pct));
-  if (fiveHourPct !== undefined) parts.push(pctSegment('5h ', fiveHourPct));
-
-  const line =
-    parts.length > 0
-      ? `[Ghola v${version} \u2502 ${parts.join(' \u00b7 ')}]`
-      : `[Ghola v${version}]`;
-  // THE ONLY THING SILENT MODE SUPPRESSES. Both state writes above already
-  // happened, unconditionally, which is the entire point: the status-bar pill
-  // keeps its data while the footer row disappears. Zero bytes are written rather
-  // than a newline — the harness normalizes the two to the same "absent" anyway,
-  // but writing nothing is the honest spelling of printing nothing.
+  // THE BRACKET CARRIES THE VERSION AND NOTHING ELSE. There is no metrics group to
+  // build, so there is no parts array, no U+2502 separator introducing it, and no
+  // U+00B7 joining its members - all three went together, which is the only way to
+  // remove a segment without stranding the punctuation that framed it. A single
+  // literal is therefore the whole render: no branch can leave a trailing separator,
+  // an empty group, or a doubled space inside the bracket, because none of those
+  // characters is emitted on any path. The two state writes ABOVE are unaffected and
+  // still carry all three metrics; see the header of this file for why that split
+  // exists.
+  const line = `[Ghola v${version}]`;
+  // THE ONLY THING SILENT MODE SUPPRESSES, and on an ordinary invocation it
+  // suppresses it — this branch is NOT taken unless the operator set
+  // `GHOLA_STATUSLINE_SILENT=0`. The line above is built either way and is NOT dead
+  // code: it is the escape hatch's whole output. Both state writes above already
+  // happened, unconditionally, which is the entire point: the status-bar pill keeps
+  // its data while the footer row is gone. Zero bytes are written rather than a
+  // newline — the harness normalizes the two to the same "absent" anyway, but
+  // writing nothing is the honest spelling of printing nothing.
   if (!silent) process.stdout.write(line);
 } catch {
   // Unreachable in practice — every step above handles its own failure. Degrade

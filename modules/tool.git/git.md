@@ -80,6 +80,23 @@ Add a short body describing what changed and why if it adds value. If it would a
 
 **Returning it.** Return the message as text — the subject line, then a blank line, then the body if there is one. Do not package it as a `git commit -m` invocation: the message is the deliverable, and collapsing subject and body into one `-m` string is an artifact of a retired flow, not part of the format.
 
+## Operator git email (`parameters.gitEmail`)
+
+This module also carries one non-policy setting: the operator's own git commit email. It grants nothing and gates nothing — it does not affect the allowlist, the protected-branches guardrail, or any refusal path. It exists here because it is a **git-domain identity value**, and the heuristic that reads it is a git-log comparison.
+
+Its consumer is the **FALLBACK** author-vs-review heuristic used by `tool.session-bootstrap` (step 9 `mode-detection`) and `tool.lenses` (the session-start review trigger). That fallback compares the authors of the branch's commits (`git log <base>..HEAD --format='%ae'`) against the operator's own email to guess whether the branch is the operator's work or a colleague's. Resolution order for the operator's email:
+
+1. `parameters.gitEmail` when it is non-empty — use it verbatim.
+2. Otherwise (empty, or absent from the Session Manifest — the default is `""`) fall back to whatever `git config user.email` reports.
+
+If `tool.git` is not loaded at all, there is no `gitEmail` and the fallback uses `git config user.email`, exactly as in case 2 — so the behavior degrades cleanly rather than breaking.
+
+This is the **fallback** input only. The PRIMARY review-vs-author signal is an identity comparison against the operator's Bitbucket handle, `bitbucketUsername`, which is owned by **`integration.atlassian-suite`** (the module that resolves a PR's author). The `gitEmail` path is reached only when that primary signal is unavailable.
+
+Note that the case-2 fallback runs a command (`git config user.email`) which, like every git invocation, is **still subject to the allowlist above** — this setting grants no exemption. `git config` is not in the default `allowedCommands`, so when it is not enabled the case-2 read is refused and the heuristic has no operator email at all; the consumer then degrades per its own documented rules. Setting `parameters.gitEmail` explicitly is the way to give the fallback an email without needing `git config` enabled, which is the main reason to fill it in.
+
+`gitEmail` is a **non-secret identifier** — an address already stamped on every commit the operator has pushed, not a credential. It is a plain setting, not SecretStorage-backed: never treat it as a token, never warn about echoing it, and never route it through a secrets wrapper. Never invent or infer it — use `parameters.gitEmail` or the `git config user.email` fallback, nothing else. This module never *writes* git config: reading `user.email` for this heuristic never becomes a `git config` set on the operator's behalf.
+
 ## Role-Specific Notes
 
 The body above applies identically to every agent. The notes below are short framings for how each role uses the policy.

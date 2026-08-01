@@ -1,8 +1,8 @@
 {
   "id": "tool.operator-profile",
   "name": "Operator Profile",
-  "version": "0.2.0",
-  "description": "Personalizes the TPM: your name for the greeting, an optional persona (voice/tone), and identity handles (Bitbucket username, git email, Jira account) used for review-mode detection. An empty persona means default behavior.",
+  "version": "0.4.0",
+  "description": "Personalizes the TPM: your name for the greeting, an optional persona (voice/tone), and a master intensity dial for that persona. An empty persona means default behavior. Also carries the compaction-proposal threshold - the context percentage at which the TPM offers you a /compact (it cannot run one itself; slash commands are yours alone). Identity handles now live in the modules that consume them - Bitbucket username and Jira account in integration.atlassian-suite, git commit email in tool.git.",
   "proactive": true,
   "category": "utility",
   "kind": "capability",
@@ -32,23 +32,13 @@
         "default": 5,
         "description": "Master strength dial (0-10) for how strongly ANY configured persona colors the TPM's user-facing voice. 0 = persona effectively off (default TPM voice even if a persona is set); 5 (default) = moderate, clearly the persona but balanced with clarity; 10 = persona at maximum. Higher = the persona's voice/tone/mannerisms come through more strongly. Applies to the operator-profile persona (the TPM's own voice). Only matters when a persona is actually set — an empty persona means the dial does nothing. Note: integration.bitbucket-pr-comments has its OWN intensity dial (coderabbitReplyPersonaIntensity) for CodeRabbit PR replies, independent of this one. It changes only HOW strongly the persona colors the voice, never what the TPM does, is allowed to do, or the safety floor."
       },
-      "bitbucketUsername": {
-        "type": "string",
-        "label": "Bitbucket Username",
-        "default": "",
-        "description": "The operator's Bitbucket account username/nickname (the handle, not the display name), used to detect REVIEW mode: when the open PR's author is NOT this handle, the session is reviewing someone else's work rather than authoring. Empty disables identity-based review detection (falls back to the git-author heuristic). This is a non-secret identifier, not a credential."
-      },
-      "gitEmail": {
-        "type": "string",
-        "label": "Git Email",
-        "default": "",
-        "description": "The operator's git commit email, used to refine the fallback author/review heuristic (compare against branch commit authors) when identity-based detection via `bitbucketUsername` is unavailable. Optional; empty uses `git config user.email`."
-      },
-      "jiraAccountId": {
-        "type": "string",
-        "label": "Jira Account / Username",
-        "default": "",
-        "description": "The operator's Jira account identifier. Reserved for future identity-based review detection via ticket assignee/reporter; not yet wired. Optional."
+      "compactProposalThresholdPct": {
+        "type": "number",
+        "label": "Compaction Proposal Threshold (% context, 0 = off)",
+        "default": 70,
+        "min": 0,
+        "max": 95,
+        "description": "Context-usage percentage at which the TPM offers you a compaction, in ONE line, at most once per crossing. IT CANNOT COMPACT FOR YOU - /compact is a slash command, so it is your input only; no agent can trigger compaction of its own context. The TPM reads the percentage from the statusline snapshot (~/.ghola/statusline/state/<GHOLA_STATE_KEY>.json) and stays silent if that snapshot is older than 90 seconds. 70 (default) proposes well before Claude Code's own auto-compaction fires near the ceiling, so you can compact deliberately with a focus argument (/compact <focus>) instead of having it happen to you. Set 0 to disable entirely; any negative, out-of-range, or non-numeric value also degrades to DISABLED rather than to the default, so a typo can never make the TPM nag. Telling the TPM not to ask mutes it for the rest of that session; 0 is the durable off switch. This setting has NO effect on Claude Code's own auto-compaction threshold, which is not configurable and not readable by an agent."
       }
     }
   }

@@ -165,7 +165,15 @@ const UPDATED_MILLISECONDS_THRESHOLD = 1e11;
 export interface StatuslineUsageState {
   /** Epoch SECONDS at which the snapshot was written. */
   readonly updated?: number;
-  /** `total_input_tokens + total_output_tokens` for the session. */
+  /**
+   * `context_window.total_input_tokens + total_output_tokens` — the size of the
+   * CURRENT context window, NOT a cumulative total for the session. The name is a
+   * misnomer as of Claude Code v2.1.132: the value drops when a compaction clears
+   * the window and plateaus near the model's context ceiling instead of growing
+   * for the life of the session. The key name is unchanged deliberately — it is a
+   * cross-module contract shared verbatim by both renderers and
+   * `tool.usage-observer` — so read the key, not its name.
+   */
   readonly session_tokens?: number;
   /** Context-window usage, whole percent, already clamped at 0 by the writer. */
   readonly context_pct?: number;
@@ -199,7 +207,20 @@ export interface StatuslineStateSnapshot {
    * age, and "in 3 seconds" is a worse tooltip than "just now".
    */
   readonly ageMs?: number;
-  /** Session token total, when present and valid. */
+  /**
+   * Current context-window size in tokens, when present and valid — see
+   * `session_tokens` above for why that name no longer describes it.
+   *
+   * THE VS CODE STATUS-BAR PILL RENDERS THIS, and it is now the only surface that
+   * does: `mode-status-bar.ts` opens its metrics group with the figure abbreviated
+   * through `formatTokenCount` below (`Ghola: Ticket Work · 34k · 5h 55%`). Both terminal
+   * renderers still COMPUTE and WRITE the field but no longer print it, so the
+   * pill is what keeps this field — and the abbreviation rule — live. It would be
+   * carried here regardless of any display, because the on-disk shape is a
+   * cross-module contract and dropping the field would make this reader a lossy
+   * view of a shape it is supposed to mirror exactly; `tool.usage-observer`
+   * consumes the field itself.
+   */
   readonly sessionTokens?: number;
   /** Context-window percent, when present and valid. */
   readonly contextPct?: number;
@@ -497,22 +518,29 @@ function pyRound(value: number): number {
 }
 
 /**
- * Abbreviate a token count for display. This is `fmt_tokens` from
- * `scripts/ghola-statusline.sh`, ported identically in
- * `scripts/ghola-statusline.mjs` as `fmtTokens`, and reproduced here so the status
- * bar and the terminal footer can never disagree about the same number:
+ * Abbreviate a token count for display:
  *
  *   n < 1000        -> the digits             (999      -> '999')
  *   n < 1_000_000   -> floor(n / 1000) + 'k'  (238_400  -> '238k')
  *   otherwise       -> (n / 1e6, 1 decimal) + 'M'  (1_500_000 -> '1.5M')
  *
- * Note the `k` tier FLOORS (Python's `n // 1000`, JS's `Math.floor`) while the `M`
- * tier ROUNDS to one decimal (`f"{...:.1f}"`, `toFixed(1)`). That asymmetry is in
- * the original; it is preserved, not corrected. Both tiers operate on IEEE-754
- * doubles in all three languages, so their results are bit-identical.
+ * THE SOLE REMAINING IMPLEMENTATION OF THIS RULE, and no longer a copy of anything.
+ * It began as a port of `fmt_tokens` from `scripts/ghola-statusline.sh` (mirrored in
+ * `scripts/ghola-statusline.mjs` as `fmtTokens`) and was kept deliberately in step
+ * with both, so that the status bar and the terminal footer could not disagree about
+ * one number. Both of those helpers have since been DELETED, and they are not coming
+ * back: neither renderer prints a token segment any more, so neither formats tokens
+ * for display at all. There is therefore nothing left for this to stay in step with,
+ * and it has exactly one caller — `formatMetricsSegment` in
+ * `src/status-bar/mode-status-bar.ts`, which renders the VS Code status-bar pill. A
+ * change to the tiers below now moves the pill and nothing else.
  *
- * Returns `''` for a non-finite input — unreachable via `readStatuslineState`,
- * which validates first, but this is exported and a caller may not have.
+ * Note the `k` tier FLOORS while the `M` tier ROUNDS to one decimal. That asymmetry
+ * came from `fmt_tokens`; it is preserved, not corrected, so the digits read the same
+ * as they historically did.
+ *
+ * Returns `''` for a non-finite input — unreachable via `readStatuslineState`, which
+ * validates first, but this is exported and a caller may not have.
  */
 export function formatTokenCount(count: number): string {
   if (!Number.isFinite(count)) return '';

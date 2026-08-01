@@ -1,56 +1,141 @@
 #!/usr/bin/env bash
 # ghola-statusline.sh — Claude Code statusLine hook for Project-Ghola.
 #
-# Emits exactly one line on stdout (no trailing newline) describing the current
-# Ghola version and, when available, the user's session token/context usage.
+# BY DEFAULT IT PRINTS NOTHING AT ALL — zero bytes on stdout, exit 0. Silent mode
+# is now the DEFAULT rather than an opt-in (see "Silent mode" below), so this
+# script's REASON TO EXIST IS THE TWO STATE WRITES, not the footer line. When the
+# operator re-enables output with GHOLA_STATUSLINE_SILENT=0 it emits exactly one
+# line on stdout (no trailing newline) carrying the current Ghola version — a
+# session marker, not a usage display.
 #
 # Behavior:
-#   - Always shows [Ghola v<version>].
-#   - When the JSON payload on stdin contains context_window.total_input_tokens +
-#     total_output_tokens and/or context_window.used_percentage and/or
-#     rate_limits.five_hour.used_percentage, each of those segments is appended
-#     independently — e.g. [Ghola v0.16.2 | 142k · 62% · 5h 41%].
+#   - When un-silenced, the line is EXACTLY [Ghola v<version>]. Nothing else is
+#     ever appended: no metrics group, no U+2502 separator, no U+00B7 join, and no
+#     color at all. Silenced (the default) nothing is emitted, not even a newline.
+#   - THE FOOTER RENDERS NO USAGE METRICS AT ALL. It used to close with a metrics
+#     group — [Ghola v0.16.2 | 62% · 5h 41%] — carrying the context percentage and
+#     the 5-hour rolling-window percentage, and before those an absolute token
+#     count. All three are gone from the rendered line, in three separate steps.
+#     The token figure went first: it was the same measurement as the context
+#     percentage printed twice ("142k" alongside "62%" recovers nothing the
+#     percentage does not already say) and the field it came from
+#     (context_window.total_input_tokens + total_output_tokens) stopped meaning
+#     "cumulative session spend" in Claude Code v2.1.132, where it became the size
+#     of the CURRENT context window. The two percentages then went for a different
+#     reason: the VS Code status-bar pill now displays the usage stats
+#     ("cmms2@win · 34k · 5h 3%"), so the footer was printing the same numbers a
+#     second time. THIS IS A DISPLAY DECISION ONLY, and the same change is made in
+#     ghola-statusline.mjs.
+#   - EVERY VALUE IS STILL COMPUTED AND STILL WRITTEN. Both state writes below
+#     still record "session_tokens", "context_pct", and "five_hour_pct", with the
+#     same key set, key order, and timestamp they always had: that on-disk shape is
+#     a cross-module contract with tool.usage-observer AND the feed the VS Code
+#     status bar reads, so it must not move when a rendered segment does. Beyond
+#     the silent-mode marker, those two writes are now this script's ONLY purpose
+#     past printing the version — which is why the python3 block below computes
+#     values nothing displays, and why that is not dead code.
+#   - THE WRITES LIVE INSIDE THE python3 BLOCK, so a host with no usable python3
+#     used to write NOTHING — silently, exit 0, zero bytes out, and (since the
+#     footer is blank by default) with no visible symptom anywhere except a
+#     VS Code status-bar pill that goes empty 90 seconds later. Step 3a below adds
+#     a FALLBACK WRITER for exactly that case: when the python3 block does not run
+#     to completion, the payload is handed to the sibling scripts/ghola-statusline.mjs
+#     under `node`, which performs the same two writes with no python3 involved.
+#     See "Fallback writer" below for what it does and does not cover.
 #   - On ANY error the script must NOT fail and must NOT print error text; it
-#     falls back to [Ghola v<version>] (or [Ghola vunknown] if VERSION unreadable).
+#     prints nothing (the default). Un-silenced it falls back to
+#     [Ghola v<version>] (or [Ghola vunknown] if VERSION unreadable).
 #   - Side effects: mirrors the usage snapshot to BOTH ~/.ghola/usage-state.json
 #     (unkeyed, the tool.usage-observer contract) and the per-session keyed file
 #     ~/.ghola/statusline/state/<key>.json that the VS Code status bar reads. The
 #     unkeyed path is shared by every concurrent session and so cannot be
 #     attributed to a window; the keyed one can. Both writes happen.
 #
-# Silent mode: hide the footer line WITHOUT losing the writes.
+# Silent mode: THE DEFAULT. No footer line, and the writes still happen.
+#   THE OPERATOR WANTS NO FOOTER ROW AT ALL, so silence is the DEFAULT and there is
+#   nothing to switch on to get it. What used to be the opt-in path is now the
+#   normal path: it is already the tested path, and inverting one default keeps the
+#   change reversible instead of deleting the render.
 #   THIS SCRIPT IS THE WRITER of the two state files above, so deleting
-#   "statusLine" from ~/.claude/settings.json is the WRONG way to hide the footer
-#   line: the harness then never invokes us, nothing writes state, and the VS Code
-#   status-bar pill goes empty inside its 90-second staleness window on BOTH
-#   hosts. To hide the line and keep the pill, silence the renderer instead — it
-#   still runs, still writes both files, and prints nothing:
-#     - MARKER FILE <homedir>/.ghola/statusline/silent — if it EXISTS, print
-#       nothing. Contents are irrelevant; existence is the whole signal and an
-#       empty file is the expected form. It sits beside the staged renderer and
-#       the VERSION stamp in that same directory, so it needs no new directory and
-#       no new path rule. The check lives in the python3 block below so the home
-#       directory is resolved by the SAME os.path.expanduser("~") that resolves
-#       the state files, rather than by a second rule.
-#     - ENV VAR GHOLA_STATUSLINE_SILENT, CHECKED FIRST. 1/true/yes
-#       (case-insensitive, surrounding whitespace trimmed) means silent;
-#       0/false/no means NOT silent and BEATS the marker file, so one session can
-#       be un-silenced without deleting it. Unset, empty, whitespace-only, or any
-#       unrecognized value is NO SIGNAL and defers to the marker file.
-#   Identical rules, path, and precedence live in scripts/ghola-statusline.mjs,
-#   which carries the long-form rationale — including why the control surface is a
+#   "statusLine" from ~/.claude/settings.json is STILL the WRONG way to get a blank
+#   footer even though the footer is now blank by default: the harness then never
+#   invokes us, nothing writes state, and the VS Code status-bar pill goes empty
+#   inside its 90-second staleness window on BOTH hosts. The renderer must keep
+#   being invoked, keep running, and keep writing; it simply prints nothing.
+#   The controls, in precedence order:
+#     - ENV VAR GHOLA_STATUSLINE_SILENT, CHECKED FIRST and the ONLY thing that can
+#       change the outcome. 0/false/no (case-insensitive, surrounding whitespace
+#       trimmed) means NOT silent and is the escape hatch that puts the bracket back
+#       for one session; 1/true/yes means silent, which is what would have happened
+#       anyway. Unset, empty, whitespace-only, or any unrecognized value is NO
+#       SIGNAL and falls through to the default.
+#     - MARKER FILE <homedir>/.ghola/statusline/silent — still probed, still answers
+#       "silent" when it EXISTS, and now REDUNDANT: it can only ever ask for the
+#       behavior that already happens. Kept rather than removed so a marker the
+#       operator already created keeps meaning what it said, and so
+#       _SILENT_BY_DEFAULT below is the single line that restores a printing
+#       default. Contents are irrelevant; existence is the whole signal. The check
+#       lives in the python3 block below so the home directory is resolved by the
+#       SAME os.path.expanduser("~") that resolves the state files, rather than by
+#       a second rule.
+#   Identical rules, path, precedence, and default live in
+#   scripts/ghola-statusline.mjs (as SILENT_BY_DEFAULT), which carries the
+#   long-form rationale — including why the control surface is an env var and a
 #   marker file and not a module setting (Ghola module settings live in VS Code's
 #   globalState, an opaque Memento with no on-disk form, so no standalone script
 #   can read them).
 #   SILENCE IS ABOUT STDOUT ONLY: both state writes happen unconditionally and
-#   before the print gate. A FAILED CHECK degrades to NOT SILENT, never the other
-#   way round — if python3 dies the marker field arrives empty and the line prints,
-#   because a broken check must not be able to blank the operator's footer.
+#   before the print gate.
+#   NOTE THE FAIL-SAFE DIRECTION INVERTED WITH THE DEFAULT. It used to be that a
+#   FAILED CHECK degraded to NOT SILENT — if python3 died the marker field arrived
+#   empty and the line printed. Now that same empty field falls through to the
+#   silent default, so a dead python3 yields zero bytes rather than a bracket. That
+#   is the correct direction: printing a footer the operator asked to be rid of is
+#   the wrong answer, and there is no longer a footer to protect. What has NOT
+#   changed is that a failure never aborts the render: every path still exits 0.
+#   BE PRECISE ABOUT THE STATE WRITE, THOUGH — the older wording here claimed that
+#   "a failure never suppresses a state write", and for a DEAD python3 that was
+#   simply untrue, because both writes live inside its block. Step 3a's fallback
+#   writer closes that hole only when `node` and the sibling .mjs are both
+#   reachable; with neither interpreter available nothing can compute the values and
+#   nothing is written. That is the one honest residual gap, and it is recorded
+#   under "Fallback writer" rather than papered over.
+#
+# Fallback writer (step 3a): the python3 block's LAST act is to write a one-byte
+#   field to stdout ("0" no marker / "1" marker present). It therefore never emits
+#   an EMPTY field on a successful run, and an empty field is proof — not a guess —
+#   that the block did not reach its end, whether because python3 is absent, is a
+#   stub, cannot start, or died partway. Bash treats that empty field as "the two
+#   writes above did not happen" and re-runs the whole render through
+#   `node <script dir>/ghola-statusline.mjs`, feeding it the payload already
+#   captured in step 2. The .mjs is the byte-identical Node port and performs the
+#   SAME two writes to the SAME paths, so the pill gets its snapshot.
+#   WHAT IT COVERS: python3 missing from PATH, not executable, a stub that exits
+#   without running our code, a broken stdlib, and a crash anywhere before the
+#   final field write (which is after both state writes, so a completed block is
+#   also evidence the write code was reached).
+#   WHAT IT DOES NOT COVER, deliberately: (1) neither node nor python3 available —
+#   there is then no JSON parser and no values to write, and bash cannot parse that
+#   payload alone; (2) a python3 that runs to completion but whose write fails on a
+#   filesystem fault — the block swallows that by design and node would almost
+#   certainly fail the same way, so no fallback is attempted; (3) a .mjs that is not
+#   a sibling of this script (only "$_SCRIPT_DIR/ghola-statusline.mjs" is tried, so
+#   no second home-directory resolution rule is introduced).
+#   STDOUT IS UNAFFECTED BY ALL OF IT. The delegated render's stdout is discarded
+#   and bash still does its own printing below, so the fallback can only ever add a
+#   state write; it can never change, duplicate, or suppress a byte of output.
+#   The python3 block remains the PRIMARY path and is deliberately NOT bypassed
+#   when node is present: it is the third implementation of the state-key algorithm
+#   that scripts/ghola-statusline-parity.mjs checks, and demoting it to a path that
+#   never runs on this host would leave that check guarding nothing anybody uses.
 #
 # Portability: derives the VERSION path from the script's own location (parent
 # dir's VERSION file), so it works regardless of the cwd the harness runs it in.
 #
-# Dependencies: bash, python3 (safe JSON parsing — jq is NOT assumed).
+# Dependencies: bash, and EITHER python3 OR node (safe JSON parsing — jq is NOT
+# assumed). python3 is the primary parser; node is used only as step 3a's fallback
+# writer, via the sibling ghola-statusline.mjs. With both missing this script still
+# exits 0 and still prints nothing, but no state is written.
 # Installation: chmod +x this file and reference it from ~/.claude/settings.json:
 #   { "statusLine": { "type": "command",
 #                     "command": "/home/aarbuckle/projects/Project-Ghola/scripts/ghola-statusline.sh" } }
@@ -71,22 +156,46 @@ version="$( { tr -d '[:space:]' < "$VERSION_FILE"; } 2>/dev/null)"
 payload="$(cat 2>/dev/null)" || payload=""
 
 # --- 3. Ask python3 to do all the JSON work in one shot.
-# Output on stdout, four pipe-separated fields:
-#   "<tokens_str_or_empty>|<pct_or_empty>|<five_hour_pct_or_empty>|<silent_marker_or_empty>"
+# Output on stdout is now a SINGLE field, unseparated, and it is ALWAYS EXACTLY ONE
+# BYTE on a run that finishes:
+#   "1" — the silent-mode marker file exists
+#   "0" — it does not (or could not be probed)
+#   ""  — THIS BLOCK NEVER FINISHED. Not one of its answers.
+# The empty case is the whole reason the field is spelled "0"/"1" rather than
+# ""/"1": this write is the LAST statement in the block, after both state writes, so
+# a non-empty field is positive evidence that python3 ran our code all the way
+# through, and an empty one is positive evidence that it did not. Step 3a below turns
+# that into the fallback-writer trigger. Note the vocabulary change CANNOT move
+# stdout: "0" and "" both fall through the precedence chain to _SILENT_BY_DEFAULT,
+# which is the same silent answer "" produced before.
+# There used to be three fields, and before that four: a leading <tokens_str>, then
+# <pct> and <five_hour_pct>. Each was dropped as its rendered segment was, rather
+# than being left in place empty, so the field count and the bash split below cannot
+# drift apart while one side quietly carries a value nothing reads — a mismatched
+# field count is exactly the kind of drift that fails silently here. With one field
+# there is no separator left to split on, so the bash side reads $parsed whole.
+# THE NUMBERS ARE STILL CAPTURED — as raw_tokens/raw_ctx/raw_fh, for the two state
+# writes only. They never travel back to bash because nothing in bash displays them.
 parsed="$(PAYLOAD="$payload" python3 - <<'PY' 2>/dev/null
 import hashlib, json, os, re, sys
 
-tokens_str = ""
-pct = ""
-five_hour_pct = ""
-# "1" when the silent-mode marker file exists, "" otherwise (INCLUDING on any
+# "1" when the silent-mode marker file exists, "0" otherwise (INCLUDING on any
 # failure to look). Reported rather than acted on: the printing lives in bash, and
-# the environment override that outranks this field is evaluated there.
-silent_marker = ""
+# the environment override that outranks this field is evaluated there. It is the
+# ONLY thing this block reports back — there are no pct / five_hour_pct display
+# strings any more, because the footer displays no metrics.
+#
+# THE DEFAULT IS "0", NOT "". Both mean "no marker" to the precedence chain in bash,
+# so this is behaviorally inert for silence — but it reserves "" to mean ONLY "this
+# block never reached its final stdout write", which is what bash's step 3a uses to
+# decide the two state writes below did not happen. An empty field must therefore
+# never be reachable on a run that completes.
+silent_marker = "0"
 
-# Raw numeric values (or None) mirrored into the usage-state file below so the
-# tool.usage-observer module can read them; the display strings above are for
-# the status line itself.
+# Raw numeric values (or None) mirrored into the two state files below so the
+# tool.usage-observer module and the VS Code status bar can read them. ALL THREE ARE
+# WRITE-ONLY: raw_tokens, raw_ctx, and raw_fh feed "session_tokens", "context_pct",
+# and "five_hour_pct" in both files and none of them is rendered anywhere.
 raw_tokens = None
 raw_ctx = None
 raw_fh = None
@@ -94,12 +203,17 @@ raw_fh = None
 # GHOLA_STATE_KEY is absent; see resolve_state_key below.
 project_dir = None
 
-def fmt_tokens(n):
-    if n < 1000:
-        return str(n)
-    if n < 1_000_000:
-        return f"{n // 1000}k"
-    return f"{n / 1_000_000:.1f}M"
+# NOTE: there is no fmt_tokens here any more, and no percentage formatting either.
+# The k/M abbreviation existed only to render the token segment, and the pct /
+# five_hour_pct strings only to carry the two percentage segments back to bash; each
+# went with the segment it fed rather than being left behind as dead code. All three
+# NUMBERS are still computed below and still written into both state files, because
+# that on-disk shape is a cross-module contract with tool.usage-observer and with the
+# VS Code status bar that outlived the display. The abbreviation rule the pill needs
+# lives on in formatTokenCount in src/session/statusline-state.ts - that function is
+# live and has a caller, because the pill DOES render an absolute token figure
+# ("cmms2@win - 34k - 5h 3%"); this footer is the surface that stopped. The .mjs's
+# fmtTokens and pctSegment were removed in the same changes as this file's.
 
 # --- Per-session state key -------------------------------------------------
 # THE SAME ALGORITHM LIVES IN THREE PLACES: here, in scripts/ghola-statusline.mjs,
@@ -126,7 +240,9 @@ def normalize_state_key_path(p):
     so case is folded — via [A-Z] rather than .lower(), because that is the only
     spelling the three implementations agree on for non-ASCII input."""
     slashed = p.replace("\\", "/")
-    trimmed = re.sub(r"/+$", "", slashed)
+    # \Z, not $: Python's $ (non-MULTILINE) also matches before one trailing "\n",
+    # which JS/TS $ (no /m) never does - \Z is the absolute-end match both share.
+    trimmed = re.sub(r"/+\Z", "", slashed)
     with_root = trimmed if trimmed else slashed
     return re.sub(r"[A-Z]", lambda m: m.group(0).lower(), with_root)
 
@@ -162,7 +278,8 @@ def find_repo_root(start):
     "/a/b", so an untrimmed input skips a level. Never cached: the filesystem can
     change under us (git init), and the walk is a handful of stats the OS dentry
     cache already holds."""
-    trimmed = re.sub(r"[\\/]+$", "", start)
+    # \Z, not $: same JS/Python end-anchor divergence as normalize_state_key_path above.
+    trimmed = re.sub(r"[\\/]+\Z", "", start)
     current = trimmed if trimmed else start
     for _ in range(MAX_ROOT_WALK_STEPS):
         if has_git_entry(current):
@@ -211,14 +328,19 @@ if raw.strip():
             up = cw.get("used_percentage")
             if isinstance(ti, (int, float)) and isinstance(to, (int, float)):
                 total = int(ti) + int(to)
+                # Captured for the two state writes only — the >= 0 gate is kept
+                # because the reader side rejects a negative anyway, and writing one
+                # would only put a value on disk that nothing will accept.
                 if total >= 0:
-                    tokens_str = fmt_tokens(total)
                     raw_tokens = total
             if isinstance(up, (int, float)):
+                # Rounded (half-to-EVEN, per Python's round) and clamped exactly as
+                # before: this is the value that goes ON DISK as "context_pct", and
+                # the status bar's reader expects the same integer it always got. The
+                # .mjs mirrors the same rounding for the same reason.
                 p_int = int(round(up))
                 if p_int < 0:
                     p_int = 0
-                pct = str(p_int)
                 raw_ctx = p_int
     except Exception:
         pass
@@ -230,10 +352,11 @@ if raw.strip():
             if isinstance(fh, dict):
                 fh_up = fh.get("used_percentage")
                 if isinstance(fh_up, (int, float)):
+                    # Same as raw_ctx above: rounded for the on-disk "five_hour_pct",
+                    # not for any rendered text.
                     fh_int = int(round(fh_up))
                     if fh_int < 0:
                         fh_int = 0
-                    five_hour_pct = str(fh_int)
                     raw_fh = fh_int
     except Exception:
         pass
@@ -351,31 +474,89 @@ except Exception:
 # the reason this probe lives inside the python3 block at all: doing it in bash
 # with $HOME would be a second, subtly different rule.
 #
-# Any failure yields "" — i.e. NOT silent. The only safe direction for a broken
-# check is to print, so an unreadable directory or a permission error must fall
-# through to the normal line rather than swallow it.
+# Any failure yields "0" — which means only "this probe contributes nothing", NOT
+# "print": bash's _SILENT_BY_DEFAULT decides that, and it is silent. So an
+# unreadable directory or a permission error can no longer change the outcome in
+# either direction, which is a strictly better property than the old one and is
+# what let the default invert without touching this probe at all. It is "0" rather
+# than "" so that a failed probe is still distinguishable from a block that never
+# got here at all — see the "0"/"1"/"" vocabulary at the top of this block.
 try:
     if os.path.exists(os.path.expanduser("~/.ghola/statusline/silent")):
         silent_marker = "1"
 except Exception:
-    silent_marker = ""
+    silent_marker = "0"
 
-sys.stdout.write(f"{tokens_str}|{pct}|{five_hour_pct}|{silent_marker}")
+# THE LAST STATEMENT IN THE BLOCK, and load-bearing as such: reaching it is what
+# tells bash that both state writes above were executed. Do not move it upward, do
+# not add anything after it that could fail, and do not let it emit an empty string.
+sys.stdout.write(silent_marker)
 PY
 )"
 
-# Defensive split (if python3 failed, parsed is empty -> all four fields empty,
-# which for the last one means NOT silent: a dead parser can never mute the line).
-tokens_str="${parsed%%|*}"
-rest="${parsed#*|}"
-pct="${rest%%|*}"
-rest="${rest#*|}"
-five_hour_pct="${rest%%|*}"
-silent_marker="${rest#*|}"
+# --- 3a. FALLBACK WRITER: cover a python3 that never ran ----------------------
+# An EMPTY $parsed is not one of the block's answers (it reports "0" or "1"), and its
+# write is the block's last statement, so empty means the block did not get there —
+# python3 absent from PATH, not executable, a stub, a broken stdlib, or a crash. In
+# that case NEITHER STATE WRITE HAPPENED, and because the footer is silent by default
+# the only symptom is a VS Code status-bar pill that empties 90 seconds later, with
+# no error, no exit code, and nothing to grep. That is the failure this block exists
+# to remove.
+#
+# The remedy is to re-run the render under the OTHER interpreter: the sibling
+# scripts/ghola-statusline.mjs is the byte-identical Node port and writes the same
+# two files to the same paths with no python3 involved. The payload captured in step
+# 2 is piped into it (a pipe, not a here-string: no temp file, and `node` reads fd 0
+# to EOF rather than exiting early, so this is the full-reading-consumer form CLAUDE.md
+# rule 7 asks for even in a script with no `pipefail`).
+#
+# STDOUT OF THE DELEGATE IS DISCARDED and bash still prints for itself below. That is
+# the point: this block can only ADD a state write, never change, duplicate, or
+# suppress a byte of this script's output, so the render contract is untouched on
+# every path. stderr is discarded for the same reason — a statusline never emits
+# diagnostics. Every guard is a test rather than a trap, so a missing node, an
+# unreadable .mjs, or an unresolvable script directory just skips the attempt.
+#
+# NOT AN OPTIMIZATION AND NOT THE PRIMARY PATH. python3 is still tried first on every
+# render, deliberately: its block is the third implementation of the state-key
+# algorithm that scripts/ghola-statusline-parity.mjs checks three ways, and preferring
+# node would demote it to code that never runs on this host while the checker went on
+# certifying it. Keeping it primary also keeps the .sh and .mjs independently
+# exercised, which is what makes "pipe the same payload into both and diff" a real
+# test instead of a tautology.
+if [ -z "$parsed" ]; then
+    _mjs_fallback="${_SCRIPT_DIR}/ghola-statusline.mjs"
+    if [ -n "$_SCRIPT_DIR" ] && [ -r "$_mjs_fallback" ] && command -v node >/dev/null 2>&1; then
+        printf '%s' "$payload" | node "$_mjs_fallback" >/dev/null 2>&1
+    fi
+fi
 
-# --- 3b. Resolve silent mode: environment override FIRST, marker file second ---
+# ONE field, so there is nothing to split: $parsed IS the marker report. Kept as a
+# named assignment rather than using $parsed below, so the block above and the
+# precedence logic below still meet at an explicitly named value — and so growing a
+# second field back means re-adding a split here rather than quietly reinterpreting
+# this one. If python3 failed, $parsed is empty, and empty is NO SIGNAL: it falls
+# through to _SILENT_BY_DEFAULT below, so a dead parser lands on silence like every
+# other ambiguous input. (This comment used to say an empty field meant NOT silent.
+# That was true before the default inverted and is not true now — the value it
+# describes takes the `else` branch, which is silent.)
+silent_marker="$parsed"
+
+# --- 3b. Resolve silent mode: env override FIRST, marker second, SILENT by default ---
+# SILENCE IS THE DEFAULT. With no environment override and no marker file this is
+# the answer, so an ordinary invocation emits zero bytes while still having done
+# both state writes above.
+#
+# Spelled as a named variable rather than a bare "1" in the branch below because it
+# is the ONE line to flip to restore a printing footer, and because it is the value
+# SILENT_BY_DEFAULT in scripts/ghola-statusline.mjs has to agree with. The two
+# renderers are a hand-maintained pair; this default is part of that contract.
+_SILENT_BY_DEFAULT="1"
+
 # The env var is normalized here in pure bash — no filesystem, no subprocess, so
-# this step cannot fail and cannot be lost when python3 is unavailable.
+# this step cannot fail and cannot be lost when python3 is unavailable. That
+# matters more than it used to: it is now the only signal that can turn the line
+# back on, so it must survive a dead python3.
 #
 # Trim surrounding POSIX whitespace with the standard parameter-expansion idiom
 # (a real trim, not `tr -d`, which would also eat whitespace in the MIDDLE of a
@@ -388,58 +569,47 @@ _silent_env="${_silent_env%"${_silent_env##*[![:space:]]}"}"
 # ${var,,} or `tr '[:upper:]' '[:lower:]'`: both are locale-sensitive, and the
 # .mjs folds with an explicit [A-Z] class for exactly the same reason the state-key
 # algorithm does. "" means NO SIGNAL, not "not silent" — unset, empty,
-# whitespace-only, and unrecognized values all defer to the marker file, so a
-# shell that exports the variable empty cannot disable the marker, and a typo can
-# never silence the line by accident. Every ambiguous input errs toward PRINTING.
+# whitespace-only, and unrecognized values all defer onward, so a shell that
+# exports the variable empty cannot resurrect the footer and a typo (`flase`)
+# cannot either. Every ambiguous input now errs toward SILENCE, following the
+# default rather than contradicting it — the inverse of what it used to do.
 case "$_silent_env" in
     1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss])  _silent_override="1" ;;
     0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo])  _silent_override="0" ;;
     *)                                _silent_override="" ;;
 esac
 
-# An explicit override wins in BOTH directions, so `GHOLA_STATUSLINE_SILENT=0`
-# un-silences a single session without deleting the marker file.
+# An explicit override wins in BOTH directions, and it is now the ONLY thing that
+# can change the outcome: `GHOLA_STATUSLINE_SILENT=0` is the escape hatch that puts
+# the bracket back for one session. The marker file is consulted next so a marker
+# the operator already created keeps meaning what it said, but it can only ever ask
+# for the default that already applies. Everything else — marker absent, python3
+# dead, variable unset — lands on _SILENT_BY_DEFAULT.
 if [ -n "$_silent_override" ]; then
     silent="$_silent_override"
+elif [ "$silent_marker" = "1" ]; then
+    silent="1"
 else
-    silent="$silent_marker"
+    silent="$_SILENT_BY_DEFAULT"
 fi
 
-# --- 4. Format the output line ---
-# Each segment is independent — gates on its own source field being non-empty.
-# Segments joined with ' · ' (U+00B7). The ' │ ' (U+2502) separator appears only
-# when at least one segment is present. Context % and 5h % render red at >=85%.
-parts=()
-[ -n "$tokens_str" ] && parts+=("$tokens_str")
-if [ -n "$pct" ]; then
-    if [ "$pct" -ge 85 ] 2>/dev/null; then
-        parts+=("$(printf '\033[31m%s%%\033[0m' "$pct")")
-    else
-        parts+=("$(printf '%s%%' "$pct")")
-    fi
-fi
-if [ -n "$five_hour_pct" ]; then
-    if [ "$five_hour_pct" -ge 85 ] 2>/dev/null; then
-        parts+=("$(printf '5h \033[31m%s%%\033[0m' "$five_hour_pct")")
-    else
-        parts+=("$(printf '5h %s%%' "$five_hour_pct")")
-    fi
-fi
-# --- 5. Emit it, unless silenced ---
-# THE ONLY THING SILENT MODE SUPPRESSES. Both state writes already happened inside
-# the python3 block above, which is the entire point: the status-bar pill keeps its
-# data while the footer row disappears. Nothing at all is written — not a newline —
-# though the harness trims stdout and drops blank lines, so it would treat the two
-# identically.
+# --- 4. Emit the line, unless silenced ---
+# THE BRACKET CARRIES THE VERSION AND NOTHING ELSE. There is no metrics group to
+# build, so there is no parts array, no U+2502 separator introducing it, and no
+# U+00B7 joining its members - all three went together, which is the only way to
+# remove a segment without stranding the punctuation that framed it. One printf is
+# therefore the whole render: no branch can leave a trailing separator, an empty
+# group, or a doubled space inside the bracket, because none of those characters is
+# emitted on any path. No ANSI escape is emitted either - the red-at-85 tint went
+# with the percentages it colored, and it was the only color this script produced.
+#
+# SILENCE IS THE ONLY THING GATED HERE, and on an ordinary invocation it wins — the
+# printf below is NOT reached unless the operator set GHOLA_STATUSLINE_SILENT=0. It
+# is kept, not deleted, because it is the escape hatch's whole output. Both state
+# writes already happened inside the python3 block above, which is the entire point:
+# the status-bar pill keeps its data while the footer row is gone. Nothing at all is
+# written - not a newline - though the harness trims stdout and drops blank lines,
+# so it would treat the two identically.
 if [ "$silent" != "1" ]; then
-    if [ "${#parts[@]}" -gt 0 ]; then
-        joined="${parts[0]}"
-        for i in "${!parts[@]}"; do
-            [ "$i" -eq 0 ] && continue
-            joined="${joined} $(printf '\302\267') ${parts[$i]}"
-        done
-        printf '[Ghola v%s \342\224\202 %s]' "$version" "$joined"
-    else
-        printf '[Ghola v%s]' "$version"
-    fi
+    printf '[Ghola v%s]' "$version"
 fi

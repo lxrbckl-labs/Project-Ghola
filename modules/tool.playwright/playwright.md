@@ -140,6 +140,8 @@ The patch target is always `<specsDir>/<scope>/playwright.config.ts` and never a
 
 This ensures a video always records when requested. The per-context `recordVideo` fallback described in Capability A covers the Edge persistent-context path, which does not read the shared config's `use.video` at all; see the page-acquisition note in Capability A for which mechanism applies to which spec.
 
+**The `video` key is the ONLY key the exception covers, and it does not widen.** The fixes for a blank video lead-in (see "Nothing before the first painted frame" in Capability A) are deliberately written to stay inside that boundary: the setup-versus-recording split lives in the SPEC file, and the post-run remux lives outside Playwright entirely. Neither adds a `projects` array, a `globalSetup` entry, or a `dependencies` chain to the shared config. A setup PROJECT is the more idiomatic Playwright way to authenticate once before the recorded work, and it is rejected here for exactly that reason — it would restructure a config that other sessions in this repo are concurrently reading, which is the thing the no-overwrite rule exists to forbid. If some future change to this module appears to need a config key beyond `video`, the agent surfaces that to the operator rather than patching it in.
+
 ## Spec file shape
 
 The behavior is determined by `parameters.specPerProcedure`:
@@ -231,7 +233,13 @@ The `always` variants auto-produce during ticket-work spec generation; the `on-r
 
 The tester records a Playwright video of the AC flow with on-screen text narration, so a watcher understands each step without reading the spec. Two mechanisms combine:
 
-1. Enable Playwright's native video recording. There are two mechanisms and the correct one depends on how the spec acquires its `page` (see "Page acquisition for annotated-video specs" below): for fixture-driven specs, recording comes from `use: { video: 'on' }` in the scope's `playwright.config.ts` (the agent ensures this key is present per the video exception in the "Config generation" section); for Edge persistent-context specs, recording comes from the per-context `recordVideo` option passed to `launchPersistentContext`, which does not consult the config. Either way, raw `.webm` files land under the current session's run dir, `<specsDir>/<scope>/runs/<session>/videos/<TICKET>/`. Videos are per-run output, not durable deliverables: a fixture-driven run writes them beneath the session's `outputDir` automatically, and the Edge path must be pointed at the session run dir explicitly because `recordVideo.dir` takes a literal.
+1. Enable Playwright's native video recording. There are two mechanisms and the correct one depends on how the spec acquires its `page` (see "Page acquisition for annotated-video specs" below): for fixture-driven specs, recording comes from `use: { video: 'on' }` in the scope's `playwright.config.ts` (the agent ensures this key is present per the video exception in the "Config generation" section); for Edge persistent-context specs, recording comes from the per-context `recordVideo` option passed to `launchPersistentContext`, which does not consult the config. Either way the raw `.webm` lands somewhere under the current session's run dir — but NOT at the same path on both paths, and only the Edge path has a path you can predict:
+
+   - **Edge path:** `recordVideo.dir` takes a literal, so the file lands exactly where you point it. This module points it at `<specsDir>/<scope>/runs/<session>/videos/<TICKET>/`.
+   - **Fixture path:** `use: { video: 'on' }` gives you no say in the location. The runner files each video under the TEST's own output directory beneath `outputDir` — `<specsDir>/<scope>/runs/<session>/test-results/<test-slug>/video.webm` — and there is no option that redirects it to `videos/<TICKET>/`.
+
+   So `videos/<TICKET>/` is the Edge path's location, not a universal one. Do not report it as the video's path without having recorded on the Edge path, and do not construct a video path at all: find the file (see "Which files to remux") and report what you found. Videos are per-run output either way, not durable deliverables.
+
 2. When `parameters.annotateVideoSteps` is true, wrap each action group in `test.step('<human description>', ...)` and, at the start of the step, render a fixed-position caption banner in the page that displays the step text. Because the banner is part of the rendered page, it is captured in the recording, giving a self-explaining narrated video. When `annotateVideoSteps` is false, video records with no overlay.
 
 Copyable helper the tester bakes into annotated specs:
@@ -287,7 +295,289 @@ test('CMMS-1234 AC-1 happy path', async ({ page }) => {
 
   Pass this single `page` to `annotate(page, ...)` and every `test.step` action, so Edge-auth and video compose on one page with no fixture conflict. Close the context at the end of the run so the `.webm` is flushed.
 
-The tester references the produced `.webm` paths under `<specsDir>/<scope>/runs/<session>/videos/<TICKET>/` in its report so the reviewer can find them, with the scope and session segments spelled out in full.
+#### The ffmpeg you actually have
+
+Every command in the subsections below runs through ffmpeg, so settle which ffmpeg first. **Do not assume a system install, and do not assume `ffprobe` exists at all.** On the machine this section was written against there was no system `ffmpeg` and no system `ffprobe`, and that is the normal case for a developer box that only ever runs browsers.
+
+What there IS, on every machine where `playwright install` has run, is Playwright's own bundled build:
+
+```bash
+# Prefer a system build; fall back to Playwright's. The build number and the
+# platform suffix both vary, so glob them rather than hardcoding either.
+FFMPEG="$(command -v ffmpeg || ls -1 ~/.cache/ms-playwright/ffmpeg-*/ffmpeg-* 2>/dev/null | head -1)"
+```
+
+Resolve this ONCE per run and use `"$FFMPEG"` in every command below; every one of them is written to assume you did. On the reference machine it resolves to `~/.cache/ms-playwright/ffmpeg-1011/ffmpeg-linux`, version `n7.0.1-playwright-build-1011`. The `ffmpeg-<build>` directory number tracks the Playwright version and the binary's suffix tracks the platform (`ffmpeg-linux` here; a Windows cache holds the Windows build), so glob both. Prefer a system `ffmpeg` when one exists — it is a full build — and fall back to this one when it does not. Playwright ships it to encode its own recordings, so on any machine that produced a `.webm` in the first place it is present and runnable.
+
+**It is a `--disable-everything` build, and the limits bite.** Re-verify any of this on the machine in front of you by enumerating the binary — one flag per invocation, `"$FFMPEG" -hide_banner -demuxers` and likewise `-muxers`, `-decoders`, `-encoders`, `-filters`:
+
+- **Demuxers: `image2pipe` and `matroska,webm` only.** Muxers: `image2` and `webm` only.
+- **Decoders: `mjpeg` and `libvpx` (VP8) only.** Encoders: `libvpx` (VP8) and `png` only. No H.264, so no MP4 — which is fine, because this module never produces one.
+- **No `lavfi` demuxer**, so no source filters: `color`, `testsrc2`, and friends do not exist and cannot be used to synthesize a test clip.
+- **Filters are down to `crop`, `pad`, `scale`, `format`, `trim`, `hflip`, `vflip`, `transpose`, `null`.** There is no `drawtext` and no `concat`.
+- **There is no `null` muxer, so `-f null -` does not work** — it fails with `Requested output format 'null' is not known`. This is worth stating out loud because `-f null -` is the idiomatic decode-only pass, and an instruction written from habit will use it and fail. When you need a decode-only pass, write to `/dev/null` with a real muxer: `-f webm /dev/null`.
+- **There is no `ffprobe` binary anywhere in the Playwright cache.** Playwright does not ship one.
+
+The practical consequence: **`ffprobe` is unavailable in exactly the degraded case this section plans for**, so no instruction here may depend on it. Everything below uses `ffmpeg` only. Where a command genuinely needs a full build, it is marked as such.
+
+#### Which cause is it: check the header before you do anything
+
+There are two independent causes of "the video opens blank", they have different fixes, and one cheap check tells them apart. **Run it first.** Skipping it is how an operator ends up remuxing a file whose container was already correct — a guaranteed no-op — while the real cause goes untouched.
+
+```bash
+"$FFMPEG" -hide_banner -i <video>.webm 2>&1 | grep -E 'Duration|DURATION'
+```
+
+This is the portable replacement for an `ffprobe` call: `ffmpeg -i` with no output file prints the container header's `Duration:` and the video stream's `DURATION` metadata tag to **stderr**. Two notes, both load-bearing:
+
+- **Redirect stderr** (`2>&1`). The information is not on stdout.
+- **It exits 1**, with `At least one output file must be specified`. That is expected and is not a failure — the probe output is already printed by then. Do not branch on the exit code of this command, and do not add `set -e` around it.
+
+Read it like this:
+
+- **Header `Duration:` agrees with the stream's `DURATION`, and both look right for the flow you recorded** — the container is fine. This is **cause A: a genuinely blank lead-in** (see "Nothing before the first painted frame"). A remux is a no-op here; do not reach for one. Confirm and size the lead-in with the byte-step measurement below.
+- **Header `Duration:` is wrong, zero, or absent while the stream's `DURATION` looks right** — this is **cause B: a bad container header** (see "Post-run remux"). The remux is the fix.
+
+Two corroborating signals from the player, when you have one in front of you:
+
+- **Scrub-bar thumbnails show real content while linear playback holds a white frame** — cause B. Thumbnails are decoded directly from frames and bypass the header the player is mis-trusting.
+- **The thumbnail strip is blank across the same stretch playback is blank** — cause A. Nothing disagrees, because there is genuinely nothing there.
+
+**Both can be true of one file.** They are independent, the checks are independent, and the fixes are independent: fix the container with a remux, fix the lead-in structurally in the spec. A file that reads as cause A today is not evidence the remux is dead weight, and vice versa.
+
+A worked example, from the file that prompted this section: a 1440x900 25fps recording reported header `Duration: 00:00:37.52` and stream `DURATION: 00:00:37.520000000` — exact agreement, container correct, **cause B ruled out in one command**. The operator's own hypothesis had been the container. The measurement below then located 9.0s of genuinely blank video at the head, and cause A was the whole story.
+
+#### Nothing before the first painted frame
+
+Playwright starts writing video frames when the recording CONTEXT is created, not when the page first paints, and it offers no API to begin recording later and no API to trim what it has already written. Everything between context creation and first paint is captured as a blank white viewport: the SSO redirect chain, `page.goto()`, framework bootstrap, first-run interstitials. Against a ~15s annotated flow, ~10s of sign-in and startup is most of the video — that is the "first 40% is white nothingness" an operator sees. Since recording cannot be deferred, the fix is structural: **the recording context must not exist until everything that can happen ahead of it has happened.**
+
+What goes on each side of that boundary is fixed. Do not improvise the split.
+
+**Before the recording context exists** — never recorded:
+
+- Browser launch.
+- Azure AD / SSO sign-in, including every redirect and any interactive MFA or conditional-access prompt. On a session's first Edge run this is the single largest blank stretch there is.
+- The warm-up navigation to `baseURL` and the wait for the app shell to finish bootstrapping.
+- First-run interstitials: cookie banners, "what's new" dialogs, product tours, tenant or locale pickers.
+- Baseline test data the flow will assert on — the work order it edits, the records it filters.
+- Whatever carries the state forward: `storageState()` on the fixture path, the profile directory itself on the Edge path.
+- Closing the setup context, awaited. The state is not durable until the close resolves.
+
+**Inside the recording context** — recorded, in this order:
+
+1. `page.goto('<the flow's first route>')` as the FIRST statement. Nothing precedes it — no `waitForTimeout`, no data setup, no sign-in, no logging.
+2. An app-ready gate on a real element of the app shell, e.g. `await expect(page.getByRole('navigation')).toBeVisible()`. The frames between the `goto` and this gate are the only white ones left, and the gate is what proves the next frame is painted.
+3. The first `annotate(page, ...)` call. It runs `page.evaluate` against `document.body`, so it must follow the navigation — called on `about:blank` it writes a banner into a document the flow immediately discards.
+4. The AC steps.
+
+**Fixture path (`parameters.edgeProfileAuth` off).** Do the setup in a context the spec creates itself and let the runner's own `page` fixture be the recorded one. This keeps `use: { video: 'on' }` as the recording mechanism and changes nothing about the shared config. A context built by hand from the `browser` fixture does not inherit `use.video`, so the setup context records nothing and the run still produces exactly one video per test.
+
+```typescript
+import { mkdir } from 'node:fs/promises';
+import { test, expect, chromium } from '@playwright/test';
+
+// Same session resolution the config uses; never a baked-in literal.
+const runDir = `runs/${process.env.GHOLA_SESSION_ID || 'shared'}`;
+const authFile = `${runDir}/auth-state.json`;
+
+test.use({ storageState: authFile });
+
+test.beforeAll(async ({ browser }) => {
+  await mkdir(runDir, { recursive: true });
+  const setup = await browser.newContext();          // not recorded
+  const setupPage = await setup.newPage();
+  await setupPage.goto('/');
+  await expect(setupPage.getByRole('navigation')).toBeVisible();   // bootstrapped
+  const banner = setupPage.getByRole('button', { name: 'Accept cookies' });
+  if (await banner.isVisible()) { await banner.click(); }
+  await setup.storageState({ path: authFile });
+  await setup.close();
+});
+
+test('CMMS-1234 AC-1 happy path', async ({ page }) => {
+  await page.goto('/work-orders');                   // FIRST recorded action
+  await expect(page.getByRole('heading', { name: 'Work Orders' })).toBeVisible();
+  await test.step('Create a new work order', async () => {
+    await annotate(page, 'Step 1: create a new work order');
+    await page.getByRole('button', { name: 'New' }).click();
+  });
+});
+```
+
+`test.beforeAll` runs before the per-test fixtures are set up, so the recorded context does not exist while the setup context is working — that ordering is what makes the split effective, not the `newContext()` call by itself. `storageState()` carries cookies and localStorage, which is enough for a form login and for banner-dismissal flags; it does not carry IndexedDB, so an app that keeps its session there will re-bootstrap inside the recording.
+
+**Edge persistent-context path (`parameters.edgeProfileAuth` on) — the split is possible, but it is a two-LAUNCH split, not a two-context split.** `chromium.launchPersistentContext()` launches the browser and creates the context in one call, and `recordVideo` is an option on that same call. There is no window in which the browser exists and the recording context does not, so the fixture path's shape has no analogue here: `newPage()` opens another page in the SAME recorded context, and the persistent context is the browser's own context rather than one of several you can create around it.
+
+What works instead is two sequential launches against the same profile directory, because on this path the profile directory IS the state carrier:
+
+```typescript
+// Launch 1 - NOT recorded. Sign-in and warm-up happen here.
+const setup = await chromium.launchPersistentContext(userDataDir, {
+  channel: '<parameters.authChannelOverride>',
+  headless: false,
+});
+const setupPage = await setup.newPage();
+await setupPage.goto(process.env.BASE_URL!);
+await expect(setupPage.getByRole('navigation')).toBeVisible();  // signed in + bootstrapped
+await setup.close();   // MUST resolve before launch 2
+
+// Launch 2 - recorded. Auth is already on disk in userDataDir.
+const context = await chromium.launchPersistentContext(userDataDir, {
+  channel: '<parameters.authChannelOverride>',
+  headless: false,
+  recordVideo: { dir: '<specsDir>/<scope>/runs/<session>/videos/<TICKET>/' },
+});
+const page = await context.newPage();
+await page.goto('/work-orders');   // FIRST recorded action
+```
+
+The two launches MUST be strictly sequential and the `close()` MUST be awaited. An Edge persistent profile is a single-writer resource (see "Edge Auth Context"), so an overlapping launch fails on the profile lock, and Chromium finishes writing profile state during shutdown, so a launch 2 that starts before the close resolves may not see launch 1's auth at all.
+
+**What the Edge path cannot remove, stated plainly:** launch 2 records Edge process startup, the initial `about:blank`, the `goto`, and framework bootstrap, because on this path the browser comes up INSIDE the recording window — the fixture path avoids that only because its browser is already running. Expect a short blank lead-in on Edge-auth videos even after the split. What the split removes is the sign-in, which is the expensive part; it does not remove browser startup, and no Playwright option defers recording past `launchPersistentContext`. Do not invent one. If the residual lead-in still bothers the operator, trimming it is an operator-side ffmpeg step, not an agent action — guessing the cut point can destroy real content, and under the container-metadata cause below the "blank" lead-in is not blank at all. That policy is unchanged; what follows it is the mechanics, because the obvious trim command does the wrong thing silently.
+
+#### Measuring a blank lead-in — and verifying the split worked
+
+The split above is a structural claim about a video file, and **nothing in Playwright's output tells you whether it held.** This measurement is how you find out. It is also how you size a lead-in before deciding whether to trim, and how you show an operator a number instead of an opinion. Run it on any video reported as opening blank, and on the first video produced after changing the setup/recording split.
+
+The method: encode a **cumulative** prefix at each whole second from t=0 with `-c copy`, and take successive differences. **There is no `-ss` anywhere in it** — that absence is the entire point.
+
+```bash
+prev=0
+for n in $(seq 1 12); do
+  "$FFMPEG" -v error -y -i <video>.webm -t "$n" -c copy /tmp/cum.webm
+  sz=$(stat -c%s /tmp/cum.webm)
+  echo "0-${n}s  total=${sz}  delta=$((sz - prev))"
+  prev=$sz
+done
+```
+
+Each `delta` is the bytes that second of video actually cost. Read them like this:
+
+- **A run of byte-identical (or near-identical) seconds is empty frames.** VP8 spends almost nothing on a frame identical to the last one, so a blank viewport costs only per-packet overhead and costs the *same* amount every second. Byte-identical consecutive seconds do not occur in real content.
+- **A step change of one to two orders of magnitude is where content begins.** That boundary is the end of the lead-in, and its index is the cut point if you trim.
+
+From the reference file — 1440x900, 25fps, 37.52s total, header already confirmed correct:
+
+```
+0-1s     3,869 bytes   (the initial keyframe)
+1-2s     1,175
+2-3s     1,175
+3-4s     1,175
+4-5s     1,175
+5-6s     3,399         (a small blip; still nothing to watch)
+6-7s     1,175
+7-8s     1,175
+8-9s     1,175
+9-10s  228,941         <- content starts: a 195x jump
+```
+
+Eight consecutive seconds at a byte-identical 1,175 bytes is 47 bytes per frame at 25fps — empty-packet overhead and nothing else. That is **9.0s of blank at the head of a 37.52s video, 24% of it**, stated as a measurement rather than an impression. A video produced *after* a correct split looks nothing like this: on a verification run measured the same way, second 1 cost 10,753 bytes and every subsequent second landed between 9,031 and 46,317 — no identical pair anywhere, no step change, no lead-in.
+
+**The obvious alternative measurement is a trap. Do not use it.** Sampling per-second chunks with `-ss <n> -t 1 -c copy` looks equivalent and is not: a stream copy can only cut on a keyframe, so each chunk silently snaps back to the nearest keyframe at or before `<n>`. Measured on the reference-run file, whose keyframes sit at 0.00s and 5.12s:
+
+```
+-ss 0 -t 1  ->  10,753 bytes, Duration 00:00:01.00
+-ss 1 -t 1  ->  33,458 bytes, Duration 00:00:02.00   <- still starts at t=0
+-ss 5 -t 1  -> 156,069 bytes, Duration 00:00:06.00   <- still starts at t=0
+-ss 6 -t 1  ->  53,165 bytes, Duration 00:00:01.88   <- snapped back to 5.12s
+```
+
+Every chunk is a cumulative prefix, not a one-second sample, and the reported durations grow instead of staying at 1.00. Per-second figures derived this way are smeared across keyframe boundaries and will point at the wrong second. The cumulative-difference method has no `-ss`, so it has no snapping.
+
+#### Trimming a lead-in (operator-side)
+
+Trimming stays what it was: an operator decision, not an agent action. What follows is only the mechanics, so that when the operator asks, the answer is not the command that quietly fails.
+
+**`-c copy` cannot trim a Playwright video accurately, and it fails silently.** Same keyframe constraint as above: the cut lands on the nearest keyframe at or before the requested time, and Playwright's VP8 keyframes are sparse and irregular. Verified twice, on two different files, both asked to remove 9 seconds:
+
+```bash
+# WRONG. Under-cuts, exit code 0, no warning.
+"$FFMPEG" -y -ss 9 -i in.webm -c copy out.webm
+```
+
+On the reference file this produced 32.40s from a 37.52s source — it removed 5.12s, not 9 — and the output **still opened blank**, because the blank frames from 5.12s to 9s survived. On a second 27.28s file it produced 22.16s: again exactly 5.12s removed, the keyframe it snapped to. The command reports success either way. An operator who runs it, sees the file shrink, and finds it still blank has learned nothing about the cause.
+
+**An accurate cut requires a re-encode.** This is what worked:
+
+```bash
+"$FFMPEG" -y -ss 9 -i in.webm -c:v libvpx -b:v 900k -deadline good -cpu-used 3 -an out.webm
+```
+
+On the reference file: 28.52s out of 37.52s, exactly 9.0s removed, and it opens on content — 132,001 bytes in the first second against 3,869 before the trim. Cost was roughly 7.6s of wall time for 28s of 1440x900; a 27.28s 800x450 file re-encoded in about 1s. Verified runnable on the stripped bundled build: `libvpx` is its only video encoder, which is also why VP8-to-VP8 is the only re-encode available here and MP4 is not an option.
+
+Three caveats to state when handing this to an operator:
+
+- **It is a re-encode, so quality drops.** `-b:v 900k` is a starting point for a screen recording at this size, not a tuned value; a busier or larger flow wants more.
+- **`-an` is safe only because Playwright records no audio.** It is there so the stripped build is never asked for an audio encoder it does not have.
+- **Confirm the cut with the byte-step measurement above** rather than the file size or the duration. A shorter file that still opens blank is exactly what the `-c copy` form produces.
+
+#### Post-run remux: correcting the container header
+
+A `.webm` Playwright just wrote can PLAY as white while its scrub-bar thumbnails show real content. That is not a frame problem, it is a container problem, and it is a second, independent cause of the same symptom. Playwright writes the WebM incrementally as the run proceeds and finalizes the container when the context closes; the duration recorded in the header can end up wrong or zero. A player that trusts the header maps the seek bar to a timeline the frames do not follow, so linear playback holds the first frame while the thumbnail strip — built by decoding frames directly — shows what is really there. **Thumbnails that contradict playback are the signature of this cause, not of a blank recording.**
+
+A stream copy rewrites the container metadata from the actual packets without re-encoding a frame:
+
+```bash
+"$FFMPEG" -v error -y -i <video>.webm -c copy <video>.remuxed.webm
+```
+
+`-c copy` means no transcode: identical VP8 bitstream, identical quality, seconds of work even for a long video. Only the header changes. **Do not remove this step as a pointless copy.** It is not a copy, it is the header rewrite, and the reason it exists is invisible in the output — which is exactly how a confidently-commented bug survives.
+
+Playwright only ever captures WebM/VP8; the container is not selectable, so there is no setting to switch the recording to MP4 and no reason to look for one. Producing an MP4 would be a re-encode (`-c:v libx264 …`), which this step is deliberately not, and which the agent does not do.
+
+**Confirm the cause before assuming it.** A future session should measure rather than trust this section — and must do it with `ffmpeg`, because `ffprobe` is frequently absent and is never present in the Playwright cache (see "The ffmpeg you actually have"). The portable check is the discriminator command:
+
+```bash
+"$FFMPEG" -hide_banner -i <video>.webm 2>&1 | grep -E 'Duration|DURATION'
+```
+
+A header `Duration:` that disagrees with the stream's `DURATION` tag — or that is zero or missing while the stream's is right — is this cause. Run it on the raw file and on the remuxed file; the remuxed one should agree. Put both numbers in the run report so a later session can tell whether the remux is still doing anything or has become dead weight. **On the one file measured so far the two already agreed, so the remux was a no-op for it** — that is a data point about that file, not a verdict on this step, and it is precisely why the numbers go in the report.
+
+With a full ffmpeg install, `ffprobe -v error -show_entries format=duration -show_entries stream=nb_frames,r_frame_rate <video>.webm` gives the same answer more directly and lets you cross-check `duration` against `nb_frames / r_frame_rate`. **Use it only when you have confirmed `ffprobe` exists** — it is a convenience, never a dependency, and nothing in this module may require it.
+
+**Which files to remux.** Videos land in two places depending on the path taken: the Edge path writes to the literal `recordVideo.dir`, `<specsDir>/<scope>/runs/<session>/videos/<TICKET>/`, and the fixture path lets the runner file each video beneath the session's `outputDir`, under `<specsDir>/<scope>/runs/<session>/test-results/`. Sweep the whole session run dir rather than one subdirectory of it, and never a sibling session's:
+
+```bash
+find <specsDir>/<scope>/runs/<session> -name '*.webm' ! -name '*.remuxed.webm' -print0 |
+  while IFS= read -r -d '' f; do
+    "$FFMPEG" -v error -y -i "$f" -c copy "${f%.webm}.remuxed.webm"
+  done
+```
+
+The `! -name '*.remuxed.webm'` filter keeps a second pass from producing `*.remuxed.remuxed.webm`. This sweep is also **the only reliable way to learn where the fixture path put a video** — its location is the runner's choice, not yours (see Capability A step 1) — so run it to discover the files rather than assuming a path and reporting one that does not exist.
+
+**Naming, and which file is the deliverable.** Agents cannot delete files, so the remux never replaces anything:
+
+- Remux to a sibling, `<name>.remuxed.webm`, alongside the original. NEVER write over the input, and never `mv` the output onto it — an in-place replace through a temp file is one interrupted step away from a run with no usable video AND no original.
+- **The deliverable is `<name>.remuxed.webm` when it exists, and the original `<name>.webm` when it does not.** The agent reports the deliverable's full path with the scope and session segments spelled out, and names the raw capture separately and labelled as such, so the reviewer is never guessing which of two files to open.
+- Write one marker per run at `<specsDir>/<scope>/runs/<session>/VIDEOS.txt` naming the deliverable for each video, e.g.:
+
+  ```
+  deliverable: videos/CMMS-1234/a1b2c3.remuxed.webm
+  raw capture: videos/CMMS-1234/a1b2c3.webm
+  note: watch the deliverable; the raw capture's header duration may be wrong.
+  ```
+
+  The run report says the same thing, but the report is gone in a month and the run dir is still sitting there with two files in it.
+- Both files stay. Nothing prunes them, and that is fine: they are per-run output under `runs/<session>/`, which the operator prunes wholesale (see "Run-dir growth and pruning"). The cost is one duplicate per video and the duplicate is the safety net.
+- `-y` is deliberate. Without it, ffmpeg PROMPTS when the output already exists and an agent's non-interactive shell hangs on that prompt. The only file `-y` can overwrite is a `.remuxed.webm` this step wrote itself.
+
+**ffmpeg may not be on `PATH`, and that must never cost the operator their video.** Resolve it in two steps before branching — a bare `command -v ffmpeg` is not the whole check, because the usual outcome on a developer box is "no system ffmpeg, bundled build present":
+
+```bash
+FFMPEG="$(command -v ffmpeg || ls -1 ~/.cache/ms-playwright/ffmpeg-*/ffmpeg-* 2>/dev/null | head -1)"
+[ -n "$FFMPEG" ] && [ -x "$FFMPEG" ]
+```
+
+- **A system `ffmpeg` on `PATH`:** use it. Full build, no limits.
+- **No system ffmpeg but the bundled build resolved:** use it, and treat that as the normal path rather than a degradation. It remuxes VP8/WebM perfectly well — `-c copy` needs only the `matroska,webm` demuxer and the `webm` muxer, both present. Note in the run report which binary did the work, since the bundled build's limits (see "The ffmpeg you actually have") constrain what a follow-up step can do.
+- **Neither resolves** — no `PATH` entry and no Playwright cache: skip the remux, keep every original, and say so once in the run report — "No ffmpeg was found on `PATH` or in the Playwright cache, so the recorded videos were not remuxed. If playback shows a blank lead-in that the thumbnails contradict, install ffmpeg and re-run the remux, or scrub past it." Do NOT fail the run over it, do NOT withhold the video, and do NOT install ffmpeg: this module adds no dependencies (see the boundaries below). An un-remuxed verification video beats no verification video.
+- **ffmpeg present but the remux fails** — nonzero exit, or an output file of zero bytes: keep the original as the deliverable, report ffmpeg's stderr verbatim, and move on. Check the output's size rather than trusting the exit code alone; a truncated `.remuxed.webm` that plays worse than the original is the failure worth catching.
+- **No `.webm` under the session run dir:** say the run produced no video and say why you believe that — video was not requested, the run failed before the flow began, or the context was never closed so the file was never flushed. Do not go hunting in another session's run dir to fill the gap; that boundary is a hard rule.
+
+The remux is a post-run step, so it belongs to whoever ran the specs. The agent performs it on videos it collected itself, and otherwise surfaces the command to the operator alongside the `show-report` command (see "Concurrent sessions"). Either way it is unconditional when ffmpeg is available — there is no setting for it, because a correct container header has no second reasonable answer, and `parameters.verificationVideo: off` already turns the whole thing off by producing no video to remux.
+
+The tester references the produced video paths under `<specsDir>/<scope>/runs/<session>/` in its report so the reviewer can find them, with the scope and session segments spelled out in full, the deliverable named as the deliverable, and the raw capture named as the raw capture.
 
 **Artifact path discipline (hard rule).** Every read, reference, and report of a Playwright artifact must be qualified to the right grain, and the two grains differ:
 
@@ -310,7 +600,7 @@ Content shape: one titled section per AC item, each with
 
 The walkthrough maps 1:1 to the active ticket's AC as covered by the procedures from `tool.ac-to-testing`. Do NOT invent AC beyond what the ticket or procedures cover. The tester reports the `AC-walkthrough.md` path.
 
-The verification package spans both grains, and the tester reports both paths so the reviewer can find every part. Its durable half — the specs and `AC-walkthrough.md` — lives under `<specsDir>/<scope>/<TICKET>/` and survives the session. Its recorded half — the `.webm` files — lives under `<specsDir>/<scope>/runs/<session>/videos/<TICKET>/` and is a byproduct of the run that produced it. Both sit outside the work repo, and the tester never touches the work repo or its git tree when producing any part of the package. If the operator wants a video kept permanently alongside the walkthrough, they copy it out of the run dir themselves; the agent does not move files between the two halves.
+The verification package spans both grains, and the tester reports both paths so the reviewer can find every part. Its durable half — the specs and `AC-walkthrough.md` — lives under `<specsDir>/<scope>/<TICKET>/` and survives the session. Its recorded half — the `.webm` files and their `.remuxed.webm` siblings — lives under `<specsDir>/<scope>/runs/<session>/` and is a byproduct of the run that produced it. Both sit outside the work repo, and the tester never touches the work repo or its git tree when producing any part of the package. If the operator wants a video kept permanently alongside the walkthrough, they copy it out of the run dir themselves; the agent does not move files between the two halves.
 
 ## Concurrent sessions
 
@@ -366,6 +656,18 @@ The boundaries below are explicit; do not cross them:
 
   Add `--port <n>` when viewing two reports at once, since `show-report` binds 9323 by default.
 
+  When the run recorded video, surface the post-run remux next to it (see "Post-run remux" in Capability A for why it exists and what to do when `ffmpeg` is absent). This snippet is handed to the operator, so it resolves its own ffmpeg — a bare `ffmpeg` fails outright on a machine that has only Playwright's bundled build, which is the common case:
+
+  ```bash
+  FFMPEG="$(command -v ffmpeg || ls -1 ~/.cache/ms-playwright/ffmpeg-*/ffmpeg-* 2>/dev/null | head -1)"
+  find <specsDir>/<scope>/runs/<session> -name '*.webm' ! -name '*.remuxed.webm' -print0 |
+    while IFS= read -r -d '' f; do
+      "$FFMPEG" -v error -y -i "$f" -c copy "${f%.webm}.remuxed.webm"
+    done
+  ```
+
+  The `find` root is the session's own run dir and never a sibling's, for the same reason every other path here is session-qualified. Watch the `.remuxed.webm` files; the plain `.webm` files are the raw capture.
+
 ## Run-dir growth and pruning (operator task)
 
 Every session creates a new `runs/<session>/` directory and nothing ever removes one, so the tree grows without bound — one dir per session forever, each holding a report, traces, and any videos. Videos in particular are large. On a machine running several sessions a day this becomes the biggest thing under `specsDir` within weeks.
@@ -404,6 +706,9 @@ These are distinct states and must produce distinct behavior:
 - **Module enabled, `parameters.edgeProfileAuth` on, `parameters.edgeProfilePath` invalid** (parent directory unwritable, profile directory unreadable, profile locked by another Edge process): surface the path failure once ("Edge Profile Path `<path>` is not usable; auth-context specs cannot be generated. Verify the path, close other Edge windows, or toggle Edge Profile Auth off."), and fall back to off-mode generation (default browser context, no SSO) for the remainder of the run. A profile path that does not exist yet is NOT a failure under the per-session default — the session's profile dir is absent before its first run and Playwright creates it; expect an unauthenticated first run and an interactive sign-in EVERY session, not an error.
 - **Module enabled, `parameters.edgeProfileAuth` on, `parameters.edgeProfilePath` empty**: an empty value is a leftover from the pre-scope default and means "the OS-default Edge profile". Honor it, but say once that it is shared across every repo and every session and therefore usable by only one session at a time, and point the operator at the `~/.ghola/edge-profiles/<scope>/<session>` default if they want concurrent Edge runs.
 - **Module enabled, `parameters.edgeProfilePath` contains `<session>` but `GHOLA_SESSION_ID` is unset**: expand the token to `shared`, matching the run-dir fallback, and fold it into the same one-time degradation notice rather than emitting a second warning. The profile is then shared with any other session in the same state, so the operator is told that a concurrent Edge run may fail on the profile lock.
+- **Video was recorded but no `ffmpeg` resolves** — nothing on `PATH` and nothing in the Playwright cache (check both; see "The ffmpeg you actually have"): this is a DEGRADATION, not a refusal, and not a failed run. The raw `.webm` files are the deliverables as-is, and the agent says so once ("No ffmpeg was found on `PATH` or in the Playwright cache, so the recorded videos were not remuxed. If playback shows a blank lead-in that the thumbnails contradict, install ffmpeg and re-run the remux, or scrub past it."). A missing system ffmpeg is NOT this case on its own — the bundled build handles the remux fine, so do not declare the degradation until the cache has come up empty too. Never fail a verification run over a missing remux, never suppress the video, and never install ffmpeg — this module adds no dependencies.
+- **Video was recorded, `ffmpeg` ran, and the remux failed** (nonzero exit, or a zero-byte output): the ORIGINAL `.webm` is the deliverable, the agent reports ffmpeg's stderr verbatim, and the run stands. Check the output's size, not just the exit code; a truncated `.remuxed.webm` reported as the deliverable is worse than no remux at all.
+- **Video was requested but the run produced no `.webm`**: say the video is missing and say what you think happened (video not enabled in the mechanism that path uses, the run failed before the flow began, the recording context never closed so the file was never flushed). Do not report another session's video as this run's, and do not report a remuxed file you cannot see.
 
 Do not merge these cases.
 

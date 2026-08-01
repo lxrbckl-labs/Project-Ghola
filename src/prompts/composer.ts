@@ -115,6 +115,7 @@ export class PromptComposer {
         const header = `- **${id}**${marker}`;
         const contentLine = `  - contentPath: \`${contentPath}\``;
         const paramsBlock = this.renderParameters(
+          id,
           handle.manifest.contributes?.settings,
           settings[id],
         );
@@ -178,6 +179,7 @@ export class PromptComposer {
       params[key] = gholaSettings[key];
     }
     const paramsBlock = this.renderParameters(
+      handle.manifest.id,
       handle.manifest.contributes?.settings,
       params,
     );
@@ -197,8 +199,14 @@ export class PromptComposer {
    * declare no user-editable settings schema but receive host-injected parameters
    * at compose time. Without this branch those parameters would be silently dropped,
    * leaving the agent with `(none)` and no path to operate.
+   *
+   * In the "Values" branch, stored keys the schema does not declare are FILTERED
+   * OUT (and logged) rather than rendered — see the comment on the filter itself.
+   * Only that branch filters: the "injected only" branch has no schema to check
+   * against, so nothing there can be validated or dropped.
    */
   private renderParameters(
+    moduleId: string,
     schema: SettingsSchema | undefined,
     userValues: Record<string, unknown> | undefined,
   ): string[] {
@@ -207,7 +215,10 @@ export class PromptComposer {
 
     if (!hasSchema && !hasValues) return ['  - parameters: (none)'];
 
-    // Schema-less but host injected values exist — render them directly.
+    // Schema-less but host injected values exist — render them directly. There
+    // is no schema to validate these against, so the undeclared-key filter in
+    // the Values branch below deliberately does not apply here; this is exactly
+    // the case its `schema &&` guard exists to protect.
     if (!hasSchema && hasValues) {
       const out: string[] = ['  - parameters:'];
       for (const key of Object.keys(userValues!)) {
@@ -221,14 +232,46 @@ export class PromptComposer {
     const overrides = hasValues ? userValues : undefined;
     if (!overrides) return ['  - parameters: (defaults)'];
 
-    const out: string[] = ['  - parameters:'];
+    const rows: string[] = [];
+    const skipped: string[] = [];
     for (const key of Object.keys(overrides)) {
+      // Undeclared stored key: module settings persist as flat `id::field` keys
+      // in globalState and nothing prunes them, so a setting that is removed or
+      // renamed leaves its value orphaned in the store forever. The preamble
+      // tells agents that manifest parameters are AUTHORITATIVE, so rendering an
+      // orphan promotes dead storage into a live instruction the operator cannot
+      // see or edit in any panel — worst case a stale allowlist sitting next to
+      // the real one with no marker for which is live. Drop it instead.
+      //
+      // Guarded on `schema` on purpose: a module may legitimately have stored
+      // values and no declared settings at all (tool.feedback-log's injected
+      // feedbackFilePath). `!field` alone would blank those. That case is
+      // already routed to the branch above, but keep the guard so the filter
+      // stays correct if these branches are ever merged.
+      if (schema && !schema[key]) {
+        skipped.push(key);
+        continue;
+      }
       const field = schema ? schema[key] : undefined;
       const projected = this.projectValueForAgent(field, overrides[key]);
       const rendered = this.renderValue(projected);
-      out.push(`    - ${key}: ${rendered}`);
+      rows.push(`    - ${key}: ${rendered}`);
     }
-    return out;
+
+    // Do not drop orphans silently: a skipped key is invisible in the composed
+    // prompt by design, so leave a trace in the output channel. Aggregated per
+    // module per compose (compose runs on every Agents-tab refresh) so this
+    // stays one greppable line, not per-key noise.
+    if (skipped.length > 0) {
+      this.log(
+        `${moduleId}: ${skipped.length} stored parameter(s) not declared in the module's settings schema, skipped: ${skipped.join(', ')}`,
+      );
+    }
+
+    // Every stored value was an orphan — the module has no live overrides, so
+    // report defaults rather than emitting a `parameters:` header with no rows.
+    if (rows.length === 0) return ['  - parameters: (defaults)'];
+    return ['  - parameters:', ...rows];
   }
 
   /**
@@ -240,8 +283,15 @@ export class PromptComposer {
    * for plain keyValue fields, with disabled entries omitted.
    *
    * Falls back to runtime-shape detection when no field definition is
-   * available (e.g. settings stored for an unknown key): if the first value
-   * looks like a `{ value, enabled }` object, treat as the richer shape.
+   * available: if the first value looks like a `{ value, enabled }` object,
+   * treat as the richer shape.
+   *
+   * That fallback used to also cover settings stored under a key the schema does
+   * not declare. It no longer does: `renderParameters` now filters undeclared
+   * stored keys upstream, so they never reach this function. The surviving
+   * callers with `field === undefined` are the schema-less modules (a module that
+   * declares no settings but receives host-injected parameters), i.e. a value
+   * that is declared-by-injection but shapeless. Keep the fallback for those.
    */
   private projectValueForAgent(
     field: SettingsField | undefined,

@@ -17,16 +17,45 @@ const STATUS_BAR_CONFIG_SECTION = 'ghola.statusBar';
 const STATUS_BAR_ENABLED_KEY = 'ghola.statusBar.enabled';
 
 /**
- * The one delimiter used throughout the visible label — between the IDENTITY
- * and the metrics group, and between two metrics alike: U+00B7 MIDDLE DOT, one
- * space either side. An earlier revision used a distinct glyph (U+2502 BOX
- * DRAWINGS LIGHT VERTICAL) for the identity/metrics boundary, on the theory
- * that the identity is a heading over the metrics as its contents; the
- * operator asked for one delimiter throughout instead, so `cmms1@win · 34k ·
- * 5h 3%` now reads as a flat sequence of peers rather than a heading plus
+ * The delimiter between PEER segments of the visible label — between the session
+ * MODALITY and the metrics group, and between two metrics alike: U+00B7 MIDDLE
+ * DOT, one space either side. An earlier revision used a distinct glyph (U+2502
+ * BOX DRAWINGS LIGHT VERTICAL) for the boundary before the metrics, on the theory
+ * that the label's lead-in is a heading over the metrics as its contents; the
+ * operator asked for one delimiter throughout instead, so everything after the
+ * product name reads as a flat sequence of peers rather than a heading plus
  * contents.
+ *
+ * The `Ghola` lead-in is the one thing not joined with this — see
+ * `PRODUCT_SEPARATOR`.
  */
 const LABEL_SEPARATOR = ' · ';
+
+/**
+ * The literal the visible label always leads with: the PRODUCT name, on every
+ * host and in every repository.
+ *
+ * It is deliberately NOT this window's Team Switchboard identity. An earlier
+ * revision led with the derived identity, so this repo's window read `Ghola` and a
+ * native-Windows cmms clone read `cmms2@win`; the operator has since confirmed
+ * twice that the pill names the product instead. The identity did not go away — it
+ * moved to the tooltip alone (`describeIdentity`), which is now the only surface
+ * that tells one of the operator's 8+ windows from another.
+ */
+const PRODUCT_LABEL = 'Ghola';
+
+/**
+ * The delimiter between the product name and the session MODALITY: a colon and
+ * one space, giving `Ghola: Ticket Work · 34k · 5h 3%`.
+ *
+ * This is the ONE boundary in the label that is not between peers, which is why
+ * it does not use `LABEL_SEPARATOR`: `Ghola` names the product and the modality
+ * says what this window is currently for, so the name introduces the modality
+ * rather than standing beside it. Exactly one of these appears in any label —
+ * both sides are unconditional (a literal, and a modality that is never absent;
+ * see `refresh`), so it is never conditional and never repeated.
+ */
+const PRODUCT_SEPARATOR = ': ';
 
 /**
  * How often the state file is re-read on a timer.
@@ -60,8 +89,13 @@ const STATE_WATCH_DEBOUNCE_MS = 250;
 
 /**
  * Friendly display names for each raw mode token produced by `formatMode`.
- * Status-bar-tooltip-only cosmetics: the banner/boot trace keep the
- * lowercase-hyphenated tokens, so this map lives here rather than in `banner.ts`.
+ * Status-bar cosmetics for BOTH of this file's surfaces: the banner/boot trace
+ * keep the lowercase-hyphenated tokens, so this map lives here rather than in
+ * `banner.ts`. An earlier revision rendered the raw token in the VISIBLE LABEL and
+ * the display form in the tooltip only; the operator asked for the display form in
+ * the pill too, so that casing split is gone and both surfaces go through
+ * `prettyMode`. This is the ONE such mapping in the tree — a second copy for the
+ * label is exactly what must not be added, because two maps drift.
  */
 const MODE_DISPLAY_NAMES: Record<string, string> = {
   'ticket-work': 'Ticket Work',
@@ -86,45 +120,56 @@ function titleCaseToken(token: string): string {
 }
 
 /**
+ * Delimiter between mode tokens in a `formatMode`-produced string, captured
+ * (not just matched) so the exact delimiter text — and which of the two forms
+ * it was — survives the split alongside the tokens; see `prettyMode`.
+ *
+ * `formatMode` (`banner.ts`) only ever joins multiple enabled `mode.*` modules
+ * with `', '`, but `formatModeWithWar` can append `' + war'` on top of an
+ * ALREADY comma-joined base (e.g. `'ticket-work, support + war'`), so a string
+ * reaching `prettyMode` can carry both delimiters at once. Recognizing them
+ * independently, rather than assuming a session ever uses only one, is what
+ * this exists for.
+ */
+const MODE_TOKEN_DELIMITER = /(,\s*|\s\+\s)/;
+
+/**
  * Map a raw `formatMode` string to a capitalized, human-friendly form for the
- * status-bar tooltip. Splits on ` + ` (retained in case a future caller feeds
- * this a war-combined string) so a trailing marker would map independently,
- * maps each token via `MODE_DISPLAY_NAMES` (falling back to `titleCaseToken`
- * for unknown tokens), then rejoins with ` + `. Examples: `ticket-work` ->
- * `Ticket Work`, `cd` -> `Project`, `foo-bar` -> `Foo Bar`.
+ * status bar — used by the visible LABEL and the TOOLTIP alike, from a single call
+ * in `refresh`, so the two can never spell the modality differently. Splits on
+ * `MODE_TOKEN_DELIMITER` — both the `', '` `formatMode` itself produces and the
+ * `' + '` a war-combined string adds — so a multi-mode string maps EVERY token,
+ * not just the first; maps each token via `MODE_DISPLAY_NAMES` (falling back to
+ * `titleCaseToken` for unknown tokens); then rejoins using the delimiter text
+ * captured at each split point, so a `', '`-joined input comes back `', '`-joined
+ * and a `' + '`-joined input comes back `' + '`-joined rather than the two forms
+ * being normalized into one. Examples: `ticket-work` -> `Ticket Work`, `cd` ->
+ * `Project`, `foo-bar` -> `Foo Bar`, `ticket-work, support` ->
+ * `Ticket Work, Support`.
  */
 function prettyMode(raw: string): string {
+  // `String.split` with ONE capturing group returns tokens and delimiters
+  // interleaved (token, delimiter, token, delimiter, ..., token), so even
+  // indices are text to map and odd indices are the delimiter to pass through
+  // unchanged — that alternation is what lets each delimiter occurrence keep
+  // its own original text instead of every gap being normalized to one form.
   return raw
-    .split(' + ')
-    .map((token) => MODE_DISPLAY_NAMES[token] ?? titleCaseToken(token))
-    .join(' + ');
+    .split(MODE_TOKEN_DELIMITER)
+    .map((piece, index) => (index % 2 === 0 ? MODE_DISPLAY_NAMES[piece] ?? titleCaseToken(piece) : piece))
+    .join('');
 }
 
 /**
- * The label used when no switchboard identity can be resolved (no workspace
- * folder open, or a folder path with no basename). Just `Ghola` — with the
- * mode no longer in the visible text, a trailing `:` would have nothing left
- * to introduce.
- */
-const NO_IDENTITY_LABEL = 'Ghola';
-
-/**
- * One sentence explaining where the resolved identity came from, so an operator
- * who sees `cmms2@win` can discover from the tooltip that it is their Team
- * Switchboard name and why it carries an `@win`. Kept short deliberately — the
+ * One sentence NAMING the resolved identity and explaining where it came from, so
+ * an operator can learn on one hover which of their windows this is, that the name
+ * is their Team Switchboard name, and why it carries an `@win`. This is now the
+ * ONLY surface that shows the identity at all — the visible label leads with the
+ * literal product name (see `PRODUCT_LABEL`) — so this line carries more weight
+ * than when it merely annotated a name already on the pill, and must not be
+ * shortened to a bare gloss. Still deliberately one sentence, though: the
  * authority is `_AgentComms/_Switchboard.md`, not this string.
  */
 function describeIdentity(identity: TeamIdentity): string {
-  // An explicit override is the whole story: it is used verbatim, so describing
-  // a strip or a qualifier would describe machinery that did not run. Name the
-  // setting so the operator knows where the value came from, and disclose the
-  // name they are overriding so a stale override is visible rather than silent.
-  if (identity.overridden) {
-    return (
-      `Ghola team: ${identity.name} — set explicitly by the Team Switchboard ` +
-      `'teamName' setting, used verbatim (auto-derived would be '${identity.teamName}').`
-    );
-  }
   // Say WHICH directory named the team. The repo root is the usual answer and is
   // what the roster records; the workspace folder appears only when no '.git'
   // was found at or above it.
@@ -172,9 +217,18 @@ function describeIdentity(identity: TeamIdentity): string {
  * is present is shown; when neither is, the group and its separator vanish
  * together rather than leaving a dangling `·`.
  *
- * The token count goes through `formatTokenCount` — phase 1's port of the
- * renderers' `fmt_tokens` — and NOT through a local reimplementation, so the
- * pill and the terminal footer are incapable of disagreeing about one number.
+ * The leading `LABEL_SEPARATOR` is applied by the JOIN and by this function's
+ * own prefix, never carried by a segment — mirroring the renderers' rule — so
+ * dropping a metric cannot leave a doubled, leading, or trailing separator
+ * behind: one metric emits no inner `·` at all, and zero metrics take the
+ * prefix with them.
+ *
+ * The token count goes through `formatTokenCount` and NOT through a local
+ * reimplementation. That function is now the ONLY `k`/`M` abbreviation rule left
+ * in the tree — the renderers' `fmt_tokens`/`fmtTokens` were deleted when the
+ * terminal footer stopped printing a token segment — so this pill is the one
+ * surface that renders an absolute token figure, and `contextPct` is left to the
+ * tooltip, which has the room to say what the percentage is OF.
  */
 function formatMetricsSegment(snapshot: StatuslineStateSnapshot | undefined): string {
   if (snapshot === undefined || snapshot.status !== 'fresh') return '';
@@ -202,10 +256,14 @@ function formatSnapshotAge(ageMs: number): string {
 }
 
 /**
- * The metric values in prose, for the tooltip. Includes `contextPct`, which the
- * visible label omits for want of horizontal room — the tooltip has room, and
- * the percentage is the more actionable of the two context figures. Each value
- * is gated on its own presence, exactly as in `formatMetricsSegment`.
+ * The metric values in prose, for the tooltip. Leads with the same absolute token
+ * figure the visible label already shows, then adds `contextPct`, which the label
+ * omits for want of horizontal room — the tooltip has room, and the percentage is
+ * the more actionable of the two context figures. Each value is gated on its own
+ * presence, exactly as in `formatMetricsSegment`.
+ *
+ * Returns `''` when no metric survived; every caller handles that case explicitly
+ * rather than rendering an empty clause.
  */
 function describeMetricValues(snapshot: StatuslineStateSnapshot): string {
   const parts: string[] = [];
@@ -256,7 +314,10 @@ function describeSessionMetrics(snapshot: StatuslineStateSnapshot | undefined): 
     return [`Session metrics: ${age} (stale)${trailer}.`, diagnostic];
   }
   // Fresh but empty is reachable: a file written before the first API response
-  // can hold nothing but `updated`.
+  // can hold nothing but `updated`. "No usable values" is exact rather than loose
+  // — every metric this tooltip can print is gated in `describeMetricValues`, so
+  // an empty `values` means the snapshot carried no token figure AND neither
+  // percentage, not merely that one preferred field was missing.
   return [
     values === ''
       ? 'Session metrics: a fresh snapshot exists but carries no usable values yet.'
@@ -266,29 +327,41 @@ function describeSessionMetrics(snapshot: StatuslineStateSnapshot | undefined): 
 }
 
 /**
- * A native VS Code status-bar item showing WHICH Ghola instance this window is
- * (its Team Switchboard identity) — e.g. `cmms2@win`. The identity is the part
- * that discriminates: the operator runs 8+ windows across two hosts, and every
- * one of them on the same mode used to render a byte-identical label. Takes
- * the identity from `session/team-identity.ts` so it agrees with the name the
- * agent registers in the switchboard roster.
+ * A native VS Code status-bar item naming the product and what this session is
+ * FOR — `$(organization) Ghola: Ticket Work · 34k · 5h 55%`.
  *
- * The session mode (and War Mode) is no longer part of the visible text —
- * horizontal space in the bar is scarce and the mode is already shown in the
- * Ghola settings panel — but War Mode still gets a distinct `$(flame)` icon in
- * place of the org icon, and both the mode and an explicit War Mode statement
- * live in the tooltip. The War-Mode flag comes from an injected provider so it
- * agrees with the same `mode.war::enabled` source of truth the
- * composer/launcher gate off.
+ * The lead-in is the LITERAL product name (`PRODUCT_LABEL`), byte-identical on
+ * every host and in every repository. An earlier revision led with this window's
+ * Team Switchboard identity (`cmms2@win`) on the grounds that the operator runs
+ * 8+ windows across two hosts and every one of them on the same mode rendered an
+ * identical label; the operator has since confirmed twice that the pill names the
+ * product. The identity is still resolved from `session/team-identity.ts`, so it
+ * still agrees with the name the agent registers in the switchboard roster — but it
+ * now appears in the TOOLTIP only, which makes that line the sole surface that
+ * discriminates between windows and therefore more load-bearing than before.
  *
- * After the identity comes this session's LIVE USAGE — the Claude Code context
+ * After the product name, separated by a colon, comes this session's MODALITY —
+ * the `ticket-work`/`support`/`cd`/`self-upgrade`/`unconstrained` vocabulary from
+ * `formatMode`, display-cased through `prettyMode` (`Ticket Work`, `Project`).
+ * Unlike the metrics it is never absent: it comes from the enabled modules in this
+ * extension host, not from a file another process may or may not have written, so
+ * `Ghola: <modality>` is the label's irreducible core and everything after it is
+ * optional.
+ *
+ * War Mode is NOT spelled out in the visible text — it gets a distinct `$(flame)`
+ * icon in place of the org icon, and an explicit statement in the tooltip, which
+ * is where there is room to say what it forbids. The War-Mode flag comes from an
+ * injected provider so it agrees with the same `mode.war::enabled` source of
+ * truth the composer/launcher gate off.
+ *
+ * After the modality comes this session's LIVE USAGE — the Claude Code context
  * size and the 5-hour rate-limit percentage — read from the per-repository state
  * file that `session/statusline-state.ts` defines and both statusline renderers
- * write. The key is derived from THIS window's workspace folder (its git root,
- * the same input that names the identity), never from the extension host's own
- * environment and never by picking up "whatever state file exists": in a fleet
- * of 8+ concurrent sessions, a segment that shows another window's numbers while
- * looking authoritative is worse than one that shows nothing.
+ * write. The key is derived from THIS window's workspace folder (its git root, the
+ * same input that names the identity in the tooltip), never from the extension
+ * host's own environment and never by picking up "whatever state file exists": in
+ * a fleet of 8+ concurrent sessions, a segment that shows another window's numbers
+ * while looking authoritative is worse than one that shows nothing.
  *
  * The item lives on the Left, near the workspace/branch context, and opens the
  * Ghola settings panel on click. Callers wire `refresh()` to loader changes,
@@ -325,15 +398,6 @@ export class ModeStatusBarItem implements vscode.Disposable {
      * class never invents its own war-detection path.
      */
     private readonly getWarMode: () => boolean,
-    /**
-     * Resolves the operator's `tool.team-switchboard::teamName` override, which
-     * the module doc calls "the canonical team name for this session". Injected
-     * for exactly the reason `getWarMode` is: the value lives in the
-     * `globalState` Memento, reachable only via `readModuleSettings`, and
-     * neither this class nor the pure `team-identity` module should reach into
-     * extension state. `undefined` (or the empty default) means auto-derive.
-     */
-    private readonly getTeamNameOverride: () => string | undefined,
   ) {
     // Left alignment with a priority that places it near the workspace/branch
     // context on the left cluster. Higher priority = further left.
@@ -389,22 +453,27 @@ export class ModeStatusBarItem implements vscode.Disposable {
     // `workspaceFolders` is `undefined` with no folder open and may hold several
     // in a multi-root workspace; `resolveTeamIdentity` owns the first-folder
     // decision, the walk up to the git repository root that actually names the
-    // team, and returns `undefined` when there is nothing to derive from.
+    // team, and returns `undefined` when there is nothing to derive from. This
+    // feeds the TOOLTIP only — the visible label is a literal and no longer varies
+    // with the identity — so the resolution stays even though the label dropped it.
     const folders = vscode.workspace.workspaceFolders ?? [];
-    const identity = resolveTeamIdentity(
-      folders.map((folder) => folder.uri.fsPath),
-      { teamNameOverride: this.getTeamNameOverride() },
-    );
+    const identity = resolveTeamIdentity(folders.map((folder) => folder.uri.fsPath));
 
     // War Mode gets a distinct flame icon so it stands out at a glance; other
-    // sessions use the org icon. This is now the ONLY war signal in the visible
-    // text — the `+ War` suffix moved to the tooltip below.
+    // sessions use the org icon. This is the ONLY war signal in the visible text
+    // — the `+ war` suffix `formatModeWithWar` would add is deliberately not used
+    // here, so the modality segment stays one token wide and the flame is not
+    // said twice.
     const icon = warMode ? '$(flame)' : '$(organization)';
-    // Identity is the whole visible label now: the mode is genuinely useful but
-    // is already shown in the Ghola settings panel, and the bar has no
-    // horizontal room to spare. With no identity to show, fall back to the
-    // historical `Ghola` label.
-    const label = identity ? identity.name : NO_IDENTITY_LABEL;
+    // The DISPLAY-CASED modality (`Ticket Work`, `Project`), not the raw
+    // lowercase-hyphenated `formatMode` token the banner, the boot trace,
+    // `GHOLA_MODE`, and the module ids speak: an earlier revision put the raw token
+    // in the pill so it would be greppable, and the operator asked for the readable
+    // form the tooltip already showed. Cased ONCE, through the single
+    // `prettyMode`/`MODE_DISPLAY_NAMES` mapping, and shared with the tooltip below,
+    // so there is no second mapping to drift and the two surfaces cannot name
+    // different modes.
+    const modeDisplay = prettyMode(formatMode(enabledModules));
     // The state key comes from the SAME `folders` array `resolveTeamIdentity`
     // just consumed — `resolveStateKeyRoot` walks to the git root with the very
     // same `findRepoRoot`, so the identity in this label and the metrics beside
@@ -413,15 +482,18 @@ export class ModeStatusBarItem implements vscode.Disposable {
     // terminals, and the extension host's own copy is either absent or, worse,
     // inherited from whichever terminal happened to launch this window.
     const snapshot = readStatuslineStateForDirectory(folders[0]?.uri.fsPath);
-    this.item.text = `${icon} ${label}${formatMetricsSegment(snapshot)}`;
+    // `<icon> Ghola: <modality>` is unconditional — a literal and a modality that
+    // is never absent, so there is no no-identity fallback string to choose any
+    // more; the metrics segment brings its own leading `LABEL_SEPARATOR` or is the
+    // empty string, so no separator is ever left dangling when there is nothing
+    // running here.
+    this.item.text = `${icon} ${PRODUCT_LABEL}${PRODUCT_SEPARATOR}${modeDisplay}${formatMetricsSegment(snapshot)}`;
     const identityNote = identity
       ? describeIdentity(identity)
       : 'Ghola team: unknown — no workspace folder is open, so no Team Switchboard name can be derived.';
-    // The mode moved out of the visible text but not out of existence — it and
-    // an explicit War Mode statement live in the tooltip instead. War Mode is
-    // spelled out (not just the flame icon) because it carries a CRITICAL
-    // SAFETY floor forbidding all git writes, and that is not self-explanatory
-    // to someone who has not memorized what the flame means.
+    // War Mode is spelled out (not just the flame icon) because it carries a
+    // CRITICAL SAFETY floor forbidding all git writes, and that is not
+    // self-explanatory to someone who has not memorized what the flame means.
     const warNote = warMode
       ? 'War Mode: ON — all git writes (commit, push, tag, etc.) are forbidden this session.'
       : 'War Mode: off.';
@@ -429,8 +501,17 @@ export class ModeStatusBarItem implements vscode.Disposable {
     // narrative, so the state file path — which is long, and is the one string
     // an operator diagnosing a missing segment needs to copy — is readable
     // instead of buried mid-paragraph.
+    // The mode line is KEPT even though the label now shows the very same
+    // display-cased string, for the same reason `describeMetricValues` re-states the
+    // token figure the label already shows: this tooltip is deliberately a COMPLETE
+    // account of the window — which instance it is, what it is for, what it is
+    // using — and a complete account that drops the modality because it happens to
+    // be legible elsewhere stops standing on its own. It is no longer a GLOSS of an
+    // opaque token (`cd` -> `Project`); that justification died with the raw token
+    // in the label, and the honest one is redundancy for the sake of a self-contained
+    // readout.
     this.item.tooltip = [
-      `${identityNote} Ghola mode: ${prettyMode(formatMode(enabledModules))}. ${warNote} Click to open Ghola settings.`,
+      `${identityNote} Ghola mode: ${modeDisplay}. ${warNote} Click to open Ghola settings.`,
       ...describeSessionMetrics(snapshot),
     ].join('\n');
     this.item.show();
