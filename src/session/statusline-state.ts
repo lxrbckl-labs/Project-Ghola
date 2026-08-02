@@ -213,7 +213,7 @@ export interface StatuslineStateSnapshot {
    *
    * THE VS CODE STATUS-BAR PILL RENDERS THIS, and it is now the only surface that
    * does: `mode-status-bar.ts` opens its metrics group with the figure abbreviated
-   * through `formatTokenCount` below (`Ghola: Ticket Work · 34k · 5h 55%`). Both terminal
+   * through `formatTokenCount` below (`$(organization) Ghola: cmms2@win · Ticket Work · 34k · 5h 55%`). Both terminal
    * renderers still COMPUTE and WRITE the field but no longer print it, so the
    * pill is what keeps this field — and the abbreviation rule — live. It would be
    * carried here regardless of any display, because the on-disk shape is a

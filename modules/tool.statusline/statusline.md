@@ -34,7 +34,7 @@ There is **no metrics group at all** — no context percentage, no 5-hour rollin
 The footer used to close with a metrics group — `[Ghola v0.16.2 │ 62% · 5h 41%]` — and the three figures were removed in three separate changes, for three different reasons. Recorded because each one is a question that gets asked again:
 
 1. **The absolute token figure** (`142k`, from `context_window.total_input_tokens` + `total_output_tokens`, abbreviated by a `fmt_tokens`/`fmtTokens` pair both renderers carried). Dropped as **redundant** — `142k` beside `62%` is one measurement printed twice, since `142k / 0.62` recovers the window size the percentage already reports — and because its name had gone **stale**: as of Claude Code **v2.1.132** (installed here: 2.1.220) that pair reports the size of the CURRENT context window, not a running total, so it drops after a compaction and plateaus near the context ceiling. It *was* cumulative before v2.1.132, so anyone reading it as "tokens spent this session" was reading a number that stopped meaning that.
-2. **Both percentages.** Dropped because the VS Code status-bar pill displays the usage stats (`Ghola: Ticket Work · 34k · 5h 55%`), so the footer was printing the same numbers a second time. The red-at-85 tint went with them; it was the only color either renderer ever produced.
+2. **Both percentages.** Dropped because the VS Code status-bar pill displays the usage stats (`Ghola: cmms2@win · Ticket Work · 262k · 5h 40%`), so the footer was printing the same numbers a second time. The red-at-85 tint went with them; it was the only color either renderer ever produced.
 3. **The bracket itself.** Silenced by default, per the operator: with the pill carrying the figures, the footer row was pure noise. The render was **not deleted** — it is gated, and `GHOLA_STATUSLINE_SILENT=0` still reaches it.
 
 **Every removal was a display decision only.** All three numbers are still computed on every render and still written to **both** state files as `session_tokens`, `context_pct`, and `five_hour_pct`.
@@ -229,10 +229,14 @@ The pill is **not** this module's output — it is `src/status-bar/mode-status-b
 Its label is:
 
 ```
-Ghola: <Modality> · <tokens> · 5h <N>%
+Ghola: <SwitchboardID> · <Modality> · <tokens> · 5h <N>%
 ```
 
-for example `Ghola: Ticket Work · 34k · 5h 55%`. The leading label is the literal product name **`Ghola`**, always — on every host, in every repo; it is not a derived identity, and the Team Switchboard identity (e.g. `cmms2@win`) no longer appears in the label at all — it survives only in the hover tooltip. `<Modality>` is display-cased (`Ticket Work`, `Support`, `Project`, `Self Upgrade`, `Unconstrained` — note `cd` displays as `Project`), never the raw hyphenated mode token. The absolute token figure is **rendered here**, abbreviated by `formatTokenCount` in `src/session/statusline-state.ts` — **that function is live and has a live caller.** Its tooltip leads with an absolute-token clause.
+for example `Ghola: cmms2@win · Ticket Work · 262k · 5h 40%`. The leading `Ghola:` is the literal product name, always — on every host, in every repo. `<SwitchboardID>` is a separate, derived segment: the Team Switchboard identity, environment-qualified (`cmms2@win` on a native-Windows cmms clone). The two are not the same thing, and both now appear, which means **in Project-Ghola itself the pill reads `Ghola: Ghola · Self Upgrade · …`** — this repo's identity strips to the literal string `Ghola`, so the prefix and the identity segment collide in text even though they are two different values. That doubling is expected, not a bug.
+
+When no identity resolves (no workspace folder open), the identity segment is **omitted entirely** — no placeholder, no fallback literal — and the label becomes `Ghola: Unconstrained · …`. The previous `NO_IDENTITY_LABEL` fallback of `'Ghola'` was **deliberately not reinstated**: with the `Ghola:` prefix present, that fallback would render byte-identically to this repo's real identity segment, which is exactly the collision described above and would make the two cases indistinguishable from the label alone.
+
+`<Modality>` is display-cased (`Ticket Work`, `Support`, `Project`, `Self Upgrade`, `Unconstrained` — note `cd` displays as `Project`), never the raw hyphenated mode token. The absolute token figure is **rendered here**, abbreviated by `formatTokenCount` in `src/session/statusline-state.ts` — **that function is live and has a live caller.** The identity appears in **both** the label and the tooltip; the tooltip is not where it "survives" but where it does a different job — it explains the derivation (what value fed it, and why), which the label's bare string cannot. The tooltip also leads with an absolute-token clause.
 
 So the token figure was never removed from Ghola, only from the footer: the footer dropped it as redundant beside a percentage it no longer prints either, while the pill kept it as the one place the number is actually useful. Any comment or note claiming `formatTokenCount` was deleted, or that the pill renders only percentages, is stale — it is live.
 
@@ -264,7 +268,7 @@ The body above applies identically to every agent. The notes below frame how eac
 
 ### TPM
 
-**The terminal statusline renders nothing.** That is the current, intended state: the renderer is silent by default, so the harness shows no footer row. What is still live is the renderer *process* — it runs on every refresh and writes the state files that feed the VS Code status-bar pill. If the user asks where the footer went, that is the answer, and the follow-up is that the numbers moved to the pill (`Ghola: Ticket Work · 34k · 5h 55%`), which is why nothing was lost.
+**The terminal statusline renders nothing.** That is the current, intended state: the renderer is silent by default, so the harness shows no footer row. What is still live is the renderer *process* — it runs on every refresh and writes the state files that feed the VS Code status-bar pill. If the user asks where the footer went, that is the answer, and the follow-up is that the numbers moved to the pill (`Ghola: cmms2@win · Ticket Work · 262k · 5h 40%`), which is why nothing was lost.
 
 `GHOLA_STATUSLINE_SILENT=0` is the escape hatch and brings back `[Ghola vX.Y.Z]` — **version only.** Do not promise percentages or a token figure: those were removed from the rendered line before it was silenced, and un-silencing cannot bring them back.
 

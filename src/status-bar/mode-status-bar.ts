@@ -17,14 +17,14 @@ const STATUS_BAR_CONFIG_SECTION = 'ghola.statusBar';
 const STATUS_BAR_ENABLED_KEY = 'ghola.statusBar.enabled';
 
 /**
- * The delimiter between PEER segments of the visible label — between the session
- * MODALITY and the metrics group, and between two metrics alike: U+00B7 MIDDLE
- * DOT, one space either side. An earlier revision used a distinct glyph (U+2502
- * BOX DRAWINGS LIGHT VERTICAL) for the boundary before the metrics, on the theory
- * that the label's lead-in is a heading over the metrics as its contents; the
- * operator asked for one delimiter throughout instead, so everything after the
- * product name reads as a flat sequence of peers rather than a heading plus
- * contents.
+ * The delimiter between PEER segments of the visible label — between this
+ * window's IDENTITY and the session MODALITY, between the modality and the
+ * metrics group, and between two metrics alike: U+00B7 MIDDLE DOT, one space
+ * either side. An earlier revision used a distinct glyph (U+2502 BOX DRAWINGS
+ * LIGHT VERTICAL) for the boundary before the metrics, on the theory that the
+ * label's lead-in is a heading over the metrics as its contents; the operator
+ * asked for one delimiter throughout instead, so everything after the product
+ * name reads as a flat sequence of peers rather than a heading plus contents.
  *
  * The `Ghola` lead-in is the one thing not joined with this — see
  * `PRODUCT_SEPARATOR`.
@@ -35,25 +35,31 @@ const LABEL_SEPARATOR = ' · ';
  * The literal the visible label always leads with: the PRODUCT name, on every
  * host and in every repository.
  *
- * It is deliberately NOT this window's Team Switchboard identity. An earlier
- * revision led with the derived identity, so this repo's window read `Ghola` and a
- * native-Windows cmms clone read `cmms2@win`; the operator has since confirmed
- * twice that the pill names the product instead. The identity did not go away — it
- * moved to the tooltip alone (`describeIdentity`), which is now the only surface
- * that tells one of the operator's 8+ windows from another.
+ * It is NOT this window's Team Switchboard identity and must never be conflated
+ * with it. The two are now BOTH in the label and they say different things: this
+ * literal names the product (always `Ghola`), and the first `LABEL_SEPARATOR`-
+ * joined segment after it names the instance (`cmms2@win`) — see
+ * `formatIdentitySegment`. An earlier revision made the identity itself the
+ * lead-in, so this repo's window read `Ghola` and a native-Windows cmms clone read
+ * `cmms2@win` with no product name anywhere; the operator asked instead for the
+ * product name to stay put and the identity to be inserted after it, which is the
+ * shape below.
  */
 const PRODUCT_LABEL = 'Ghola';
 
 /**
- * The delimiter between the product name and the session MODALITY: a colon and
- * one space, giving `Ghola: Ticket Work · 34k · 5h 3%`.
+ * The delimiter between the product name and everything that describes this
+ * window: a colon and one space, giving
+ * `Ghola: cmms2@win · Ticket Work · 34k · 5h 3%`.
  *
  * This is the ONE boundary in the label that is not between peers, which is why
- * it does not use `LABEL_SEPARATOR`: `Ghola` names the product and the modality
- * says what this window is currently for, so the name introduces the modality
- * rather than standing beside it. Exactly one of these appears in any label —
- * both sides are unconditional (a literal, and a modality that is never absent;
- * see `refresh`), so it is never conditional and never repeated.
+ * it does not use `LABEL_SEPARATOR`: `Ghola` names the product and what follows
+ * says which instance this is and what it is currently for, so the name
+ * introduces that description rather than standing beside it. Exactly one of
+ * these appears in any label, and it is never conditional: the left side is a
+ * literal, and while the identity segment on the right can be absent, the
+ * modality behind it never is (see `refresh`), so something always follows the
+ * colon.
  */
 const PRODUCT_SEPARATOR = ': ';
 
@@ -162,12 +168,13 @@ function prettyMode(raw: string): string {
 /**
  * One sentence NAMING the resolved identity and explaining where it came from, so
  * an operator can learn on one hover which of their windows this is, that the name
- * is their Team Switchboard name, and why it carries an `@win`. This is now the
- * ONLY surface that shows the identity at all — the visible label leads with the
- * literal product name (see `PRODUCT_LABEL`) — so this line carries more weight
- * than when it merely annotated a name already on the pill, and must not be
- * shortened to a bare gloss. Still deliberately one sentence, though: the
- * authority is `_AgentComms/_Switchboard.md`, not this string.
+ * is their Team Switchboard name, and why it carries an `@win`. The label now
+ * shows the name too (see `formatIdentitySegment`), so this line no longer has to
+ * be the only place the identity appears — but it is still the ONLY place the
+ * DERIVATION is explained, which is the part a bare name on a pill cannot convey,
+ * so it must not be shortened to a gloss now that it has company. Still
+ * deliberately one sentence, though: the authority is
+ * `_AgentComms/_Switchboard.md`, not this string.
  */
 function describeIdentity(identity: TeamIdentity): string {
   // Say WHICH directory named the team. The repo root is the usual answer and is
@@ -199,6 +206,35 @@ function describeIdentity(identity: TeamIdentity): string {
 }
 
 /**
+ * The identity segment of the visible label — this window's Team Switchboard name
+ * followed by its TRAILING `LABEL_SEPARATOR` — or `''` when no identity resolves.
+ *
+ * THE SEPARATOR TRAILS HERE where `formatMetricsSegment`'s leads, and the side is
+ * not arbitrary: an optional segment must carry its separator on the side facing
+ * an UNCONDITIONAL neighbour, or dropping the segment strands a `·`. The metrics
+ * sit after the modality, so their separator leads; the identity sits before the
+ * modality — which is never absent (see `refresh`) — so its separator trails.
+ * Either way the segment and its separator vanish as one unit, which is what makes
+ * every present/absent combination separator-clean.
+ *
+ * NOTHING IS RENDERED WHEN NOTHING RESOLVES, and in particular there is NO
+ * `'Ghola'` FALLBACK. One existed while the identity was the label's lead-in, and
+ * it must not come back now that the literal product name precedes this segment:
+ * `Project-Ghola` strips to `Ghola` (see `deriveTeamName`), so a `Ghola` fallback
+ * would render `Ghola: Ghola · ...` — byte-identical to the genuine label of THIS
+ * repo's window. A window with no folder open would then be indistinguishable from
+ * the one repository whose real derived name it had borrowed, which is worse than
+ * showing no name at all. Omitting the segment says "nothing could be derived"
+ * without asserting a false name, and matches how the metrics already degrade.
+ * `describeIdentity`'s absent-identity counterpart in `refresh` says so in words,
+ * where there is room to explain why.
+ */
+function formatIdentitySegment(identity: TeamIdentity | undefined): string {
+  if (identity === undefined) return '';
+  return `${identity.name}${LABEL_SEPARATOR}`;
+}
+
+/**
  * The metrics half of the visible label, INCLUDING its leading
  * `LABEL_SEPARATOR`, or `''` when there is nothing to show.
  *
@@ -217,11 +253,13 @@ function describeIdentity(identity: TeamIdentity): string {
  * is present is shown; when neither is, the group and its separator vanish
  * together rather than leaving a dangling `·`.
  *
- * The leading `LABEL_SEPARATOR` is applied by the JOIN and by this function's
- * own prefix, never carried by a segment — mirroring the renderers' rule — so
- * dropping a metric cannot leave a doubled, leading, or trailing separator
- * behind: one metric emits no inner `·` at all, and zero metrics take the
- * prefix with them.
+ * The separator that attaches this group to what precedes it is this function's
+ * own PREFIX — owned by the group as a whole, never by either metric — which is
+ * the same "an optional segment owns the separator on the side facing an
+ * unconditional neighbour" rule `formatIdentitySegment` follows in the mirror
+ * direction, and mirrors the renderers' rule besides. So dropping a metric cannot
+ * leave a doubled, leading, or trailing separator behind: one metric emits no
+ * inner `·` at all, and zero metrics take the prefix with them.
  *
  * The token count goes through `formatTokenCount` and NOT through a local
  * reimplementation. That function is now the ONLY `k`/`M` abbreviation rule left
@@ -327,26 +365,33 @@ function describeSessionMetrics(snapshot: StatuslineStateSnapshot | undefined): 
 }
 
 /**
- * A native VS Code status-bar item naming the product and what this session is
- * FOR — `$(organization) Ghola: Ticket Work · 34k · 5h 55%`.
+ * A native VS Code status-bar item naming the product, WHICH INSTANCE this window
+ * is, and what this session is FOR —
+ * `$(organization) Ghola: cmms2@win · Ticket Work · 34k · 5h 55%`.
  *
  * The lead-in is the LITERAL product name (`PRODUCT_LABEL`), byte-identical on
- * every host and in every repository. An earlier revision led with this window's
- * Team Switchboard identity (`cmms2@win`) on the grounds that the operator runs
- * 8+ windows across two hosts and every one of them on the same mode rendered an
- * identical label; the operator has since confirmed twice that the pill names the
- * product. The identity is still resolved from `session/team-identity.ts`, so it
- * still agrees with the name the agent registers in the switchboard roster — but it
- * now appears in the TOOLTIP only, which makes that line the sole surface that
- * discriminates between windows and therefore more load-bearing than before.
+ * every host and in every repository.
  *
- * After the product name, separated by a colon, comes this session's MODALITY —
- * the `ticket-work`/`support`/`cd`/`self-upgrade`/`unconstrained` vocabulary from
+ * Immediately after it, as the first `LABEL_SEPARATOR`-joined segment, comes this
+ * window's Team Switchboard IDENTITY (`Ghola` here, `cmms2@win` on a
+ * native-Windows cmms clone), resolved from `session/team-identity.ts` so it agrees
+ * with the name the agent registers in the switchboard roster. It is what makes the
+ * pill discriminating: the operator runs 8+ windows across two hosts, and without
+ * it every window on the same mode renders an identical label. An earlier revision
+ * had the identity REPLACE the product name; this shape keeps both, so the pill
+ * says what it is and which one it is. When no identity resolves the segment is
+ * omitted outright rather than filled with a placeholder — see
+ * `formatIdentitySegment` for why a `Ghola` fallback specifically is a collision
+ * and not a convenience.
+ *
+ * Then comes this session's MODALITY — the
+ * `ticket-work`/`support`/`cd`/`self-upgrade`/`unconstrained` vocabulary from
  * `formatMode`, display-cased through `prettyMode` (`Ticket Work`, `Project`).
- * Unlike the metrics it is never absent: it comes from the enabled modules in this
- * extension host, not from a file another process may or may not have written, so
- * `Ghola: <modality>` is the label's irreducible core and everything after it is
- * optional.
+ * Unlike the identity and the metrics it is never absent: it comes from the enabled
+ * modules in this extension host, not from a file another process may or may not
+ * have written and not from a workspace folder that may not be open, so
+ * `Ghola: <modality>` is the label's irreducible core and every other segment is
+ * optional around it.
  *
  * War Mode is NOT spelled out in the visible text — it gets a distinct `$(flame)`
  * icon in place of the org icon, and an explicit statement in the tooltip, which
@@ -358,7 +403,7 @@ function describeSessionMetrics(snapshot: StatuslineStateSnapshot | undefined): 
  * size and the 5-hour rate-limit percentage — read from the per-repository state
  * file that `session/statusline-state.ts` defines and both statusline renderers
  * write. The key is derived from THIS window's workspace folder (its git root, the
- * same input that names the identity in the tooltip), never from the extension
+ * same input that names the identity beside it), never from the extension
  * host's own environment and never by picking up "whatever state file exists": in
  * a fleet of 8+ concurrent sessions, a segment that shows another window's numbers
  * while looking authoritative is worse than one that shows nothing.
@@ -453,9 +498,10 @@ export class ModeStatusBarItem implements vscode.Disposable {
     // `workspaceFolders` is `undefined` with no folder open and may hold several
     // in a multi-root workspace; `resolveTeamIdentity` owns the first-folder
     // decision, the walk up to the git repository root that actually names the
-    // team, and returns `undefined` when there is nothing to derive from. This
-    // feeds the TOOLTIP only — the visible label is a literal and no longer varies
-    // with the identity — so the resolution stays even though the label dropped it.
+    // team, and returns `undefined` when there is nothing to derive from. ONE
+    // resolution feeds BOTH surfaces — the label segment below and the tooltip's
+    // explanation of it — so the pill can never name one instance while its hover
+    // explains another.
     const folders = vscode.workspace.workspaceFolders ?? [];
     const identity = resolveTeamIdentity(folders.map((folder) => folder.uri.fsPath));
 
@@ -482,12 +528,21 @@ export class ModeStatusBarItem implements vscode.Disposable {
     // terminals, and the extension host's own copy is either absent or, worse,
     // inherited from whichever terminal happened to launch this window.
     const snapshot = readStatuslineStateForDirectory(folders[0]?.uri.fsPath);
-    // `<icon> Ghola: <modality>` is unconditional — a literal and a modality that
-    // is never absent, so there is no no-identity fallback string to choose any
-    // more; the metrics segment brings its own leading `LABEL_SEPARATOR` or is the
-    // empty string, so no separator is ever left dangling when there is nothing
-    // running here.
-    this.item.text = `${icon} ${PRODUCT_LABEL}${PRODUCT_SEPARATOR}${modeDisplay}${formatMetricsSegment(snapshot)}`;
+    // `<icon> Ghola: <modality>` is the unconditional core — a literal and a
+    // modality that is never absent — and the two optional groups attach to it from
+    // opposite sides, each owning the separator that joins it: the identity segment
+    // brings its own TRAILING `LABEL_SEPARATOR` or is the empty string, the metrics
+    // segment brings its own LEADING one or is the empty string. So nothing here
+    // needs to know which neighbours are present, and no separator is ever left
+    // dangling — not with no folder open, not with nothing running, not with both.
+    this.item.text =
+      `${icon} ${PRODUCT_LABEL}${PRODUCT_SEPARATOR}${formatIdentitySegment(identity)}` +
+      `${modeDisplay}${formatMetricsSegment(snapshot)}`;
+    // The no-identity branch is where the tooltip EARNS the label's silence: the
+    // label expresses "nothing could be derived" by omitting its segment, which is
+    // unambiguous but says nothing about why, and this sentence is where the reason
+    // lives. Keep the two consistent — a placeholder in the label would make this
+    // line contradict it.
     const identityNote = identity
       ? describeIdentity(identity)
       : 'Ghola team: unknown — no workspace folder is open, so no Team Switchboard name can be derived.';
@@ -509,7 +564,9 @@ export class ModeStatusBarItem implements vscode.Disposable {
     // be legible elsewhere stops standing on its own. It is no longer a GLOSS of an
     // opaque token (`cd` -> `Project`); that justification died with the raw token
     // in the label, and the honest one is redundancy for the sake of a self-contained
-    // readout.
+    // readout. The same argument now covers the identity line, which the label also
+    // duplicates: the pill NAMES the instance, this tooltip EXPLAINS the name, and
+    // neither is a reason to drop the other.
     this.item.tooltip = [
       `${identityNote} Ghola mode: ${modeDisplay}. ${warNote} Click to open Ghola settings.`,
       ...describeSessionMetrics(snapshot),

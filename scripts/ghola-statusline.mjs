@@ -62,9 +62,10 @@
 //     "cumulative session spend" in Claude Code v2.1.132, where it became the
 //     size of the CURRENT context window. The two percentages then went for a
 //     different reason: the VS Code status-bar pill now displays the usage stats
-//     (`cmms2@win · 34k · 5h 3%`), so the footer was printing the same numbers a
-//     second time. It is reduced to a session marker. THIS IS A DISPLAY
-//     DECISION ONLY, and the same change is made in the `.sh`.
+//     (`Ghola: cmms2@win · Ticket Work · 34k · 5h 3%`), so the footer was
+//     printing the same numbers a second time. It is reduced to a session
+//     marker. THIS IS A DISPLAY DECISION ONLY, and the same change is made in
+//     the `.sh`.
 //   - EVERY VALUE IS STILL COMPUTED AND STILL WRITTEN. `session_tokens`,
 //     `context_pct`, and `five_hour_pct` all still land in both state files
 //     below, with the same key set, the same key order, and the same timestamp
@@ -201,9 +202,9 @@ function asPyNumber(v) {
 // `tool.usage-observer` and with the VS Code status bar that outlived the display.
 // The abbreviation rule the pill needs lives on in `formatTokenCount` in
 // `src/session/statusline-state.ts` — that function is live and has a caller, because
-// the pill DOES render an absolute token figure (`cmms2@win · 34k · 5h 3%`); this
-// footer is the surface that stopped. The `.sh`'s `fmt_tokens` and its two percentage
-// branches were removed in the same changes as this file's.
+// the pill DOES render an absolute token figure (`Ghola: cmms2@win · Ticket Work ·
+// 34k · 5h 3%`); this footer is the surface that stopped. The `.sh`'s `fmt_tokens`
+// and its two percentage branches were removed in the same changes as this file's.
 
 /**
  * Read the Ghola version string, stripping ALL whitespace exactly as the .sh's

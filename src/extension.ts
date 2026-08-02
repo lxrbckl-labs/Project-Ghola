@@ -725,11 +725,15 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(moduleSettingsEmitter);
 
   // ───── Ghola identity / usage status-bar item ────────────────────────
-  // A native status-bar indicator showing this window's Team Switchboard
-  // identity plus, when a live Claude Code session has rendered a status line
-  // for this repository, its context size and 5-hour-window usage (e.g.
-  // `cmms2@win │ 238k · 5h 11%`). The session mode and the War-Mode flag live in
-  // the tooltip rather than the visible text; War Mode is NOT a
+  // A native status-bar indicator leading with a literal `Ghola:` product
+  // prefix, followed by this window's Team Switchboard identity, this
+  // session's modality, and — when a live Claude Code session has rendered a
+  // status line for this repository — its context size and 5-hour-window
+  // usage (e.g. `$(organization) Ghola: cmms2@win · Ticket Work · 238k · 5h
+  // 11%`). The session modality IS in the visible text, not tooltip-only; only
+  // the War-Mode flag's full explanation lives in the tooltip rather than the
+  // visible text, though the visible text still signals War Mode via a
+  // `$(flame)` icon swapped in for the org icon. War Mode is NOT a
   // loader-toggleable module — its source of truth is the `mode.war::enabled`
   // module-setting (an Agents configuration), exactly as the launcher/banner/
   // composer read it — so we resolve it from the flattened MODULE_SETTINGS

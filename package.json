@@ -2,7 +2,7 @@
   "name": "ghola",
   "displayName": "Ghola",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.40.0",
+  "version": "0.40.1",
   "icon": "resources/icon-source.png",
   "publisher": "local",
   "engines": {
@@ -208,7 +208,7 @@
         "ghola.statusBar.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Show the Ghola status-bar item, which always leads with the literal label 'Ghola:' followed by this session's modality, then optionally context-size and 5-hour-usage segments while a live Claude Code session is writing state for this instance — e.g. 'Ghola: Ticket Work · 34k · 5h 55%' — with a flame icon in place of the org icon while War Mode is on. The 'Ghola:' prefix and modality are shown unconditionally; the two usage segments only appear once a live session is reporting. The hover tooltip carries this window's Team Switchboard identity, derived from the git repository root at or above the first open workspace folder, with a leading 'Project-' stripped and an environment qualifier appended on every host except WSL, which holds the unqualified name ('@win', '@mac'); the identity is always derived and is not overridable, but no longer appears in the label itself. Clicking the item opens Ghola's settings panel."
+          "description": "Show the Ghola status-bar item, whose label takes the shape 'Ghola: <identity> · <modality> · <tokens> · 5h <percent>%' — the literal 'Ghola:' prefix, then this window's Team Switchboard identity, this session's modality, and the context-size and 5-hour-usage segments reported for this instance, joined by ' · ' — e.g. 'Ghola: cmms2@win · Ticket Work · 262k · 5h 40%' — with a flame icon in place of the org icon while War Mode is on. The 'Ghola:' prefix and the modality always render; the identity segment is omitted entirely when no workspace folder is open and no identity resolves, with no placeholder and no fallback literal; the two usage segments appear only while a live Claude Code session is writing state for this instance. That identity appears in both the label and the hover tooltip, and is derived from the git repository root at or above the first open workspace folder, with a leading 'Project-' stripped and an environment qualifier appended on every host except WSL, which holds the unqualified name ('@win', '@mac'); it is always derived and is not overridable. Clicking the item opens Ghola's settings panel."
         }
       }
     }

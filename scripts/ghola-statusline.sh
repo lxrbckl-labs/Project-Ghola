@@ -23,9 +23,9 @@
 #     "cumulative session spend" in Claude Code v2.1.132, where it became the size
 #     of the CURRENT context window. The two percentages then went for a different
 #     reason: the VS Code status-bar pill now displays the usage stats
-#     ("cmms2@win · 34k · 5h 3%"), so the footer was printing the same numbers a
-#     second time. THIS IS A DISPLAY DECISION ONLY, and the same change is made in
-#     ghola-statusline.mjs.
+#     ("Ghola: cmms2@win · Ticket Work · 34k · 5h 3%"), so the footer was
+#     printing the same numbers a second time. THIS IS A DISPLAY DECISION ONLY,
+#     and the same change is made in ghola-statusline.mjs.
 #   - EVERY VALUE IS STILL COMPUTED AND STILL WRITTEN. Both state writes below
 #     still record "session_tokens", "context_pct", and "five_hour_pct", with the
 #     same key set, key order, and timestamp they always had: that on-disk shape is
@@ -212,8 +212,9 @@ project_dir = None
 # VS Code status bar that outlived the display. The abbreviation rule the pill needs
 # lives on in formatTokenCount in src/session/statusline-state.ts - that function is
 # live and has a caller, because the pill DOES render an absolute token figure
-# ("cmms2@win - 34k - 5h 3%"); this footer is the surface that stopped. The .mjs's
-# fmtTokens and pctSegment were removed in the same changes as this file's.
+# ("Ghola: cmms2@win - Ticket Work - 34k - 5h 3%"); this footer is the surface
+# that stopped. The .mjs's fmtTokens and pctSegment were removed in the same
+# changes as this file's.
 
 # --- Per-session state key -------------------------------------------------
 # THE SAME ALGORITHM LIVES IN THREE PLACES: here, in scripts/ghola-statusline.mjs,
