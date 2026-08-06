@@ -2872,6 +2872,16 @@ button.module-row-chevron:focus-visible {
   gap: 6px;
 }
 
+.reviewer-row-avatar {
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+.kv-cell-key:has(.reviewer-row-avatar) {
+  display: flex;
+  align-items: center;
+}
+
 .reviewer-add-btn {
   flex: 0 0 auto;
   height: 28px;

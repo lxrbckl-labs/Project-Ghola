@@ -2971,8 +2971,32 @@ function appendKeyValueEditor(
     emptyRow.appendChild(td);
     tbody.appendChild(emptyRow);
   } else {
+    const isReviewerTable = moduleId === 'tool.pr-prep' && settingKey === 'defaultReviewers';
     for (const [rowKey, rowVal] of entries) {
-      tbody.appendChild(renderKeyValueRow(field, draft, rowKey, rowVal, persistDraft));
+      const row = renderKeyValueRow(field, draft, rowKey, rowVal, persistDraft);
+      // Prepend a Bitbucket avatar to the name cell for reviewer rows. The
+      // account ID is in the value; construct the avatar URL from it.
+      if (isReviewerTable) {
+        const accountId = typeof rowVal === 'object' && rowVal !== null
+          ? (rowVal as { value?: string }).value ?? ''
+          : typeof rowVal === 'string' ? rowVal : '';
+        if (accountId) {
+          const keyCell = row.querySelector('.kv-cell-key');
+          if (keyCell) {
+            const avatar = el('img', {
+              class: 'reviewer-avatar reviewer-row-avatar',
+              src: `https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/initials/${encodeURIComponent(rowKey.charAt(0))}-0.png`,
+              alt: '',
+            }) as HTMLImageElement;
+            // Try the Bitbucket account avatar endpoint instead — it resolves
+            // to the user's real profile picture when available.
+            avatar.src = `https://bitbucket.org/account/${encodeURIComponent(accountId)}/avatar`;
+            avatar.addEventListener('error', () => { avatar.style.display = 'none'; });
+            keyCell.insertBefore(avatar, keyCell.firstChild);
+          }
+        }
+      }
+      tbody.appendChild(row);
     }
   }
   table.appendChild(tbody);
