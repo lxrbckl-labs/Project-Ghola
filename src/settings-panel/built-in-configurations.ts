@@ -51,7 +51,6 @@ const BASELINE_IDS: string[] = [
   // probe, so it can never resolve a `pr_author` to compare the handle against,
   // and the git-based fallback is the only path available to it regardless.
   'tool.operator-profile',
-  'tool.usage-observer',
 ];
 
 /**

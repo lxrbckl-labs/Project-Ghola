@@ -287,6 +287,19 @@ export class SettingsPanel implements vscode.Disposable {
       this.disposables,
     );
 
+    // Re-push settings when this VS Code window gains focus. globalState is
+    // machine-wide but Memento has no onDidChange event, so a save in window A
+    // is invisible to window B until B actively re-reads. Refreshing on focus
+    // covers the common alt-tab workflow: edit in one window, switch to another,
+    // and the panel shows the current values immediately.
+    vscode.window.onDidChangeWindowState(
+      (state) => {
+        if (state.focused && panel.visible) this.postSettings();
+      },
+      null,
+      this.disposables,
+    );
+
     panel.webview.onDidReceiveMessage(
       (msg: WebviewToHostMessage) => this.handle(msg),
       null,
