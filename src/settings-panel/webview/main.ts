@@ -6348,33 +6348,32 @@ function addReviewerFromSearch(member: { accountId: string; displayName: string;
   const key = scopedKey('tool.pr-prep', 'defaultReviewers');
 
   // Seed the draft if it does not exist yet (mirrors appendKeyValueEditor logic).
+  // defaultReviewers uses the PLAIN shape (key = display name, value = account ID
+  // as a string) — no optionalEnabled, no rich { value, enabled } wrapper.
   if (state.keyValueDrafts[key] === undefined) {
     const current = state.settingsValues[key];
-    const seed: Record<string, { value: string; enabled: boolean }> = {};
+    const seed: Record<string, string> = {};
     if (current && typeof current === 'object' && !Array.isArray(current)) {
       for (const [k, v] of Object.entries(current as Record<string, unknown>)) {
-        if (v && typeof v === 'object' && !Array.isArray(v)) {
-          const obj = v as { value?: unknown; enabled?: unknown };
-          seed[k] = {
-            value: typeof obj.value === 'string' ? obj.value : '',
-            enabled: obj.enabled !== false,
-          };
-        } else if (typeof v === 'string') {
-          seed[k] = { value: v, enabled: true };
+        if (typeof v === 'string') {
+          seed[k] = v;
+        } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+          const obj = v as { value?: unknown };
+          seed[k] = typeof obj.value === 'string' ? obj.value : '';
         }
       }
     }
     state.keyValueDrafts[key] = seed;
   }
 
-  const draft = state.keyValueDrafts[key] as Record<string, { value: string; enabled: boolean }>;
+  const draft = state.keyValueDrafts[key] as Record<string, string>;
 
   // Check for duplicates by account ID.
   for (const v of Object.values(draft)) {
-    if (v.value === member.accountId) return;
+    if (v === member.accountId) return;
   }
 
-  draft[member.displayName] = { value: member.accountId, enabled: true };
+  draft[member.displayName] = member.accountId;
   state.settingsValues[key] = { ...draft };
   persistSettings(key);
 
