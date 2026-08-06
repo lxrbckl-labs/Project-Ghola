@@ -72,6 +72,40 @@ import { MODE_STATUS_BAR_CONFIG_SECTION } from './mode-status-bar';
 const TICKET_WORK_MODULE_ID = 'mode.ticket-work';
 
 /**
+ * Project Steersman exposes VS Code's integrated browser via an HTTP API on
+ * this port. When running, `POST /navigate` with `{"url":"..."}` opens a URL
+ * inside VS Code instead of launching the system browser.
+ */
+const STEERSMAN_BASE = 'http://localhost:3788';
+
+/** Timeout for Steersman HTTP calls. Short so the fallback fires quickly. */
+const STEERSMAN_TIMEOUT_MS = 2500;
+
+/**
+ * Try to open `url` in VS Code's integrated browser via Project Steersman.
+ *
+ * Returns `true` on success (Steersman running and responded 2xx), `false` on
+ * any failure — connection refused, timeout, non-2xx. Never throws.
+ */
+async function openUrlViaSteersman(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), STEERSMAN_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${STEERSMAN_BASE}/navigate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * `ghola.statusBar.enabled` — the SAME switch the Ghola pill obeys, composed from
  * the section that item exports so there is no second literal to drift. Turning
  * Ghola's status bar off must take the whole group with it, not leave two orphaned
@@ -427,12 +461,12 @@ function readOriginUrl(repoRoot: string): string {
  * Every inert state carries a tooltip that says WHY it is inert, because a dimmed
  * glyph that a click does not answer is otherwise indistinguishable from a bug.
  *
- * NEITHER BUTTON TAKES A BACKGROUND COLOR, unlike the amber Ghola pill beside it.
- * The dim/normal contrast IS the entire signal for whether a button will do
- * anything, and a colored chip behind the glyph competes with it; adjacency and
- * matching alignment already group the three visually. Do not "finish the look" by
- * adding `statusBarItem.warningBackground` here without checking that
- * `disabledForeground` still reads as obviously dimmed against it.
+ * BOTH BUTTONS USE THE SAME AMBER BACKGROUND as the Ghola pill beside them, via
+ * `statusBarItem.warningBackground` and `statusBarItem.warningForeground`. Active
+ * buttons render with `warningForeground`; inert buttons remain dimmed with
+ * `disabledForeground`, which still reads as visually distinct from `warningForeground`
+ * against the amber fill in both light and dark themes and preserves the dim/normal
+ * contrast as the signal for whether a click does anything.
  */
 export class TicketLinkStatusBarItems implements vscode.Disposable {
   private readonly jiraItem: vscode.StatusBarItem;
@@ -519,6 +553,8 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
     this.prItem.name = 'Ghola Pull Request';
     this.prItem.text = '$(git-pull-request)';
 
+    this.applyWarningStyle();
+
     this.disposables.push(
       vscode.commands.registerCommand(OPEN_TICKET_COMMAND, () => this.openUrl(this.jiraUrl)),
       vscode.commands.registerCommand(OPEN_PR_COMMAND, () => this.openUrl(this.prUrl)),
@@ -526,14 +562,34 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
   }
 
   /**
-   * Open a resolved URL externally, or do nothing. The `undefined` branch is
-   * belt-and-braces rather than reachable through the pill: an item with no target
-   * has already had its `command` cleared, so there is nothing to click. It exists
-   * because a command in the registry can be invoked by id from anywhere.
+   * Open a resolved URL, preferring Steersman's integrated browser when it is
+   * running and falling back to the system browser when it is not. The
+   * `undefined` branch is belt-and-braces rather than reachable through the
+   * pill: an item with no target has already had its `command` cleared, so
+   * there is nothing to click. It exists because a command in the registry can
+   * be invoked by id from anywhere.
    */
   private openUrl(url: string | undefined): void {
     if (url === undefined) return;
-    void vscode.env.openExternal(vscode.Uri.parse(url));
+    void openUrlViaSteersman(url).then((opened) => {
+      if (!opened) {
+        void vscode.env.openExternal(vscode.Uri.parse(url));
+      }
+    });
+  }
+
+  /**
+   * Give both items an amber pill, matching the Ghola pill beside them. VS Code's
+   * `StatusBarItem.backgroundColor` only accepts `statusBarItem.errorBackground` or
+   * `statusBarItem.warningBackground` — `warningBackground` is the amber one.
+   * Paired with `warningForeground` so glyphs stay legible against the amber fill
+   * in both light and dark themes. Called from the constructor and re-asserted on
+   * every `refresh()` so the styling can never be dropped by a future edit that
+   * calls `activate` or `deactivate` without re-applying the background.
+   */
+  private applyWarningStyle(): void {
+    this.jiraItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    this.prItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
   }
 
   /**
@@ -561,6 +617,7 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
     }
 
     this.startBranchTracking();
+    this.applyWarningStyle();
 
     // `workspaceFolders` is `undefined` with no folder open and may hold several
     // in a multi-root workspace. The first-folder collapse and the walk to the git
@@ -684,10 +741,12 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
   }
 
   /**
-   * Give an item a working command, the default foreground, and a tooltip. The
-   * `color` is reset to `undefined` explicitly — an item that was inert on the
-   * previous repaint is still carrying `disabledForeground`, and the whole
+   * Give an item a working command, the warning foreground, and a tooltip. The
+   * `color` is set to `warningForeground` explicitly — an item that was inert on
+   * the previous repaint is still carrying `disabledForeground`, and the whole
    * present-but-inert convention collapses if a re-activated button stays dim.
+   * `warningForeground` pairs with the amber `warningBackground` applied by
+   * `applyWarningStyle` and keeps the glyph legible in both light and dark themes.
    */
   private activate(
     item: vscode.StatusBarItem,
@@ -696,7 +755,7 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
     tooltipLines: readonly string[],
   ): void {
     item.command = command;
-    item.color = undefined;
+    item.color = new vscode.ThemeColor('statusBarItem.warningForeground');
     item.tooltip = tooltipLines.join('\n');
     item.accessibilityInformation = { label: accessibleLabel };
   }
