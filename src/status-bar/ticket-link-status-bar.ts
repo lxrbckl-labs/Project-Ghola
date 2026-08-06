@@ -47,6 +47,7 @@
 
 import * as childProcess from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { ModuleLoader } from '../modules/loader';
@@ -76,24 +77,55 @@ const TICKET_WORK_MODULE_ID = 'mode.ticket-work';
  * this port. When running, `POST /navigate` with `{"url":"..."}` opens a URL
  * inside VS Code instead of launching the system browser.
  */
-const STEERSMAN_BASE = 'http://localhost:3788';
-
 /** Timeout for Steersman HTTP calls. Short so the fallback fires quickly. */
 const STEERSMAN_TIMEOUT_MS = 2500;
+
+/** Directory where Steersman writes per-PID instance files. */
+const STEERSMAN_INSTANCES_DIR = path.join(os.homedir(), '.project-steersman', 'instances');
+
+/**
+ * Discover a running Steersman instance by scanning its instance files.
+ * Returns `{ port, token }` for the first live instance, or `undefined`.
+ */
+function discoverSteersman(): { port: number; token: string } | undefined {
+  try {
+    const files = fs.readdirSync(STEERSMAN_INSTANCES_DIR).filter((f) => f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        const raw = fs.readFileSync(path.join(STEERSMAN_INSTANCES_DIR, file), 'utf8');
+        const inst = JSON.parse(raw) as { port?: number; token?: string; pid?: number };
+        if (typeof inst.port === 'number' && typeof inst.token === 'string') {
+          return { port: inst.port, token: inst.token };
+        }
+      } catch {
+        // Corrupt or stale file — skip.
+      }
+    }
+  } catch {
+    // Directory missing — Steersman never ran.
+  }
+  return undefined;
+}
 
 /**
  * Try to open `url` in VS Code's integrated browser via Project Steersman.
  *
- * Returns `true` on success (Steersman running and responded 2xx), `false` on
- * any failure — connection refused, timeout, non-2xx. Never throws.
+ * Discovers a running instance from `~/.project-steersman/instances/`,
+ * authenticates with the `X-Steersman-Token` header, and POSTs `/navigate`.
+ * Returns `true` on success (2xx), `false` on any failure. Never throws.
  */
 async function openUrlViaSteersman(url: string): Promise<boolean> {
+  const inst = discoverSteersman();
+  if (!inst) return false;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), STEERSMAN_TIMEOUT_MS);
   try {
-    const response = await fetch(`${STEERSMAN_BASE}/navigate`, {
+    const response = await fetch(`http://localhost:${inst.port}/navigate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Steersman-Token': inst.token,
+      },
       body: JSON.stringify({ url }),
       signal: controller.signal,
     });

@@ -2728,7 +2728,7 @@ function renderModuleSettingField(
     // (resize + min-height).
     const ta = el('textarea', {
       class: 'setting-input module-setting-textarea',
-      rows: '4',
+      rows: '8',
     }) as HTMLTextAreaElement;
     if (current !== undefined && current !== null) ta.value = String(current);
     readInputValue = () => ta.value;
@@ -2983,7 +2983,11 @@ function appendKeyValueEditor(
   // Command/Description/Action columns line up by construction — no
   // hand-tuned grid math required (which previously drifted ~28px short
   // of the table's Description column right edge).
-  table.appendChild(renderKeyValueAddRow(field, draft, persistDraft));
+  // Skip the manual add row for defaultReviewers — the reviewer search
+  // component above the table owns the add flow for that setting.
+  if (!(moduleId === 'tool.pr-prep' && settingKey === 'defaultReviewers')) {
+    table.appendChild(renderKeyValueAddRow(field, draft, persistDraft));
+  }
 
   // ── LINQPad banner (when applicable) ───────────────────────────────
   // The banner sits ABOVE the table when LINQPad discovery fails so the

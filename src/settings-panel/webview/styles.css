@@ -891,7 +891,7 @@ button.module-row-chevron:focus-visible {
    allows vertical-only resize (consistent with VS Code textarea conventions). */
 .module-detail textarea.module-setting-textarea {
   height: auto;
-  min-height: 5em;
+  min-height: 10em;
   padding: 6px 8px;
   font: inherit;
   border-radius: 3px;
