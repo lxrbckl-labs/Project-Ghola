@@ -2875,11 +2875,17 @@ button.module-row-chevron:focus-visible {
 .reviewer-row-avatar {
   vertical-align: middle;
   margin-right: 6px;
+  flex-shrink: 0;
 }
 
 .kv-cell-key:has(.reviewer-row-avatar) {
   display: flex;
   align-items: center;
+}
+
+.kv-cell-key:has(.reviewer-row-avatar) .kv-input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .reviewer-add-btn {

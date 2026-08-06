@@ -68,7 +68,6 @@
         "keyLabel": "Name",
         "valueLabel": "Account ID",
         "valueReadonly": true,
-        "optionalEnabled": true,
         "fullWidth": true
       }
     }
