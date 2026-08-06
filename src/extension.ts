@@ -10,6 +10,8 @@ import { BitbucketPrClient } from './integration/bitbucket-pr-client';
 import { discoverObsidianVault } from './integration/vault-discovery';
 import { startBitbucketBridge } from './integration/bitbucket-bridge-server';
 import type { GetCommentsResult, PostCommentFn, PostCommentResult } from './integration/bitbucket-bridge-server';
+import { TerminalManager } from './terminal/terminal-manager';
+import type { TerminalManagerConfig } from './terminal/terminal-manager';
 import { isJiraCommentWriteEnabled } from './integration/jira-comment-write-gate';
 import { ModuleLoader } from './modules/loader';
 import { ModuleState } from './modules/state';
@@ -1154,6 +1156,64 @@ export function activate(context: vscode.ExtensionContext): void {
       ? jiraPostComment
       : undefined;
 
+  // ───── Terminal Manager wiring (tool.terminal) ─────────────────────
+  // Constructed when `tool.terminal` is enabled, passed to the bridge so its
+  // terminal routes return results instead of 404. When the module is not
+  // enabled, `terminalManager` stays `undefined` and the bridge routes refuse
+  // with "Terminal dispatch not available" — same gating pattern as the
+  // `resolveJiraPostComment` capability.
+
+  /** Module id for the terminal dispatch module. */
+  const TERMINAL_MODULE_ID = 'tool.terminal';
+
+  /** Read a terminal-module setting from the flattened module-settings map,
+   *  falling back to the manifest default when the user has not saved it. */
+  const readTerminalSetting = (fieldKey: string): unknown => {
+    const flat = readModuleSettings(context.globalState, context.workspaceState);
+    const v = flat[`${TERMINAL_MODULE_ID}::${fieldKey}`];
+    if (v !== undefined) return v;
+    return loader
+      .find(TERMINAL_MODULE_ID)
+      ?.manifest.contributes?.settings?.[fieldKey]?.default;
+  };
+
+  const buildTerminalConfig = (): Partial<TerminalManagerConfig> => {
+    const cfg: Partial<TerminalManagerConfig> = {};
+    const maxTerminals = readTerminalSetting('maxConcurrentTerminals');
+    if (typeof maxTerminals === 'number') cfg.maxConcurrentTerminals = maxTerminals;
+    const defaultShell = readTerminalSetting('defaultShell');
+    if (typeof defaultShell === 'string') cfg.defaultShell = defaultShell;
+    const autoDispose = readTerminalSetting('autoDisposeOnSessionEnd');
+    if (typeof autoDispose === 'boolean') cfg.autoDisposeOnSessionEnd = autoDispose;
+    const cmdTimeout = readTerminalSetting('commandTimeoutMs');
+    if (typeof cmdTimeout === 'number') cfg.commandTimeoutMs = cmdTimeout;
+    const humanTimeout = readTerminalSetting('humanInterventionTimeoutMs');
+    if (typeof humanTimeout === 'number') cfg.humanInterventionTimeoutMs = humanTimeout;
+    // allowedShells is a keyValue setting — extract the enabled shell names.
+    const shells = readTerminalSetting('allowedShells');
+    if (shells && typeof shells === 'object') {
+      const entries = shells as Record<string, { value?: string; enabled?: boolean }>;
+      cfg.allowedShells = Object.values(entries)
+        .filter((e) => e && e.enabled !== false && typeof e.value === 'string')
+        .map((e) => e.value as string);
+    }
+    return cfg;
+  };
+
+  let terminalManager: TerminalManager | undefined;
+  if (loader.find(TERMINAL_MODULE_ID)?.isEnabled) {
+    terminalManager = new TerminalManager(buildTerminalConfig());
+    context.subscriptions.push({ dispose: () => terminalManager?.dispose() });
+  }
+
+  // Update terminal manager config when module settings change. Uses the same
+  // `moduleSettingsEmitter` the panel and status-bar subscribe to.
+  context.subscriptions.push(moduleSettingsEmitter.event(() => {
+    if (terminalManager) {
+      terminalManager.updateConfig(buildTerminalConfig());
+    }
+  }));
+
   // Loopback bridge: exposes `bitbucketPrClient` (Bitbucket PR ops),
   // `jiraGetTicket` (Jira ticket reads), `jiraGetComments` (Jira comment reads)
   // and `resolveJiraPostComment` (the single Jira write, WITHHELD per request
@@ -1195,6 +1255,7 @@ export function activate(context: vscode.ExtensionContext): void {
       resolveJiraPostComment,
       bridgeCoordinatesPath,
       logger,
+      terminalManager,
     );
     if (bbBridge) {
       context.subscriptions.push({ dispose: () => bbBridge.dispose() });

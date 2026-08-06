@@ -75,6 +75,7 @@ import * as path from 'path';
 import type * as vscode from 'vscode';
 import type { BitbucketPrClient } from './bitbucket-pr-client';
 import type { RequestFailure } from './atlassian-client';
+import type { TerminalManager } from '../terminal/terminal-manager';
 import { JIRA_COMMENT_WRITE_DISABLED_MESSAGE } from './jira-comment-write-gate';
 
 /** Hard cap on inbound request bodies. The agent's payloads are tiny JSON
@@ -227,13 +228,14 @@ export function startBitbucketBridge(
   resolvePostComment: PostCommentResolver,
   coordinatesPath?: string,
   logger?: vscode.OutputChannel,
+  terminalManager?: TerminalManager,
 ): Promise<BitbucketBridgeHandle | null> {
   return new Promise((resolve) => {
     const token = crypto.randomBytes(32).toString('hex');
     const expectedAuth = Buffer.from(`Bearer ${token}`);
 
     const server = http.createServer((req, res) => {
-      handleRequest(req, res, client, getTicket, getComments, resolvePostComment, expectedAuth).catch(() => {
+      handleRequest(req, res, client, getTicket, getComments, resolvePostComment, expectedAuth, terminalManager).catch(() => {
         // Defensive: handleRequest already wraps its own body in try/catch, but a
         // failure before/around that (or in the catch itself) must never leak.
         sendJson(res, 500, { status: 'unknown-error', message: 'bridge error' });
@@ -367,6 +369,7 @@ async function handleRequest(
   getComments: GetCommentsFn,
   resolvePostComment: PostCommentResolver,
   expectedAuth: Buffer,
+  terminalManager?: TerminalManager,
 ): Promise<void> {
   try {
     // Loopback-only: reject any non-local peer before doing any work.
@@ -497,6 +500,95 @@ async function handleRequest(
       // this file's contract is that request payloads never reach a log line.
       const posted = await postComment(key, body);
       sendJson(res, 200, posted);
+      return;
+    }
+
+    // ── Terminal routes ────────────────────────────────────────────────
+    // Handled here (not in `dispatch`) because they need the optional
+    // `terminalManager` injected at bridge start. When the manager is
+    // absent (`tool.terminal` not loaded), every terminal route returns
+    // 404 so the agent gets an explicit signal rather than a bare
+    // `not found` from the catch-all at the bottom.
+
+    if (route === '/terminal/create') {
+      if (!terminalManager) {
+        sendJson(res, 404, { error: 'Terminal dispatch not available' });
+        return;
+      }
+      try {
+        const result = await terminalManager.create(args as {
+          name: string;
+          shell?: string;
+          cwd?: string;
+          env?: Record<string, string>;
+        });
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : 'terminal create failed' });
+      }
+      return;
+    }
+
+    if (route === '/terminal/exec') {
+      if (!terminalManager) {
+        sendJson(res, 404, { error: 'Terminal dispatch not available' });
+        return;
+      }
+      try {
+        const result = await terminalManager.exec(args as {
+          terminalId: string;
+          command: string;
+          waitForHuman?: boolean;
+          timeoutMs?: number;
+        });
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : 'terminal exec failed' });
+      }
+      return;
+    }
+
+    if (route === '/terminal/list') {
+      if (!terminalManager) {
+        sendJson(res, 404, { error: 'Terminal dispatch not available' });
+        return;
+      }
+      try {
+        const terminals = terminalManager.list();
+        sendJson(res, 200, { terminals });
+      } catch (err) {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : 'terminal list failed' });
+      }
+      return;
+    }
+
+    if (route === '/terminal/dispose') {
+      if (!terminalManager) {
+        sendJson(res, 404, { error: 'Terminal dispatch not available' });
+        return;
+      }
+      try {
+        const terminalId = typeof args.terminalId === 'string' ? args.terminalId : '';
+        const result = terminalManager.disposeTerminal(terminalId);
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : 'terminal dispose failed' });
+      }
+      return;
+    }
+
+    if (route === '/terminal/signal') {
+      if (!terminalManager) {
+        sendJson(res, 404, { error: 'Terminal dispatch not available' });
+        return;
+      }
+      try {
+        const terminalId = typeof args.terminalId === 'string' ? args.terminalId : '';
+        const result = terminalManager.signal(terminalId);
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: err instanceof Error ? err.message : 'terminal signal failed' });
+      }
       return;
     }
 

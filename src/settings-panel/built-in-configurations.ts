@@ -35,6 +35,7 @@ const BASELINE_IDS: string[] = [
   'tool.git',
   'tool.regression-scan',
   'tool.pr-prep',
+  'tool.terminal',
   'tool.time',
   'tool.ghola-ledger',
   // Personalization (name / persona / persona intensity) plus one session-hygiene

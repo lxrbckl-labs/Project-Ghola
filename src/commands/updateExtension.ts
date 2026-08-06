@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { toNativeHostPath } from '../session/host-path';
 
 /**
  * Module-level re-entrancy guard. An update spawns a long-running build +
@@ -63,7 +64,12 @@ function isGholaCheckout(dir: string): boolean {
  * Resolve the Project-Ghola git checkout to pull/rebuild/reinstall from.
  *
  *   (a) If `ghola.repoPath` is set and points at a directory containing a
- *       `.git` entry, use it.
+ *       `.git` entry, use it — either as-is, or after `toNativeHostPath`
+ *       translation. The translation covers the cross-boundary case: a POSIX
+ *       path set inside WSL that is actually reachable via `/mnt/<drive>/...`
+ *       on native Windows, or a `C:/...` path that maps to `/mnt/c/...` on
+ *       WSL. `toNativeHostPath` only substitutes when the translated path
+ *       exists, so it cannot fabricate a wrong answer.
  *   (b) Otherwise fall back to `context.extensionPath` IF that path is itself
  *       a source checkout — it must contain BOTH `.git` and `esbuild.config.js`
  *       (an installed vsix copy has neither, so this distinguishes the F5 dev
@@ -81,8 +87,19 @@ function resolveRepoRoot(context: vscode.ExtensionContext): string | null {
     .getConfiguration('ghola')
     .get<string>('repoPath', '')
     .trim();
-  if (configured && fs.existsSync(path.join(configured, '.git'))) {
-    return configured;
+  if (configured) {
+    // Try the setting value as-is first.
+    if (fs.existsSync(path.join(configured, '.git'))) {
+      return configured;
+    }
+    // Try the host-translated form. A POSIX path on win32 translates to
+    // `C:/...`; a Windows path on WSL/Linux translates to `/mnt/c/...`.
+    // `toNativeHostPath` only substitutes when the translated location exists,
+    // so this cannot fabricate a path.
+    const translated = toNativeHostPath(configured);
+    if (translated !== configured && fs.existsSync(path.join(translated, '.git'))) {
+      return translated;
+    }
   }
   const extPath = context.extensionPath;
   if (
@@ -110,54 +127,10 @@ function resolveRepoRoot(context: vscode.ExtensionContext): string | null {
 }
 
 /**
- * Run the reinstall pipeline: resolve the repo root, verify the script exists,
- * then stream `scripts/reinstall.sh` (under a `bash -lc` login shell so the
- * user's interactive PATH — nvm node/npm, the `code` CLI — is inherited) into
- * an OutputChannel while a notification progress spinner is shown. Parses the
- * accumulated output for the up-to-date / installed / failure markers and
- * surfaces a modal prompt for each outcome.
+ * Read the INSTALLED extension's version from the VERSION file or package.json.
+ * Shared by the local (bash), native-Windows, and WSL update flows.
  */
-async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
-  if (updating) {
-    vscode.window.showInformationMessage('Update already in progress.');
-    return;
-  }
-
-  const repoRoot = resolveRepoRoot(context);
-  if (!repoRoot) {
-    // WIN32 ONLY: no local checkout, but `ghola.repoPath` names a POSIX
-    // absolute path -> the clone lives inside WSL. Delegate the whole pipeline
-    // there rather than erroring. Returns null on every other host and for
-    // every other shape of setting, so the error below is reached exactly as
-    // before. See `resolveWslDelegation`.
-    const wslRepoPath = resolveWslDelegation();
-    if (wslRepoPath) {
-      await runUpdateViaWsl(context, wslRepoPath);
-      return;
-    }
-    const choice = await vscode.window.showErrorMessage(
-      'Ghola: could not locate a Project-Ghola git checkout to update from. Open your clone as a workspace folder, or set "ghola.repoPath" to its absolute path.',
-      'Open Settings',
-    );
-    if (choice === 'Open Settings') {
-      void vscode.commands.executeCommand('workbench.action.openSettings', 'ghola.repoPath');
-    }
-    return;
-  }
-
-  const scriptPath = path.join(repoRoot, 'scripts', 'reinstall.sh');
-  if (!fs.existsSync(scriptPath)) {
-    vscode.window.showErrorMessage(
-      `Ghola: update script not found at ${scriptPath}.`,
-    );
-    return;
-  }
-
-  // The INSTALLED extension's version is the correct left-hand side of the
-  // update check: context.extensionPath now ships a VERSION file. We read it
-  // here and hand it to the script via GHOLA_INSTALLED_VERSION so the script
-  // compares installed-vs-remote (the install can lag) rather than
-  // clone-vs-remote (the maintainer's clone is never behind its own push).
+function readInstalledVersion(context: vscode.ExtensionContext): string {
   let installedVersion: string | undefined;
   try {
     installedVersion = fs
@@ -169,6 +142,353 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
   if (installedVersion !== undefined && installedVersion === '') {
     installedVersion = undefined;
   }
+  return installedVersion ?? '';
+}
+
+/**
+ * True when `repoRoot` is a local Windows-native path (a drive letter or UNC).
+ * Used to decide whether to run the build pipeline natively on Windows or
+ * delegate to a POSIX shell. A WSL path like `/home/...` resolved via the
+ * `\\wsl$\...` UNC mount would return `true`, but that case is handled
+ * upstream: `resolveRepoRoot` never returns a `\\wsl$` path.
+ */
+function isWindowsLocalPath(repoRoot: string): boolean {
+  // Drive letter: `C:\...` or `C:/...`
+  if (/^[A-Za-z]:[\\/]/.test(repoRoot)) return true;
+  // UNC: `\\server\share`
+  if (repoRoot.startsWith('\\\\')) return true;
+  return false;
+}
+
+/**
+ * Run a single command and stream its output into the channel, accumulating
+ * into `state.buffer`. Resolves with the exit code. Used by the native-Windows
+ * pipeline to run each step sequentially.
+ */
+function runStepStreamed(
+  command: string,
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  channel: vscode.OutputChannel,
+  state: { buffer: string },
+): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const child = spawn(command, args, { cwd, env, shell: true });
+    child.stdout.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      state.buffer += text;
+      channel.append(text);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      const text = chunk.toString();
+      state.buffer += text;
+      channel.append(text);
+    });
+    child.on('error', (err) => reject(err));
+    child.on('close', (code) => resolve(code ?? 0));
+  });
+}
+
+// ─── NATIVE-WINDOWS UPDATE ────────────────────────────────────────────────
+//
+// When the Project-Ghola checkout is on the local Windows filesystem, the
+// build pipeline runs NATIVELY — no bash, no WSL. The steps mirror
+// `scripts/reinstall.sh` but use `npm` / `npx` / `code` directly through
+// Node's `child_process.spawn` with `shell: true` so Windows can resolve
+// the commands from PATH. The `code` CLI install is replaced by
+// `workbench.extensions.installExtension` (the same API the WSL flow uses)
+// to avoid any UNC / Electron gating issues.
+
+/**
+ * Run the native-Windows update pipeline: git fetch + pull, npm install,
+ * npm run build, vsce package, and install the vsix — all as native Windows
+ * commands. The pipeline mirrors `scripts/reinstall.sh`'s logic and emits the
+ * same marker lines so the result-parsing code is shared.
+ */
+async function runUpdateNativeWindows(
+  context: vscode.ExtensionContext,
+  repoRoot: string,
+): Promise<void> {
+  updating = true;
+  const channel = vscode.window.createOutputChannel('Ghola Update');
+  channel.clear();
+  channel.show(true);
+
+  const installedVersion = readInstalledVersion(context);
+  const vsixName = 'ghola.vsix';
+  const vsixPath = path.join(repoRoot, vsixName);
+  const env = { ...process.env, GHOLA_INSTALLED_VERSION: installedVersion };
+
+  try {
+    const state = { buffer: '' };
+    const exitCode = await vscode.window.withProgress<number>(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'Updating Ghola…',
+        cancellable: false,
+      },
+      async () => {
+        channel.appendLine(`[ghola] native-Windows update from ${repoRoot}`);
+
+        // ── Remote-version check (git fetch + compare) ────────────────
+        // Mirrors reinstall.sh's remote-version logic. Unlike reinstall.sh
+        // there is no --local flag; the native flow always checks remote.
+        let code: number;
+
+        // Resolve upstream tracking ref.
+        code = await runStepStreamed(
+          'git', ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'],
+          repoRoot, env, channel, state,
+        );
+        const upstream = state.buffer.trim().split('\n').pop()?.trim() ?? '';
+        if (code !== 0 || !upstream) {
+          channel.appendLine('[ext] ERROR: no upstream tracking branch configured');
+          return 1;
+        }
+
+        // Reset buffer for subsequent steps (upstream was captured above).
+        state.buffer = '';
+
+        // git fetch
+        channel.appendLine('[ext] git fetch');
+        code = await runStepStreamed('git', ['fetch'], repoRoot, env, channel, state);
+        if (code !== 0) {
+          channel.appendLine('[ext] ERROR: git fetch failed');
+          return 1;
+        }
+
+        // Read remote VERSION via `git show upstream:VERSION`.
+        state.buffer = '';
+        code = await runStepStreamed(
+          'git', ['show', `${upstream}:VERSION`],
+          repoRoot, env, channel, state,
+        );
+        const remoteVersion = state.buffer.trim().split('\n').pop()?.trim() ?? '';
+        if (code !== 0 || !remoteVersion) {
+          channel.appendLine(`[ext] ERROR: could not read remote version from ${upstream}:VERSION`);
+          return 1;
+        }
+
+        // Read local VERSION.
+        let localVersion = '';
+        try {
+          localVersion = fs.readFileSync(path.join(repoRoot, 'VERSION'), 'utf8').trim();
+        } catch {
+          // Fine — will just not short-circuit the pull.
+        }
+
+        channel.appendLine(
+          `[ext] installed=${installedVersion || 'unknown'} remote=${remoteVersion} local=${localVersion} upstream=${upstream}`,
+        );
+
+        // Up-to-date gate.
+        if (installedVersion && installedVersion === remoteVersion) {
+          state.buffer += '\nALREADY_UP_TO_DATE\n';
+          channel.appendLine('[ext] ALREADY_UP_TO_DATE');
+          channel.appendLine(
+            `[ext] Already up to date (installed v${installedVersion} matches remote) - nothing to install.`,
+          );
+          return 0;
+        }
+
+        // Pull gate.
+        if (localVersion !== remoteVersion) {
+          channel.appendLine(`[ext] update needed: local=${localVersion || 'unknown'} -> remote=${remoteVersion}`);
+          state.buffer = '';
+          code = await runStepStreamed('git', ['pull', '--ff-only'], repoRoot, env, channel, state);
+          if (code !== 0) {
+            channel.appendLine('[ext] ERROR: git pull --ff-only failed');
+            return 1;
+          }
+          channel.appendLine(`[ext] pulled to remote version ${remoteVersion}`);
+        } else {
+          channel.appendLine(`[ext] clone already at remote version ${remoteVersion} - skipping pull`);
+        }
+
+        // ── npm install ───────────────────────────────────────────────
+        channel.appendLine('[ext] npm install');
+        state.buffer = '';
+        code = await runStepStreamed('npm', ['install'], repoRoot, env, channel, state);
+        if (code !== 0) {
+          channel.appendLine('[ext] ERROR: npm install failed');
+          return code;
+        }
+
+        // ── npm run build ─────────────────────────────────────────────
+        channel.appendLine('[ext] npm run build');
+        state.buffer = '';
+        code = await runStepStreamed('npm', ['run', 'build'], repoRoot, env, channel, state);
+        if (code !== 0) {
+          channel.appendLine('[ext] ERROR: npm run build failed');
+          return code;
+        }
+
+        // ── Remove stale vsix ─────────────────────────────────────────
+        try { fs.unlinkSync(vsixPath); } catch { /* fine if absent */ }
+
+        // ── Package ───────────────────────────────────────────────────
+        channel.appendLine(`[ext] packaging ${vsixName}`);
+        state.buffer = '';
+        code = await runStepStreamed(
+          'npx',
+          ['--yes', '@vscode/vsce', 'package', '-o', vsixName, '--allow-missing-repository', '--skip-license'],
+          repoRoot, env, channel, state,
+        );
+        if (code !== 0) {
+          channel.appendLine(`[ext] ERROR: packaging failed`);
+          return code;
+        }
+        if (!fs.existsSync(vsixPath)) {
+          channel.appendLine(`[ext] ERROR: packaging did not produce ${vsixName}`);
+          return 1;
+        }
+
+        // ── Install via VS Code API ───────────────────────────────────
+        // Uses the `workbench.extensions.installExtension` command rather
+        // than `code --install-extension` to avoid the Electron UNC-host
+        // block and to stay in-process.
+        channel.appendLine(`[ext] installing ${vsixPath}`);
+        await vscode.commands.executeCommand(
+          'workbench.extensions.installExtension',
+          vscode.Uri.file(vsixPath),
+        );
+
+        // Read the installed version from the repo's VERSION file.
+        let version = '';
+        try {
+          version = fs.readFileSync(path.join(repoRoot, 'VERSION'), 'utf8').trim();
+        } catch { /* version stays empty, reported as 'latest' */ }
+        state.buffer += `\n[ext] Installed: ghola v${version || 'latest'}\n`;
+        channel.appendLine(`[ext] Installed: ghola v${version || 'latest'}`);
+        return 0;
+      },
+    );
+
+    if (/\bALREADY_UP_TO_DATE\b/.test(state.buffer)) {
+      await vscode.window.showInformationMessage(
+        'Ghola is already up to date.',
+        { modal: true },
+      );
+      return;
+    }
+
+    if (exitCode === 0) {
+      const installedMatch = state.buffer.match(/\[ext\]\s+Installed:\s+ghola v(\S+)/i);
+      const version = installedMatch ? installedMatch[1] : 'latest';
+      const choice = await vscode.window.showInformationMessage(
+        `Ghola updated to v${version}. Reload window to activate?`,
+        { modal: true },
+        'Reload Window',
+        'Later',
+      );
+      if (choice === 'Reload Window') {
+        void vscode.commands.executeCommand('workbench.action.reloadWindow');
+      }
+      return;
+    }
+
+    const choice = await vscode.window.showErrorMessage(
+      `Ghola update failed (exit ${exitCode}).`,
+      { modal: true },
+      'Show Log',
+    );
+    if (choice === 'Show Log') {
+      channel.show();
+    }
+  } catch (err) {
+    const choice = await vscode.window.showErrorMessage(
+      `Ghola update failed — ${(err as Error).message}`,
+      { modal: true },
+      'Show Log',
+    );
+    if (choice === 'Show Log') {
+      channel.show();
+    }
+  } finally {
+    updating = false;
+  }
+}
+
+/**
+ * Run the reinstall pipeline: resolve the repo root, verify the script exists,
+ * then stream `scripts/reinstall.sh` (under a `bash -lc` login shell so the
+ * user's interactive PATH — nvm node/npm, the `code` CLI — is inherited) into
+ * an OutputChannel while a notification progress spinner is shown. Parses the
+ * accumulated output for the up-to-date / installed / failure markers and
+ * surfaces a modal prompt for each outcome.
+ *
+ * OS-AMORPHIC DISPATCH:
+ *   1. Resolve the repo root (local first, then WSL fallback).
+ *   2. If the repo is on the local Windows filesystem (drive-letter path),
+ *      run the build pipeline natively — no bash needed.
+ *   3. If the repo is on a POSIX filesystem (WSL/Linux/macOS), run via
+ *      `bash -lc` as before.
+ *   4. If no local repo is found on win32, fall back to WSL delegation
+ *      (the existing `resolveWslDelegation` + `runUpdateViaWsl` path).
+ *   5. On non-win32 hosts, WSL delegation is never attempted.
+ */
+async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
+  if (updating) {
+    vscode.window.showInformationMessage('Update already in progress.');
+    return;
+  }
+
+  const repoRoot = resolveRepoRoot(context);
+
+  // ── Win32 with a local Windows-native checkout ──────────────────────────
+  // Run the build pipeline natively: npm, npx, and the VS Code extension API
+  // are all available without bash.
+  if (repoRoot && os.platform() === 'win32' && isWindowsLocalPath(repoRoot)) {
+    await runUpdateNativeWindows(context, repoRoot);
+    return;
+  }
+
+  // ── POSIX host (WSL/Linux/macOS) with a local checkout ──────────────────
+  // Run via `bash -lc` exactly as before.
+  if (repoRoot) {
+    await runUpdateViaBash(context, repoRoot);
+    return;
+  }
+
+  // ── Win32 with no local checkout: try WSL delegation ────────────────────
+  // `resolveWslDelegation` returns the POSIX path from `ghola.repoPath` when
+  // it looks like a WSL-side clone. Non-win32 hosts never reach this.
+  if (os.platform() === 'win32') {
+    const wslRepoPath = resolveWslDelegation();
+    if (wslRepoPath) {
+      await runUpdateViaWsl(context, wslRepoPath);
+      return;
+    }
+  }
+
+  const choice = await vscode.window.showErrorMessage(
+    'Ghola: could not locate a Project-Ghola git checkout to update from. Open your clone as a workspace folder, or set "ghola.repoPath" to its absolute path.',
+    'Open Settings',
+  );
+  if (choice === 'Open Settings') {
+    void vscode.commands.executeCommand('workbench.action.openSettings', 'ghola.repoPath');
+  }
+}
+
+/**
+ * Run the reinstall pipeline via `bash -lc` on a POSIX host. This is the
+ * original local-update flow, extracted from `runUpdate` so the dispatch can
+ * route to it or to the native-Windows pipeline.
+ */
+async function runUpdateViaBash(
+  context: vscode.ExtensionContext,
+  repoRoot: string,
+): Promise<void> {
+  const scriptPath = path.join(repoRoot, 'scripts', 'reinstall.sh');
+  if (!fs.existsSync(scriptPath)) {
+    vscode.window.showErrorMessage(
+      `Ghola: update script not found at ${scriptPath}.`,
+    );
+    return;
+  }
+
+  const installedVersion = readInstalledVersion(context);
 
   updating = true;
   const channel = vscode.window.createOutputChannel('Ghola Update');
@@ -192,7 +512,7 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
           // shell sources the user's profile so those resolve.
           const child = spawn('bash', ['-lc', `bash ${shellQuote(scriptPath)}`], {
             cwd: repoRoot,
-            env: { ...process.env, GHOLA_INSTALLED_VERSION: installedVersion ?? '' },
+            env: { ...process.env, GHOLA_INSTALLED_VERSION: installedVersion },
           });
           child.stdout.on('data', (chunk: Buffer) => {
             const text = chunk.toString();
@@ -254,22 +574,19 @@ async function runUpdate(context: vscode.ExtensionContext): Promise<void> {
   }
 }
 
-// ─── WIN32 -> WSL DELEGATED UPDATE ──────────────────────────────────────────
+// ─── WIN32 -> WSL DELEGATED UPDATE (FALLBACK) ─────────────────────────────
 //
-// WHY THIS EXISTS: `resolveRepoRoot` needs a Project-Ghola checkout on the
-// machine the extension host runs on, and on the maintainer's native-Windows
-// host there is none — CLAUDE.md records the WSL tree as deliberately the ONLY
-// copy. So the command worked on WSL and could not work on Windows at all.
+// WHEN THIS IS REACHED: `resolveRepoRoot` returned null (no local checkout
+// found, even after `toNativeHostPath` translation) AND the host is win32.
+// `resolveWslDelegation` checks whether `ghola.repoPath` names a POSIX
+// absolute path — evidence that the clone lives inside WSL — and if so, the
+// whole build pipeline is delegated to a WSL distro.
 //
-// THE SIGNAL, NOT A NEW SETTING: on that host `ghola.repoPath` already holds
-// `/home/<user>/projects/Project-Ghola` — a POSIX absolute path on a win32
-// host, which today is simply broken (`fs.existsSync` fails and the command
-// errors). No Windows path can look like that, so the shape is unambiguous
-// evidence that the clone is inside WSL, and the operator's existing (until now
-// useless) value becomes the input that makes this work. No new configuration.
-//
-// EVERYTHING BELOW IS win32-ONLY and is reached only when `resolveRepoRoot`
-// already returned null. The WSL/Linux flow in `runUpdate` above is untouched.
+// This is now the LAST resort on win32. The dispatch order in `runUpdate` is:
+//   1. Local Windows-native checkout -> `runUpdateNativeWindows`
+//   2. Local POSIX checkout (can only happen on non-win32) -> `runUpdateViaBash`
+//   3. WSL delegation (win32 only, POSIX `repoPath`) -> `runUpdateViaWsl`
+//   4. Error
 
 /**
  * Is this a win32 host whose `ghola.repoPath` names a POSIX absolute path? If
@@ -479,25 +796,8 @@ function buildWslUpdateScript(
   ].join('\n');
 }
 
-/**
- * Read the INSTALLED extension's version, for the script's
- * installed-vs-remote up-to-date gate.
- *
- * DELIBERATE MIRROR of the inline read in `runUpdate`, not an oversight: the
- * WSL/Linux flow must stay byte-identical, so nothing was hoisted out of it.
- * Keep the two in step.
- */
-function readInstalledVersionForWsl(context: vscode.ExtensionContext): string {
-  let installedVersion: string | undefined;
-  try {
-    installedVersion = fs
-      .readFileSync(path.join(context.extensionPath, 'VERSION'), 'utf8')
-      .trim();
-  } catch {
-    installedVersion = context.extension?.packageJSON?.version;
-  }
-  return installedVersion ?? '';
-}
+// `readInstalledVersionForWsl` is retired: all three update flows (bash,
+// native-Windows, WSL) now use the shared `readInstalledVersion` above.
 
 /**
  * The delegated update: discover the distro, run the repo's own
@@ -550,7 +850,7 @@ async function runUpdateViaWsl(
           repoPosixPath,
           `${repoPosixPath}/scripts/reinstall.sh`,
           stageDirWin,
-          readInstalledVersionForWsl(context),
+          readInstalledVersion(context),
         );
         return await new Promise<number>((resolve, reject) => {
           // `bash -lc` LOGIN shell for the same reason as the local flow: the

@@ -1,0 +1,62 @@
+{
+  "id": "tool.terminal",
+  "name": "Terminal Dispatch",
+  "version": "0.1.0",
+  "description": "Create and interact with bash, PowerShell, and other shell terminals from within a session. Supports command execution with output capture, human-in-the-loop intervention, and concurrent terminal management.",
+  "author": "ghola",
+  "category": "utility",
+  "kind": "capability",
+  "trigger": "user-request",
+  "tier": "recommended",
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "terminal.md" }
+    ],
+    "settings": {
+      "allowedShells": {
+        "type": "keyValue",
+        "label": "Allowed Shells",
+        "keyLabel": "Shell",
+        "default": {
+          "bash": { "value": "bash", "enabled": true, "description": "Bash (default on Linux/WSL/macOS)" },
+          "powershell": { "value": "powershell", "enabled": true, "description": "PowerShell (Windows PowerShell 5.x)" },
+          "pwsh": { "value": "pwsh", "enabled": true, "description": "PowerShell Core (cross-platform 7.x)" }
+        },
+        "optionalEnabled": true,
+        "fullWidth": true
+      },
+      "maxConcurrentTerminals": {
+        "type": "number",
+        "label": "Max Concurrent Terminals",
+        "default": 3,
+        "min": 1,
+        "max": 8
+      },
+      "defaultShell": {
+        "type": "enum",
+        "label": "Default Shell",
+        "default": "bash",
+        "options": ["bash", "powershell", "pwsh", "zsh", "cmd", "fish"]
+      },
+      "autoDisposeOnSessionEnd": {
+        "type": "boolean",
+        "label": "Auto-dispose terminals when session ends",
+        "default": true
+      },
+      "commandTimeoutMs": {
+        "type": "number",
+        "label": "Default Command Timeout (ms)",
+        "default": 120000,
+        "min": 5000,
+        "max": 600000
+      },
+      "humanInterventionTimeoutMs": {
+        "type": "number",
+        "label": "Human Intervention Timeout (ms)",
+        "default": 300000,
+        "min": 30000,
+        "max": 900000
+      }
+    }
+  }
+}

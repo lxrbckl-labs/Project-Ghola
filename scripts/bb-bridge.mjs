@@ -179,6 +179,7 @@ const RETRYABLE_ROUTES = new Set([
   '/get-comments',
   '/find-pr',
   '/list-comments',
+  '/terminal/list',
 ]);
 
 // Per-attempt request timeouts, in THREE READ TIERS plus the mutation bound.
@@ -203,6 +204,12 @@ const RETRYABLE_ROUTES = new Set([
 // RETRY_BUDGET_READ_TIMEOUT_MS.
 const READ_TIMEOUT_MS = 3000;
 const MUTATION_TIMEOUT_MS = 30000;
+
+// /terminal/exec can block for up to humanInterventionTimeoutMs (default 300s,
+// max 900s) when --wait-for-human is set. The connection stays open the entire
+// time, so the client timeout must be at least as generous. 960s covers the
+// manifest's maximum humanInterventionTimeoutMs (900s) plus transport slack.
+const TERMINAL_EXEC_TIMEOUT_MS = 960000;
 
 // ─── Host-side worst case, mirrored ─────────────────────────────────────
 //
@@ -359,6 +366,11 @@ const MAX_TIMEOUT_MS = 600000;
 // warns (so a typo is not silently ignored) and falls back rather than failing
 // the call.
 function timeoutForRoute(routePath) {
+  // /terminal/exec is a special case: it can block for the duration of
+  // human-intervention (up to 900s), far exceeding the standard mutation
+  // deadline. Handle it before the retryable check.
+  if (routePath === '/terminal/exec') return TERMINAL_EXEC_TIMEOUT_MS;
+
   const isRead = RETRYABLE_ROUTES.has(routePath);
   if (!isRead) {
     // Mutation: fixed, non-overridable. Deliberately returns BEFORE consulting
@@ -1136,6 +1148,84 @@ async function cmdPostComment(flags) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Terminal subcommands
+// ─────────────────────────────────────────────────────────────────────────
+
+// Create a new managed terminal. Prints the terminalId on success.
+async function cmdTerminalCreate(flags) {
+  const usage = 'bb-bridge terminal-create --name <name> [--shell <shell>] [--cwd <path>]';
+  const name = requireFlag(flags, 'name', usage);
+  const payload = { name };
+  if (typeof flags.shell === 'string') payload.shell = flags.shell;
+  if (typeof flags.cwd === 'string') payload.cwd = flags.cwd;
+  const parsed = await callBridge('/terminal/create', payload);
+  printJson(parsed);
+  if (parsed && parsed.status === 'ok') {
+    process.exit(0);
+  }
+  console.error(`bb-bridge: /terminal/create failed: ${parsed && parsed.message || 'unknown error'}`);
+  process.exit(1);
+}
+
+// Execute a command in a managed terminal. This can block for a long time
+// (up to humanInterventionTimeoutMs) when --wait-for-human is set, so the
+// fetch timeout is set generously. NOT retryable — it is a mutation /
+// long-running command.
+async function cmdTerminalExec(flags) {
+  const usage = 'bb-bridge terminal-exec --id <terminalId> --command <command> [--wait-for-human] [--timeout <ms>]';
+  const terminalId = requireFlag(flags, 'id', usage);
+  const command = requireFlag(flags, 'command', usage);
+  const payload = { terminalId, command };
+  if (flags['wait-for-human'] === true) payload.waitForHuman = true;
+  const timeoutMs = optionalNumberFlag(flags, 'timeout', usage);
+  if (timeoutMs !== undefined) payload.timeoutMs = timeoutMs;
+  const parsed = await callBridge('/terminal/exec', payload);
+  printJson(parsed);
+  if (parsed && parsed.status === 'ok') {
+    process.exit(0);
+  }
+  console.error(`bb-bridge: /terminal/exec failed: ${parsed && parsed.message || 'unknown error'}`);
+  process.exit(1);
+}
+
+// List all managed terminals and their state.
+async function cmdTerminalList() {
+  const parsed = await callBridge('/terminal/list', {});
+  printJson(parsed);
+  if (parsed && Array.isArray(parsed.terminals)) {
+    process.exit(0);
+  }
+  console.error('bb-bridge: /terminal/list did not return a terminals array');
+  process.exit(1);
+}
+
+// Dispose (close) a managed terminal by id.
+async function cmdTerminalDispose(flags) {
+  const usage = 'bb-bridge terminal-dispose --id <terminalId>';
+  const terminalId = requireFlag(flags, 'id', usage);
+  const parsed = await callBridge('/terminal/dispose', { terminalId });
+  printJson(parsed);
+  if (parsed && parsed.status === 'ok') {
+    process.exit(0);
+  }
+  console.error(`bb-bridge: /terminal/dispose failed: ${parsed && parsed.message || 'unknown error'}`);
+  process.exit(1);
+}
+
+// Send a signal to a managed terminal (e.g. to acknowledge human intervention).
+async function cmdTerminalSignal(flags) {
+  const usage = 'bb-bridge terminal-signal --id <terminalId>';
+  const terminalId = requireFlag(flags, 'id', usage);
+  const parsed = await callBridge('/terminal/signal', { terminalId });
+  printJson(parsed);
+  if (parsed && parsed.status === 'ok') {
+    process.exit(0);
+  }
+  console.error(`bb-bridge: /terminal/signal failed: ${parsed && parsed.message || 'unknown error'}`);
+  process.exit(1);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Entry point
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -1176,6 +1266,19 @@ Usage:
                                              calls neither Jira nor Bitbucket —
                                              use it to tell "bridge is dead"
                                              apart from "Atlassian said no")
+  node scripts/bb-bridge.mjs terminal-create --name <name> [--shell <shell>] [--cwd <path>]
+                                            (create a managed terminal)
+  node scripts/bb-bridge.mjs terminal-exec   --id <terminalId> --command <command>
+                                             [--wait-for-human] [--timeout <ms>]
+                                            (execute a command; can block for a
+                                             long time with --wait-for-human)
+  node scripts/bb-bridge.mjs terminal-list
+                                            (list managed terminals)
+  node scripts/bb-bridge.mjs terminal-dispose --id <terminalId>
+                                            (close a managed terminal)
+  node scripts/bb-bridge.mjs terminal-signal  --id <terminalId>
+                                            (signal a terminal, e.g. acknowledge
+                                             human intervention)
 
 Exit codes: 0 ok, 1 bridge-level failure, 2 usage error (env/args).
 
@@ -1230,6 +1333,11 @@ async function main() {
     'get-comments': cmdGetComments,
     'post-comment': cmdPostComment,
     health: cmdHealth,
+    'terminal-create': cmdTerminalCreate,
+    'terminal-exec': cmdTerminalExec,
+    'terminal-list': cmdTerminalList,
+    'terminal-dispose': cmdTerminalDispose,
+    'terminal-signal': cmdTerminalSignal,
   };
   const handler = routes[subcommand];
   if (!handler) {
