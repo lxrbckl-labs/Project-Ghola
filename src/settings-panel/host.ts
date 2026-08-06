@@ -7,6 +7,7 @@ import { discoverAppPaths } from '../integration/support-discovery';
 import { discoverObsidianVault } from '../integration/vault-discovery';
 import { validateManifest } from '../manifest/validator';
 import type { AtlassianBridge } from '../extension';
+import type { BitbucketPrClient } from '../integration/bitbucket-pr-client';
 import type { ModuleLoader } from '../modules/loader';
 import type { PromptComposer } from '../prompts/composer';
 import { syncAliasFile, validateAlias, type CliAlias } from '../session/alias-sync';
@@ -142,6 +143,11 @@ export class SettingsPanel implements vscode.Disposable {
      * mode / War Mode status-bar item) to re-pull updated settings.
      */
     private readonly moduleSettingsEmitter: vscode.EventEmitter<void>,
+    /**
+     * Bitbucket PR client, used to search workspace members for the reviewer
+     * picker. Undefined when the Atlassian integration is not configured.
+     */
+    private readonly bitbucketPrClient?: BitbucketPrClient,
     private readonly logger?: vscode.OutputChannel,
   ) {
     this.disposables.push(
@@ -339,7 +345,7 @@ export class SettingsPanel implements vscode.Disposable {
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `script-src 'nonce-${nonce}'`,
       `font-src ${webview.cspSource}`,
-      `img-src ${webview.cspSource} data:`,
+      `img-src ${webview.cspSource} data: https://*.bitbucket.org`,
     ].join('; ');
 
     this.panel.webview.html = `<!DOCTYPE html>
@@ -592,6 +598,9 @@ export class SettingsPanel implements vscode.Disposable {
         break;
       case 'gholaResolveEscalation':
         await this.requestGholaEscalationResolve(msg.id, msg.subject, msg.decision);
+        break;
+      case 'searchWorkspaceMembers':
+        await this.searchWorkspaceMembers(msg.query);
         break;
       default:
         this.logger?.appendLine(`[panel] unknown message: ${JSON.stringify(msg)}`);
@@ -2006,6 +2015,53 @@ export class SettingsPanel implements vscode.Disposable {
       );
     }
     await this.postWarRoom();
+  }
+
+  /**
+   * Search Bitbucket workspace members and post the results to the webview.
+   * Delegates to `BitbucketPrClient.searchWorkspaceMembers`; when the client
+   * is unavailable (Atlassian integration not configured), posts an error.
+   */
+  private async searchWorkspaceMembers(query: string): Promise<void> {
+    if (!this.bitbucketPrClient) {
+      this.post({
+        type: 'workspaceMembersResult',
+        members: [],
+        error: 'Bitbucket integration not configured',
+      });
+      return;
+    }
+    try {
+      const result = await this.bitbucketPrClient.searchWorkspaceMembers({
+        workspace: '',
+        query,
+      });
+      if (result.status === 'ok' && result.members) {
+        this.post({
+          type: 'workspaceMembersResult',
+          members: result.members.map((m) => ({
+            accountId: m.accountId,
+            displayName: m.displayName,
+            avatarUrl: m.avatarUrl,
+          })),
+        });
+      } else {
+        this.post({
+          type: 'workspaceMembersResult',
+          members: [],
+          error: result.message ?? `Workspace member search failed (${result.status})`,
+        });
+      }
+    } catch (err) {
+      this.logger?.appendLine(
+        `[panel] searchWorkspaceMembers: ${(err as Error).message}`,
+      );
+      this.post({
+        type: 'workspaceMembersResult',
+        members: [],
+        error: (err as Error).message,
+      });
+    }
   }
 
   /**

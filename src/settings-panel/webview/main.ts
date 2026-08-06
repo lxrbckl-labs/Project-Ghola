@@ -358,6 +358,18 @@ interface UIState {
    * 30. Adjustable via the refresh-row rate picker.
    */
   warRoomAutoRefreshSeconds: number;
+  /**
+   * Workspace member search results for the reviewer picker. Populated by
+   * 'workspaceMembersResult' messages from the host. Empty array when no
+   * search has been performed or when the query returned no matches.
+   */
+  reviewerSearchResults: Array<{ accountId: string; displayName: string; avatarUrl: string }>;
+  /** True while a workspace member search is in flight. */
+  reviewerSearchLoading: boolean;
+  /** Error string from the last workspace member search, if any. */
+  reviewerSearchError?: string;
+  /** True when the reviewer search dropdown should be visible. */
+  reviewerDropdownOpen: boolean;
 }
 
 const state: UIState = {
@@ -408,6 +420,10 @@ const state: UIState = {
   warRoomSelectedSubject: null,
   warRoomAutoRefresh: false,
   warRoomAutoRefreshSeconds: 30,
+  reviewerSearchResults: [],
+  reviewerSearchLoading: false,
+  reviewerSearchError: undefined,
+  reviewerDropdownOpen: false,
 };
 
 /**
@@ -416,6 +432,12 @@ const state: UIState = {
  * `null` when auto-refresh is off or the War Room tab is not active.
  */
 let warRoomAutoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Debounce timer for the reviewer search input. Held at module scope since it
+ * is a runtime timer, not serializable UI state.
+ */
+let reviewerSearchDebounce: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * (Re)apply the War Room auto-refresh timer to match current state. Always
@@ -522,6 +544,16 @@ function init(): void {
     }
     if (raw.type === 'atlassianValidationResult') {
       handleAtlassianValidationResult(raw as unknown as AtlassianValidationResultMessage);
+      return;
+    }
+    if (raw.type === 'workspaceMembersResult') {
+      handleWorkspaceMembersResult(
+        raw as unknown as {
+          type: 'workspaceMembersResult';
+          members: Array<{ accountId: string; displayName: string; avatarUrl: string }>;
+          error?: string;
+        },
+      );
       return;
     }
     handleMessage(ev.data as HostToWebviewMessage);
@@ -817,6 +849,35 @@ function handleAtlassianValidationResult(msg: AtlassianValidationResultMessage):
       return;
     }
     render();
+  }
+}
+
+/**
+ * Handle workspace member search results from the host. Updates the reviewer
+ * search state and re-renders the dropdown in place (without a full render)
+ * when the `tool.pr-prep` module detail view is open.
+ */
+function handleWorkspaceMembersResult(msg: {
+  type: 'workspaceMembersResult';
+  members: Array<{ accountId: string; displayName: string; avatarUrl: string }>;
+  error?: string;
+}): void {
+  state.reviewerSearchResults = msg.members ?? [];
+  state.reviewerSearchLoading = false;
+  state.reviewerSearchError = msg.error;
+  state.reviewerDropdownOpen = state.reviewerSearchResults.length > 0 || !!msg.error;
+
+  // Re-render the dropdown in place to avoid a full render cycle.
+  const dropdown = document.getElementById('reviewer-search-dropdown');
+  if (dropdown) {
+    const fresh = buildReviewerDropdown();
+    fresh.id = 'reviewer-search-dropdown';
+    dropdown.replaceWith(fresh);
+  }
+  // Also update the loading indicator.
+  const indicator = document.getElementById('reviewer-search-loading');
+  if (indicator) {
+    indicator.style.display = 'none';
   }
 }
 
@@ -2582,6 +2643,12 @@ function renderModuleSettingField(
 
   if (field.type === 'keyValue') {
     appendKeyValueEditor(wrap, head, moduleId, settingKey, field, current);
+    // Append reviewer search component for the tool.pr-prep defaultReviewers
+    // field. The search queries Bitbucket workspace members via the host and
+    // presents an avatar-enriched dropdown for selecting reviewers.
+    if (moduleId === 'tool.pr-prep' && settingKey === 'defaultReviewers') {
+      wrap.appendChild(renderReviewerSearch());
+    }
     if (field.description) {
       wrap.appendChild(textEl('div', field.description, 'setting-desc'));
     }
@@ -6153,6 +6220,226 @@ function renderField(
     wrap.appendChild(inp);
   }
   return wrap;
+}
+
+// ─── Reviewer search component (tool.pr-prep defaultReviewers) ─────────
+
+/**
+ * Build the reviewer search dropdown content based on current state. Returns
+ * a `<div>` that replaces the existing dropdown element in place.
+ */
+function buildReviewerDropdown(): HTMLElement {
+  const dropdown = el('div', { class: 'reviewer-dropdown' });
+  if (!state.reviewerDropdownOpen) {
+    dropdown.style.display = 'none';
+    return dropdown;
+  }
+  dropdown.style.display = 'block';
+
+  if (state.reviewerSearchLoading) {
+    const loading = textEl('div', 'Searching...', 'reviewer-dropdown-status');
+    dropdown.appendChild(loading);
+    return dropdown;
+  }
+
+  if (state.reviewerSearchError) {
+    const errMsg = textEl('div', state.reviewerSearchError, 'reviewer-dropdown-status reviewer-dropdown-error');
+    dropdown.appendChild(errMsg);
+    return dropdown;
+  }
+
+  if (state.reviewerSearchResults.length === 0) {
+    const empty = textEl('div', 'No results', 'reviewer-dropdown-status');
+    dropdown.appendChild(empty);
+    return dropdown;
+  }
+
+  // Read the current defaultReviewers draft to filter out already-selected members.
+  const key = scopedKey('tool.pr-prep', 'defaultReviewers');
+  const currentDraft = state.keyValueDrafts[key];
+  const selectedIds = new Set<string>();
+  if (currentDraft && typeof currentDraft === 'object') {
+    for (const v of Object.values(currentDraft)) {
+      // Rich shape: { value: accountId, enabled: boolean }
+      // Plain shape: accountId string
+      const id = typeof v === 'string' ? v : (typeof v === 'object' && v !== null ? (v as { value?: string }).value ?? '' : '');
+      if (id) selectedIds.add(id);
+    }
+  }
+
+  const shown = state.reviewerSearchResults
+    .filter((m) => !selectedIds.has(m.accountId))
+    .slice(0, 10);
+
+  if (shown.length === 0) {
+    const allSelected = textEl('div', 'All results already selected', 'reviewer-dropdown-status');
+    dropdown.appendChild(allSelected);
+    return dropdown;
+  }
+
+  for (const member of shown) {
+    const item = el('div', { class: 'reviewer-dropdown-item' });
+    item.setAttribute('tabindex', '0');
+    const avatar = el('img', {
+      class: 'reviewer-avatar',
+      src: member.avatarUrl,
+      alt: '',
+    }) as HTMLImageElement;
+    avatar.addEventListener('error', () => {
+      avatar.style.display = 'none';
+    });
+    const name = textEl('span', member.displayName, 'reviewer-dropdown-name');
+    item.appendChild(avatar);
+    item.appendChild(name);
+    item.addEventListener('click', () => {
+      addReviewerFromSearch(member);
+    });
+    item.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        addReviewerFromSearch(member);
+      }
+    });
+    dropdown.appendChild(item);
+  }
+
+  return dropdown;
+}
+
+/**
+ * Add a member selected from the reviewer search dropdown to the
+ * `defaultReviewers` keyValue setting. The key is the display name and the
+ * value is the account ID.
+ */
+function addReviewerFromSearch(member: { accountId: string; displayName: string; avatarUrl: string }): void {
+  const key = scopedKey('tool.pr-prep', 'defaultReviewers');
+
+  // Seed the draft if it does not exist yet (mirrors appendKeyValueEditor logic).
+  if (state.keyValueDrafts[key] === undefined) {
+    const current = state.settingsValues[key];
+    const seed: Record<string, { value: string; enabled: boolean }> = {};
+    if (current && typeof current === 'object' && !Array.isArray(current)) {
+      for (const [k, v] of Object.entries(current as Record<string, unknown>)) {
+        if (v && typeof v === 'object' && !Array.isArray(v)) {
+          const obj = v as { value?: unknown; enabled?: unknown };
+          seed[k] = {
+            value: typeof obj.value === 'string' ? obj.value : '',
+            enabled: obj.enabled !== false,
+          };
+        } else if (typeof v === 'string') {
+          seed[k] = { value: v, enabled: true };
+        }
+      }
+    }
+    state.keyValueDrafts[key] = seed;
+  }
+
+  const draft = state.keyValueDrafts[key] as Record<string, { value: string; enabled: boolean }>;
+
+  // Check for duplicates by account ID.
+  for (const v of Object.values(draft)) {
+    if (v.value === member.accountId) return;
+  }
+
+  draft[member.displayName] = { value: member.accountId, enabled: true };
+  state.settingsValues[key] = { ...draft };
+  persistSettings(key);
+
+  // Close dropdown and clear search.
+  state.reviewerDropdownOpen = false;
+  state.reviewerSearchResults = [];
+  render();
+}
+
+/**
+ * Render the reviewer search component: a search input with a dropdown of
+ * results. Appended below the `defaultReviewers` kv-table inside the
+ * `tool.pr-prep` module detail view.
+ */
+function renderReviewerSearch(): HTMLElement {
+  const container = el('div', { class: 'reviewer-search-container' });
+
+  const inputRow = el('div', { class: 'reviewer-search-input-row' });
+  const input = el('input', {
+    class: 'setting-input reviewer-search-input',
+    type: 'text',
+    placeholder: 'Search workspace members...',
+  }) as HTMLInputElement;
+
+  input.addEventListener('input', () => {
+    const query = input.value.trim();
+    if (reviewerSearchDebounce !== null) {
+      clearTimeout(reviewerSearchDebounce);
+      reviewerSearchDebounce = null;
+    }
+    if (query.length < 2) {
+      state.reviewerSearchResults = [];
+      state.reviewerSearchLoading = false;
+      state.reviewerSearchError = undefined;
+      state.reviewerDropdownOpen = false;
+      const dd = document.getElementById('reviewer-search-dropdown');
+      if (dd) {
+        const fresh = buildReviewerDropdown();
+        fresh.id = 'reviewer-search-dropdown';
+        dd.replaceWith(fresh);
+      }
+      return;
+    }
+    state.reviewerSearchLoading = true;
+    state.reviewerDropdownOpen = true;
+    state.reviewerSearchError = undefined;
+    // Show the loading state immediately.
+    const dd = document.getElementById('reviewer-search-dropdown');
+    if (dd) {
+      const fresh = buildReviewerDropdown();
+      fresh.id = 'reviewer-search-dropdown';
+      dd.replaceWith(fresh);
+    }
+    reviewerSearchDebounce = setTimeout(() => {
+      vscode.postMessage({
+        type: 'searchWorkspaceMembers',
+        query,
+      } as unknown as WebviewToHostMessage);
+    }, 300);
+  });
+
+  // Close dropdown on Escape.
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') {
+      state.reviewerDropdownOpen = false;
+      state.reviewerSearchResults = [];
+      state.reviewerSearchLoading = false;
+      const dd = document.getElementById('reviewer-search-dropdown');
+      if (dd) {
+        const fresh = buildReviewerDropdown();
+        fresh.id = 'reviewer-search-dropdown';
+        dd.replaceWith(fresh);
+      }
+    }
+  });
+
+  inputRow.appendChild(input);
+  container.appendChild(inputRow);
+
+  // Dropdown — starts hidden.
+  const dropdown = buildReviewerDropdown();
+  dropdown.id = 'reviewer-search-dropdown';
+  container.appendChild(dropdown);
+
+  // Close dropdown when clicking outside.
+  document.addEventListener('click', (ev) => {
+    if (state.reviewerDropdownOpen && !container.contains(ev.target as Node)) {
+      state.reviewerDropdownOpen = false;
+      const dd = document.getElementById('reviewer-search-dropdown');
+      if (dd) {
+        const fresh = buildReviewerDropdown();
+        fresh.id = 'reviewer-search-dropdown';
+        dd.replaceWith(fresh);
+      }
+    }
+  });
+
+  return container;
 }
 
 function scopedKey(moduleId: string, fieldKey: string): string {

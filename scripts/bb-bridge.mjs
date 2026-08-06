@@ -50,6 +50,7 @@
 //        enableJiraCommentWrite gate, which the extension HOST enforces — with
 //        it off the capability is withheld and this verb exits 1 with a
 //        `capability-disabled` refusal, having sent nothing to Jira)
+//   node scripts/bb-bridge.mjs workspace-members [--workspace <slug>] [--query <search>] [--json]
 //   node scripts/bb-bridge.mjs health
 //       (liveness only — authenticated, but calls neither Jira nor Bitbucket)
 //
@@ -180,6 +181,7 @@ const RETRYABLE_ROUTES = new Set([
   '/find-pr',
   '/list-comments',
   '/terminal/list',
+  '/workspace-members',
 ]);
 
 // Per-attempt request timeouts, in THREE READ TIERS plus the mutation bound.
@@ -341,7 +343,7 @@ const RETRY_BUDGET_READ_TIMEOUT_MS = 2 * HOST_REQUEST_CEILING_MS + TRANSPORT_SLA
 // ALSO paginates it belongs in SLOW_READ_ROUTES instead, whose bound already
 // includes one final page running its full retry budget. Only a route that
 // touches neither Atlassian product belongs in the fast tier.
-const RETRY_BUDGET_READ_ROUTES = new Set(['/find-pr', '/get-ticket']);
+const RETRY_BUDGET_READ_ROUTES = new Set(['/find-pr', '/get-ticket', '/workspace-members']);
 
 // Escape hatch for a pathologically large PR or a slow link. Clamped to a sane
 // range so a typo like `5` (ms) cannot make every call fail instantly. Not a
@@ -1147,6 +1149,31 @@ async function cmdPostComment(flags) {
   process.exit(1);
 }
 
+// Workspace member search. Pure read — retryable. Default output: one line per
+// member as `<displayName> (<accountId>)`. --json prints the raw bridge response.
+// --workspace is optional: the bridge defaults to the configured bitbucketWorkspace.
+async function cmdWorkspaceMembers(flags) {
+  const usage = 'bb-bridge workspace-members [--workspace <slug>] [--query <search>] [--json]';
+  const payload = {};
+  if (typeof flags.workspace === 'string') payload.workspace = flags.workspace;
+  if (typeof flags.query === 'string') payload.query = flags.query;
+  const parsed = await callBridge('/workspace-members', payload);
+  if (flags.json === true) {
+    printJson(parsed);
+  } else if (parsed && parsed.status === 'ok' && Array.isArray(parsed.members)) {
+    for (const m of parsed.members) {
+      console.log(`${m.displayName} (${m.accountId})`);
+    }
+  } else {
+    printJson(parsed);
+  }
+  if (parsed && parsed.status === 'ok') {
+    process.exit(0);
+  }
+  console.error(`bb-bridge: /workspace-members did not return status 'ok'`);
+  process.exit(1);
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Terminal subcommands
 // ─────────────────────────────────────────────────────────────────────────
@@ -1261,6 +1288,10 @@ Usage:
                                              Write" setting to be on, plus
                                              operator approval of the exact
                                              text; never auto-retry)
+  node scripts/bb-bridge.mjs workspace-members [--workspace <slug>] [--query <search>] [--json]
+                                            (list workspace members; defaults to
+                                             configured bitbucketWorkspace;
+                                             --json prints raw bridge response)
   node scripts/bb-bridge.mjs health
                                             (liveness only: authenticated, but
                                              calls neither Jira nor Bitbucket —
@@ -1332,6 +1363,7 @@ async function main() {
     'get-ticket': cmdGetTicket,
     'get-comments': cmdGetComments,
     'post-comment': cmdPostComment,
+    'workspace-members': cmdWorkspaceMembers,
     health: cmdHealth,
     'terminal-create': cmdTerminalCreate,
     'terminal-exec': cmdTerminalExec,

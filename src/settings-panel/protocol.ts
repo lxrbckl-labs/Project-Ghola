@@ -559,7 +559,9 @@ export type WebviewToHostMessage =
    * cooperative request: the TPM agent (out of band) polls the file, resolves
    * the escalation, and acknowledges it.
    */
-  | { type: 'gholaResolveEscalation'; id: string; subject: string; decision: 'approve' | 'deny' };
+  | { type: 'gholaResolveEscalation'; id: string; subject: string; decision: 'approve' | 'deny' }
+  /** Search Bitbucket workspace members for the reviewer picker. */
+  | { type: 'searchWorkspaceMembers'; query: string };
 
 // Host → webview
 export type HostToWebviewMessage =
@@ -667,4 +669,10 @@ export type HostToWebviewMessage =
   /** Ask the webview to reveal a named section/tab (e.g. 'warroom'). */
   | { type: 'revealSection'; section: string }
   /** Reply to `requestGholaDetail` — the full per-ghola detail payload. */
-  | { type: 'gholaDetail'; data: GholaDetail };
+  | { type: 'gholaDetail'; data: GholaDetail }
+  /** Reply to `searchWorkspaceMembers` — matching Bitbucket workspace members. */
+  | {
+      type: 'workspaceMembersResult';
+      members: Array<{ accountId: string; displayName: string; avatarUrl: string }>;
+      error?: string;
+    };

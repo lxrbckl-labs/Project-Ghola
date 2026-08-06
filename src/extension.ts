@@ -1272,6 +1272,7 @@ export function activate(context: vscode.ExtensionContext): void {
     feedbackFilePath,
     atlassianBridge,
     moduleSettingsEmitter,
+    bitbucketPrClient,
     logger,
   );
   context.subscriptions.push(panel);

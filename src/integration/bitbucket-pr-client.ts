@@ -254,6 +254,18 @@ export interface PrCreateResult {
   retryAfter?: string;
 }
 
+export interface WorkspaceMember {
+  accountId: string;
+  displayName: string;
+  avatarUrl: string;
+}
+
+export interface WorkspaceMemberResult {
+  status: 'ok' | 'unauthorized' | 'forbidden' | 'not-found' | 'rate-limited' | 'network-error' | 'unknown-error';
+  members?: WorkspaceMember[];
+  message?: string;
+}
+
 // ─── Minimal slices of the Bitbucket response shapes we read ──────────────
 
 interface BitbucketUser {
@@ -309,6 +321,21 @@ interface BitbucketPullRequest {
 interface BitbucketCreatedPullRequest {
   id?: number;
   links?: { html?: { href?: string } };
+}
+
+/** Minimal slice of `GET /workspaces/{workspace}/members` we read for the
+ *  workspace member search. Each entry has a `user` with `account_id`,
+ *  `display_name`, and `links.avatar.href`. */
+interface BitbucketWorkspaceMember {
+  user?: {
+    account_id?: string;
+    display_name?: string;
+    links?: { avatar?: { href?: string } };
+  };
+}
+
+interface BitbucketWorkspaceMemberListResponse {
+  values?: BitbucketWorkspaceMember[];
 }
 
 /** Bitbucket's documented error envelope: `{ "type": "error", "error": {
@@ -759,6 +786,56 @@ export class BitbucketPrClient {
       const prId = typeof body?.id === 'number' ? body.id : undefined;
       const href = typeof body?.links?.html?.href === 'string' ? body.links.html.href : undefined;
       return { status: 'ok', prId, url: href };
+    });
+  }
+
+  /**
+   * `GET /2.0/workspaces/{workspace}/members`.
+   *
+   * Returns workspace members (up to 100, one page). When `query` is provided,
+   * filters results client-side by case-insensitive substring match on
+   * `display_name`. This is a read-only GET, safe to retry on failure.
+   *
+   * When `workspace` is omitted, falls back to the configured
+   * `bitbucketWorkspace` setting, the same way `findOpenPrForBranch` resolves
+   * its workspace.
+   */
+  async searchWorkspaceMembers(args: {
+    workspace: string;
+    query?: string;
+  }): Promise<WorkspaceMemberResult> {
+    const { email, workspace: configuredWorkspace, tokens, missing } = await this.readAuthContext();
+    if (missing) return { status: 'unauthorized', message: missing };
+    const workspace = args.workspace || configuredWorkspace;
+    if (!workspace) {
+      return { status: 'not-found', message: 'Missing workspace' };
+    }
+
+    const url =
+      `${BITBUCKET_BASE_URL}/workspaces/${encodeURIComponent(workspace)}/members?pagelen=100`;
+
+    return this.runWithFailover(email, tokens, async (auth): Promise<WorkspaceMemberResult> => {
+      const res = await this.request(url, 'GET', auth);
+      // `'indeterminate'` is never produced for a GET — safe to narrow.
+      if (!res.ok) return { status: res.status as WorkspaceMemberResult['status'], message: res.message };
+      const body = res.body as BitbucketWorkspaceMemberListResponse | undefined;
+      const values = Array.isArray(body?.values) ? body!.values : [];
+
+      let members: WorkspaceMember[] = [];
+      for (const entry of values) {
+        const accountId = typeof entry?.user?.account_id === 'string' ? entry.user.account_id : '';
+        const displayName = typeof entry?.user?.display_name === 'string' ? entry.user.display_name : '';
+        const avatarUrl = typeof entry?.user?.links?.avatar?.href === 'string' ? entry.user.links.avatar.href : '';
+        if (!accountId) continue;
+        members.push({ accountId, displayName, avatarUrl });
+      }
+
+      if (args.query) {
+        const q = args.query.toLowerCase();
+        members = members.filter((m) => m.displayName.toLowerCase().includes(q));
+      }
+
+      return { status: 'ok', members };
     });
   }
 

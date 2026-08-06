@@ -503,6 +503,16 @@ async function handleRequest(
       return;
     }
 
+    // Workspace member search. The client defaults `workspace` to the
+    // configured `bitbucketWorkspace` setting when the caller omits it.
+    if (route === '/workspace-members') {
+      const workspace = typeof args.workspace === 'string' ? args.workspace : '';
+      const query = typeof args.query === 'string' ? args.query : undefined;
+      const result = await client.searchWorkspaceMembers({ workspace, query });
+      sendJson(res, 200, result);
+      return;
+    }
+
     // ── Terminal routes ────────────────────────────────────────────────
     // Handled here (not in `dispatch`) because they need the optional
     // `terminalManager` injected at bridge start. When the manager is
