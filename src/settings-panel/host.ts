@@ -345,7 +345,7 @@ export class SettingsPanel implements vscode.Disposable {
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `script-src 'nonce-${nonce}'`,
       `font-src ${webview.cspSource}`,
-      `img-src ${webview.cspSource} data: https://*.bitbucket.org`,
+      `img-src ${webview.cspSource} data: https://*.bitbucket.org https://*.atlassian.com https://*.atl-paas.net https://secure.gravatar.com`,
     ].join('; ');
 
     this.panel.webview.html = `<!DOCTYPE html>

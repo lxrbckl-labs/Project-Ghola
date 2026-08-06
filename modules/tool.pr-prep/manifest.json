@@ -51,7 +51,7 @@
         "type": "string",
         "label": "PR Description Template",
         "description": "Template for the PR description. TPM generates a draft here based on the session's work, then the operator edits it directly before submission. Supports markdown. The template is pre-filled when TPM drafts a description; edit it freely -- what you see is what gets submitted.",
-        "default": "",
+        "default": "Change Summary:\n[ONE TO TWO SENTENCE SUMMARY]\n\nVerification: [LINK TO TESTING PROCS]\n\nHas the UI been signed off by PO or manager? [ANSWER]",
         "multiline": true
       },
       "bannedTokens": {
@@ -59,18 +59,6 @@
         "label": "Banned Tokens",
         "description": "Comma-separated list of token sequences that must NEVER appear in the generated description. The default forbids ASCII double-dashes (which CodeRabbit flags), em-dash-with-hyphen-prefix, and the common '-- ' misuse. The agent scans every draft for these tokens and rewrites them before presenting the result to the user.",
         "default": "--, -—, -- "
-      },
-      "includeChangeSummary": {
-        "type": "boolean",
-        "label": "Include Change Summary",
-        "description": "When on, the generated description appends a short bullet-list of the most significant files changed. Useful for reviewers who want at-a-glance file context before diving into the diff.",
-        "default": false
-      },
-      "descriptionAutoOffer": {
-        "type": "boolean",
-        "label": "Description Auto-Offer",
-        "description": "When on, TPM proactively offers to generate a PR description after the pre-PR checklist (and the regression scan, when tool.regression-scan is enabled) completes, or when the user signals PR readiness without running the checklist. When off, TPM only generates the description when the user explicitly asks. On is the typical flow where the description is the last gesture in the PR-handoff sequence.",
-        "default": true
       },
       "defaultReviewers": {
         "type": "keyValue",

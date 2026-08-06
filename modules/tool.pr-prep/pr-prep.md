@@ -2,7 +2,7 @@
 
 When this module is loaded, the session has a multi-stage PR-handoff toolkit: a structured **pre-PR quality gate** (the checklist), a structured **PR-description generator**, and a **reviewer configuration**. They run in sequence as the user hands a task off to a PR. The checklist runs first, catching the kinds of issues automated PR reviewers (CodeRabbit, Copilot review, etc.) commonly flag; the description runs next, drafting a PR body the user edits directly before submission; reviewers are confirmed last before the PR is created. Every agent reads this same fragment; TPM owns all stages, SWE and QA feed findings into both the checklist and description, and role-specific framing is collected at the end.
 
-This module is **not proactive**. It does not fire at session start. It fires when the user signals they are ready to PR (per `parameters.checklistAutoOffer` for the checklist and `parameters.descriptionAutoOffer` for the description) or when the user explicitly asks for either stage. Treat it as a handoff ritual, not a continuous check.
+This module is **not proactive**. It does not fire at session start. It fires when the user signals they are ready to PR (per `parameters.checklistAutoOffer` for the checklist) or when the user explicitly asks. When the checklist completes cleanly, TPM proceeds directly to generating the PR description with a one-to-two sentence change summary — no offer, no prompt, just do it. Treat it as a handoff ritual, not a continuous check.
 
 ## PR-handoff sequence
 
@@ -13,7 +13,7 @@ The stages of this module bracket the PR handoff, and a separate module may run 
 3. **PR Description** (this module) — the artifact. TPM drafts the PR body once the checklist (and the regression scan, when enabled) has completed cleanly. The user edits the draft directly before submission.
 4. **Reviewers** (this module, last) — TPM presents the reviewer list (defaults plus per-PR additions), the user confirms, and TPM proceeds with PR creation.
 
-The checklist auto-offer and the description auto-offer chain through this sequence: the checklist offers first, and the description offers after the checklist (and regression scan, when enabled) completes with no blocking flags. Reviewer confirmation follows the description.
+The checklist auto-offer gates the first stage; the description and change summary follow automatically when the checklist completes with no blocking flags. Reviewer confirmation follows the description.
 
 ---
 
@@ -115,14 +115,14 @@ Do not merge these cases.
 
 ## PR Description
 
-Once the checklist (and the regression scan, when `tool.regression-scan` is enabled) has completed cleanly, TPM drafts a plain-language PR description based on the session's work, free of double-dashes (and any other token in `parameters.bannedTokens`), and ticket-aware when `mode.ticket-work` is active. The draft is presented to the user as editable text; the user edits it directly and what they approve is what gets submitted. It fires when the user signals PR readiness (per `parameters.descriptionAutoOffer`) or when the user explicitly asks for a description.
+Once the checklist (and the regression scan, when `tool.regression-scan` is enabled) has completed cleanly, TPM **immediately** drafts a plain-language PR description with a one-to-two sentence change summary appended. No offer, no prompt — just generate it. The description is free of double-dashes (and any other token in `parameters.bannedTokens`) and ticket-aware when `mode.ticket-work` is active. The draft is presented to the user as editable text; the user edits it directly and what they approve is what gets submitted.
 
 ### When to generate a description
 
 Generate a description when:
 
-- The pre-PR checklist (and the regression scan, when enabled) has just completed with no `✗` flags AND `parameters.descriptionAutoOffer` is true. In that case TPM chains directly into the offer: "Want me to draft a PR description?" Wait for the user's go-ahead; the offer is the gate.
-- The user signals PR readiness without running the checklist ("create a PR", "ship this", "ready to PR") AND `parameters.descriptionAutoOffer` is true. Offer the same way.
+- The pre-PR checklist (and the regression scan, when enabled) has just completed with no `✗` flags. TPM proceeds directly to generating the description — no offer, no prompt.
+- The user signals PR readiness without running the checklist ("create a PR", "ship this", "ready to PR"). Generate directly.
 - The user explicitly asks ("write a PR description", "give me a PR body", "draft the PR text"). Generate without preamble.
 
 Do **not** generate a description:
@@ -146,7 +146,7 @@ These rules apply to every draft.
 TPM composes the draft from these inputs, all read-only:
 
 - **Session memory** — SWE return messages (especially the one-sentence per-file explanations), QA verdicts, edge cases flagged during the work. This is the primary source for the "what" content.
-- **`git diff --stat` and `git diff --name-only`** — context for the change-summary bullets (when `parameters.includeChangeSummary` is true) and a sanity check that the session memory matches what is actually staged.
+- **`git diff --stat` and `git diff --name-only`** — context for the change-summary bullets (always included) and a sanity check that the session memory matches what is actually staged.
 - **`mode.ticket-work` ticket summary** — when active, the Jira summary provides "why" context for free, used as plain context for the description.
 - **`tool.obsidian-notes` per-ticket or per-project notes** — when enabled, read the relevant notes file for "why" framing the user articulated earlier in the session (Implementation Notes, Ticket Summary). Use the read paths the notes module already exposes; do not invent a path.
 - **The user's own framing in the current session** — if the user said "this fixes the auth race we found earlier", lift that framing verbatim or near-verbatim into the description. It is almost always the best "why" content.
@@ -167,7 +167,6 @@ After generating a draft that satisfies the generation contract:
 These are distinct states and must produce distinct behavior:
 
 - **Module disabled** (no `tool.pr-prep` in the Session Manifest): TPM does NOT offer or generate PR descriptions. The user writes their own PR body. If the user appears to expect TPM to draft one ("can you write the PR description?"), surface that the module is not loaded — do not pretend the feature exists.
-- **Module enabled, `parameters.descriptionAutoOffer` off**: TPM does not auto-offer on PR signals or after the checklist completes. The description is only generated when the user explicitly asks.
 
 Do not merge these cases.
 
@@ -210,7 +209,7 @@ The description composes cleanly with the checklist stage of this module and thr
 
 #### Pre-PR Checklist (this module, first stage)
 
-The checklist and the description form the PR-handoff pair within this module: checklist first (the gate), description second (the artifact). When the checklist completes with no `✗` flags, TPM chains directly into the description offer per `parameters.descriptionAutoOffer`. When the checklist surfaced `✗` flags, TPM does NOT auto-offer the description — the user should address the flags first. The user can still ask explicitly ("draft the PR body anyway") and TPM generates, noting once: "The checklist still has open flags — confirm you want to proceed to the description?"
+The checklist and the description form the PR-handoff pair within this module: checklist first (the gate), description second (the artifact). When the checklist completes with no `✗` flags, TPM proceeds directly to generating the description with a change summary — no offer, no delay. When the checklist surfaced `✗` flags, TPM holds the description until the flags are addressed. The user can still ask explicitly ("draft the PR body anyway") and TPM generates, noting once: "The checklist still has open flags — confirm you want to proceed to the description?"
 
 #### `tool.regression-scan`
 

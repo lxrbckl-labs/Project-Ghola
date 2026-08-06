@@ -879,6 +879,11 @@ function handleWorkspaceMembersResult(msg: {
   if (indicator) {
     indicator.style.display = 'none';
   }
+  // Enable/disable the Add button based on whether results are available.
+  const addBtn = document.querySelector('.reviewer-add-btn') as HTMLButtonElement | null;
+  if (addBtn) {
+    addBtn.disabled = state.reviewerSearchResults.length === 0;
+  }
 }
 
 /**
@@ -2642,13 +2647,13 @@ function renderModuleSettingField(
   }
 
   if (field.type === 'keyValue') {
-    appendKeyValueEditor(wrap, head, moduleId, settingKey, field, current);
-    // Append reviewer search component for the tool.pr-prep defaultReviewers
-    // field. The search queries Bitbucket workspace members via the host and
-    // presents an avatar-enriched dropdown for selecting reviewers.
+    // For the reviewer setting, render the search row ABOVE the kv-table so
+    // the operator sees search + add first, then the selected-reviewers table
+    // below. The kv-table's own add row is still present as a manual fallback.
     if (moduleId === 'tool.pr-prep' && settingKey === 'defaultReviewers') {
       wrap.appendChild(renderReviewerSearch());
     }
+    appendKeyValueEditor(wrap, head, moduleId, settingKey, field, current);
     if (field.description) {
       wrap.appendChild(textEl('div', field.description, 'setting-desc'));
     }
@@ -6418,7 +6423,33 @@ function renderReviewerSearch(): HTMLElement {
     }
   });
 
+  const addBtn = el('button', {
+    class: 'button primary reviewer-add-btn',
+    type: 'button',
+  }) as HTMLButtonElement;
+  addBtn.textContent = 'Add';
+  addBtn.disabled = true;
+  // Enable the Add button when exactly one search result is visible (or the
+  // user clicked a result to stage it). Clicking Add adds the first visible
+  // result, same as clicking the dropdown item directly.
+  addBtn.addEventListener('click', () => {
+    const visible = state.reviewerSearchResults.filter((m) => {
+      const key = scopedKey('tool.pr-prep', 'defaultReviewers');
+      const draft = state.keyValueDrafts[key];
+      if (!draft || typeof draft !== 'object') return true;
+      for (const v of Object.values(draft)) {
+        const id = typeof v === 'string' ? v : (typeof v === 'object' && v !== null ? (v as { value?: string }).value ?? '' : '');
+        if (id === m.accountId) return false;
+      }
+      return true;
+    });
+    if (visible.length > 0) {
+      addReviewerFromSearch(visible[0]);
+    }
+  });
+
   inputRow.appendChild(input);
+  inputRow.appendChild(addBtn);
   container.appendChild(inputRow);
 
   // Dropdown — starts hidden.

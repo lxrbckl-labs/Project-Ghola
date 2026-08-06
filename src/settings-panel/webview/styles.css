@@ -2869,7 +2869,17 @@ button.module-row-chevron:focus-visible {
 .reviewer-search-input-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+.reviewer-add-btn {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 3px;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 .reviewer-search-input {

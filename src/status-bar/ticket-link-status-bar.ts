@@ -551,7 +551,7 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
       PR_ITEM_PRIORITY,
     );
     this.prItem.name = 'Ghola Pull Request';
-    this.prItem.text = '$(git-pull-request)';
+    this.prItem.text = '$(git-merge)';
 
     this.applyWarningStyle();
 
