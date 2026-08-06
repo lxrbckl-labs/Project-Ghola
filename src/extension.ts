@@ -39,6 +39,7 @@ import {
   migrateGitBranchCommandsEnabled,
 } from './state/module-settings';
 import { ModeStatusBarItem, MODE_STATUS_BAR_CONFIG_SECTION } from './status-bar/mode-status-bar';
+import { TicketLinkStatusBarItems, type PrLookupAnswer } from './status-bar/ticket-link-status-bar';
 
 /** Module id for the atlassian-suite integration. */
 const ATLASSIAN_MODULE_ID = 'integration.atlassian-suite';
@@ -941,6 +942,49 @@ export function activate(context: vscode.ExtensionContext): void {
   // instance lives for the extension's lifetime and naturally honors
   // token / workspace changes without rebuilding.
   const bitbucketPrClient = new BitbucketPrClient(atlassianBridge, readAtlassianSetting);
+
+  // ───── Ticket-link status-bar buttons (ticket-work mode) ───────────
+  // Two icon-only buttons beside the Ghola pill: $(issues) opens the Jira
+  // ticket derived from the branch name, $(git-pull-request) opens the
+  // branch's Bitbucket PR. Both are gated on mode.ticket-work and share the
+  // pill's ghola.statusBar.enabled toggle. The PR lookup is adapted from
+  // BitbucketPrClient.findOpenPrForBranch via a never-throwing shim that
+  // maps PrLookupResult into the status bar's own PrLookupAnswer shape.
+  const findPrForBranch = async (repoSlug: string, branch: string): Promise<PrLookupAnswer> => {
+    try {
+      const result = await bitbucketPrClient.findOpenPrForBranch(repoSlug, branch);
+      if (result.prUrl !== null) {
+        return {
+          kind: 'found',
+          url: result.prUrl,
+          id: result.prId,
+          state: result.prState,
+        };
+      }
+      // Distinguish a confirmed absence from a lookup failure: PrLookupResult
+      // carries `failure` when the client could not reach Bitbucket at all.
+      const failure = (result as { failure?: { message?: string } }).failure;
+      if (failure !== undefined) {
+        return { kind: 'unknown', reason: failure.message ?? 'lookup failed' };
+      }
+      return { kind: 'none' };
+    } catch (error) {
+      return { kind: 'unknown', reason: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  const ticketLinkStatusBar = new TicketLinkStatusBarItems(loader, readAtlassianSetting, findPrForBranch);
+  context.subscriptions.push(ticketLinkStatusBar);
+  // Same event set as the Ghola pill: module enable/disable, module-settings
+  // save, and the statusBar.enabled config toggle. The branch poll timer and
+  // any PR-lookup completion are managed inside the class itself.
+  context.subscriptions.push(loader.onDidChange(() => ticketLinkStatusBar.refresh()));
+  context.subscriptions.push(moduleSettingsEmitter.event(() => ticketLinkStatusBar.refresh()));
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration(MODE_STATUS_BAR_CONFIG_SECTION)) ticketLinkStatusBar.refresh();
+    }),
+  );
+  ticketLinkStatusBar.refresh();
 
   // Host-side Jira ticket fetcher passed into the loopback bridge. Reads the
   // current email + jiraBase settings and the Jira token via the bridge, builds

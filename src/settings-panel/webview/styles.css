@@ -58,6 +58,11 @@ html, body {
   font-weight: 600;
 }
 
+.rail-item:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
 .content {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -205,6 +210,7 @@ label.switch .switch-label {
   border: 1px solid var(--vscode-input-border, transparent);
   padding: 4px 8px;
   font: inherit;
+  border-radius: 3px;
 }
 
 .actions {

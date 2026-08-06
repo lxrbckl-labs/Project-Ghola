@@ -33,7 +33,7 @@ Every distinct REST call the extension makes:
 | 5 | `GET /2.0/repositories/{ws}/{repo}/pullrequests?q=source.branch.name="{branch}"&state=OPEN` | Find open PR for a branch | READ | `read:pullrequest:bitbucket` + `read:repository:bitbucket` |
 | 6 | `GET /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments?pagelen=50` (+`next` pagination) | List PR comments/threads | READ | `read:pullrequest:bitbucket` |
 | 7 | `POST /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments` | Reply to a comment | WRITE | `write:pullrequest:bitbucket` |
-| 8 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments/{cid}/resolve` | Resolve a comment thread | WRITE | `write:pullrequest:bitbucket` |
+| 8 | `POST /2.0/repositories/{ws}/{repo}/pullrequests/{id}/comments/{cid}/resolve` | Resolve a comment thread | WRITE | `write:pullrequest:bitbucket` |
 | 9 | `GET /2.0/repositories/{ws}/{repo}/pullrequests/{id}` | Read current title before the ready flip | READ | `read:pullrequest:bitbucket` |
 | 10 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}` with `{ title, draft: false }` | Mark a draft PR ready-for-review | WRITE | `write:pullrequest:bitbucket` |
 | 11 | `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}` with `{ title, draft: true }` | Flip a ready PR back to draft | WRITE | `write:pullrequest:bitbucket` |

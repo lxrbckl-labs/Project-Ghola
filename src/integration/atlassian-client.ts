@@ -71,6 +71,11 @@ export interface ProbeResult {
   status: 'ok' | 'failed' | 'skipped';
   message?: string;
   displayName?: string;
+  /** Present ONLY on a real request failure (auth / ratelimit / network / other
+   *  non-2xx). A `'skipped'` probe (missing credentials) stays the plain
+   *  `{ status: 'skipped', message }` this method has always returned — that is
+   *  a precondition gap, not a request failure. */
+  failure?: RequestFailure;
 }
 
 /** Structured failure discriminant produced by the internal `request()` helper
@@ -365,7 +370,7 @@ export class AtlassianClient {
 
     const url = `${this.jiraBase}/rest/api/3/myself`;
     const res = await this.request(url, 'jira');
-    if (!res.ok) return { status: 'failed', message: res.failure.message };
+    if (!res.ok) return { status: 'failed', message: res.failure.message, failure: res.failure };
 
     const body = res.body as JiraMyselfResponse | undefined;
     const displayName = typeof body?.displayName === 'string' ? body.displayName : undefined;
@@ -390,7 +395,7 @@ export class AtlassianClient {
       (token) => this.request(url, 'bitbucket', token),
       (r) => !r.ok,
     );
-    if (!res.ok) return { status: 'failed', message: res.failure.message };
+    if (!res.ok) return { status: 'failed', message: res.failure.message, failure: res.failure };
 
     const body = res.body as BitbucketWorkspaceResponse | undefined;
     const displayName =
@@ -656,9 +661,19 @@ export class AtlassianClient {
    */
   async findOpenPrForBranch(repoSlug: string, branch: string): Promise<PrLookupResult> {
     if (!repoSlug || !branch) return { prUrl: null };
-    // Missing email / token is "not configured" — skip silently exactly as
-    // before (a genuine no-PR success, not a failure).
-    if (!this.email || this.bitbucketTokens.length === 0) return { prUrl: null };
+    // Missing email / token is NOT a confirmed "no PR" — it is an UNCHECKED
+    // absence. A bare `{ prUrl: null }` would tell the caller "Bitbucket
+    // confirmed there is no PR", which is false when we never asked. Surface
+    // the gap via `failure` so callers can distinguish the two.
+    if (!this.email || this.bitbucketTokens.length === 0) {
+      const missing: string[] = [];
+      if (!this.email) missing.push('email');
+      if (this.bitbucketTokens.length === 0) missing.push('bitbucketToken');
+      return {
+        prUrl: null,
+        failure: { kind: 'auth', message: `Missing: ${missing.join(', ')}` },
+      };
+    }
 
     // Resolve the workspace from the configured value. We do not have a git
     // remote URL cheaply available in this REST client, so pass `undefined`;

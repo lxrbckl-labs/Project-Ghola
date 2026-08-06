@@ -988,7 +988,7 @@ function renderRail(): HTMLElement {
 
 function railItem(id: SectionId, label: string): HTMLElement {
   const cls = `rail-item${state.activeSection === id ? ' active' : ''}`;
-  const btn = el('button', { class: cls });
+  const btn = el('button', { class: cls, type: 'button' });
   btn.textContent = label;
   btn.addEventListener('click', () => setSection(id));
   return btn;

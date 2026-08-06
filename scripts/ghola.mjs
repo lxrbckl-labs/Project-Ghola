@@ -2723,6 +2723,25 @@ function cmdBoot({ flags }) {
   }
 }
 
+function cmdSession({ flags }) {
+  // Print the session-start banner that the TPM boot sequence emits.
+  // Flags:
+  //   --modules N   — number of modules loaded (integer, default 0)
+  //   --agents "..."— comma-separated agent names (default "qa, swe, tpm")
+  const modulesRaw = flags['modules'];
+  const modulesCount = modulesRaw !== undefined && modulesRaw !== true
+    ? parseInt(modulesRaw, 10)
+    : 0;
+  const agentsRaw = flags['agents'];
+  const agents = agentsRaw !== undefined && agentsRaw !== true
+    ? agentsRaw
+    : 'qa, swe, tpm';
+
+  console.log('== Ghola session ==');
+  console.log(`modules loaded: ${modulesCount}`);
+  console.log(`agents composed: ${agents}`);
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Help + dispatch
 // ─────────────────────────────────────────────────────────────────────────
@@ -2852,6 +2871,11 @@ Commands:
                                                                              subject -> clean/none sections). Reuses the
                                                                              --status / mission list / ls / notes
                                                                              readers; never writes or acks anything.
+  session         [--modules N] [--agents "qa, swe, tpm"]                  print the session-start banner:
+                                                                               == Ghola session ==
+                                                                               modules loaded: N
+                                                                               agents composed: qa, swe, tpm
+                                                                             defaults: modules=0, agents="qa, swe, tpm"
   --help                                                                    show this message
 `;
 
@@ -2902,6 +2926,7 @@ function main() {
     ls: cmdLs,
     board: cmdBoard,
     boot: cmdBoot,
+    session: cmdSession,
   };
 
   const key = (command === 'mission' || command === 'template') ? `${command}:${subcommand}` : command;
