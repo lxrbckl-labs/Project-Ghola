@@ -123,6 +123,29 @@ function resolveRepoRoot(context: vscode.ExtensionContext): string | null {
       return folder.uri.fsPath;
     }
   }
+  // (e) Scan sibling directories of the open workspace folder for a
+  //     Project-Ghola checkout. This covers the common case where the operator
+  //     has a different repo open (e.g. cmms1) but Project-Ghola lives in the
+  //     same parent directory (e.g. C:\Users\...\source\repos\).
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    if (folder.uri.scheme !== 'file') {
+      continue;
+    }
+    const parent = path.dirname(folder.uri.fsPath);
+    try {
+      for (const sibling of fs.readdirSync(parent)) {
+        if (!/project.ghola/i.test(sibling)) {
+          continue;
+        }
+        const candidate = path.join(parent, sibling);
+        if (isGholaCheckout(candidate)) {
+          return candidate;
+        }
+      }
+    } catch {
+      // Parent unreadable — continue to next folder.
+    }
+  }
   return null;
 }
 
