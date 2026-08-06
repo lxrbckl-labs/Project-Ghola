@@ -2883,9 +2883,16 @@ button.module-row-chevron:focus-visible {
   align-items: center;
 }
 
-.kv-cell-key:has(.reviewer-row-avatar) .kv-input {
+.kv-cell-key:has(.reviewer-row-avatar) .kv-input,
+.kv-cell-key:has(.reviewer-row-avatar) .reviewer-row-name {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.reviewer-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .reviewer-add-btn {

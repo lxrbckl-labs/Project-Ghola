@@ -2980,20 +2980,22 @@ function appendKeyValueEditor(
         const accountId = typeof rowVal === 'object' && rowVal !== null
           ? (rowVal as { value?: string }).value ?? ''
           : typeof rowVal === 'string' ? rowVal : '';
-        if (accountId) {
-          const keyCell = row.querySelector('.kv-cell-key');
-          if (keyCell) {
+        const keyCell = row.querySelector('.kv-cell-key');
+        if (keyCell) {
+          // Replace the editable input with a read-only avatar + name span.
+          // Reviewer names come from Bitbucket and should not be hand-edited.
+          keyCell.textContent = '';
+          if (accountId) {
             const avatar = el('img', {
               class: 'reviewer-avatar reviewer-row-avatar',
-              src: `https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/initials/${encodeURIComponent(rowKey.charAt(0))}-0.png`,
               alt: '',
             }) as HTMLImageElement;
-            // Try the Bitbucket account avatar endpoint instead — it resolves
-            // to the user's real profile picture when available.
             avatar.src = `https://bitbucket.org/account/${encodeURIComponent(accountId)}/avatar`;
             avatar.addEventListener('error', () => { avatar.style.display = 'none'; });
-            keyCell.insertBefore(avatar, keyCell.firstChild);
+            keyCell.appendChild(avatar);
           }
+          const nameSpan = textEl('span', rowKey, 'reviewer-row-name');
+          keyCell.appendChild(nameSpan);
         }
       }
       tbody.appendChild(row);
