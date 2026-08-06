@@ -113,6 +113,8 @@ Within a snapshot, ordinals are stable. If the user resolves comments 1, 2, and 
    **Large PRs.** This call walks the Bitbucket comments API page by page, so it is the one read verb that can take tens of seconds on a heavily-commented PR. Two outcomes need handling:
    - `status: 'ok'` with **`truncated: true`** — a successful PARTIAL result, carrying `message` ("Partial result — N of ~M comments fetched; ...") and `totalAvailable`. The wrapper also prints a `WARNING — PARTIAL RESULT` line to stderr and still exits 0. This is real data, NOT a failure: build the snapshot from what came back, and tell the operator plainly that it is partial and roughly how many comments were omitted, so they know the list they are triaging is not the whole PR. The Jira read (`get-comments`) reports truncation with the identical fields and the identical message template — one convention covers both.
    - A **`bridge-timeout`** error (distinct from `bridge-unreachable`) — the bridge is alive and was still working; the client simply stopped waiting. Do NOT treat this as a dead bridge and do NOT relaunch the session. Re-run the same command with a longer deadline, e.g. `GHOLA_BRIDGE_TIMEOUT_MS=300000`.
+
+   **Capturing large results.** Always redirect `list-comments` (and `get-comments`) output to a file and parse from the file. Never pipe bridge stdout through `head`, `tail`, `cut`, or any byte- or line-cap — a cap mid-payload produces invalid JSON whose parse error misattributes to the bridge.
 3. **Number + present.** Assign globally stable ordinals across the session. Group by file/thread. Print in chat:
    ```
    [1] inline - src/Foo.cs:42 - @coderabbit - unresolved - CR-confirmed

@@ -544,7 +544,7 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
     // Icon-only in the pill, so the label the screen reader announces is the only
     // place the words live for a non-sighted operator. Restated on every repaint
     // alongside the tooltip so the two can never describe different targets.
-    this.jiraItem.text = '$(issues)';
+    this.jiraItem.text = '$(tasklist)';
 
     this.prItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
