@@ -2881,15 +2881,16 @@ button.module-row-chevron:focus-visible {
 .kv-cell-key:has(.reviewer-row-avatar) {
   display: flex;
   align-items: center;
-}
-
-.kv-cell-key:has(.reviewer-row-avatar) .kv-input,
-.kv-cell-key:has(.reviewer-row-avatar) .reviewer-row-name {
-  flex: 1 1 auto;
-  min-width: 0;
+  gap: 6px;
+  border: none;
+  background: none;
+  padding: 4px 8px;
+  width: auto;
 }
 
 .reviewer-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
