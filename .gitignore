@@ -5,3 +5,4 @@ dist/
 .ghola/
 *.log
 .DS_Store
+.session-logs/

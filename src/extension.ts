@@ -41,6 +41,7 @@ import {
   migrateGitBranchCommandsEnabled,
 } from './state/module-settings';
 import { ModeStatusBarItem, MODE_STATUS_BAR_CONFIG_SECTION } from './status-bar/mode-status-bar';
+import { SessionRecordStatusBarItem } from './status-bar/session-record-status-bar';
 import { TicketLinkStatusBarItems, type PrLookupAnswer } from './status-bar/ticket-link-status-bar';
 
 /** Module id for the atlassian-suite integration. */
@@ -657,6 +658,13 @@ async function promptWhenNewerVersionInstalled(
   }
 }
 
+/**
+ * Module-level reference to the session-log record status bar item, set during
+ * `activate()`. Exported so the session launcher can call `show(path)` when
+ * recording begins.
+ */
+export let sessionRecordItem: SessionRecordStatusBarItem | undefined;
+
 export function activate(context: vscode.ExtensionContext): void {
   const logger = vscode.window.createOutputChannel('Ghola');
   context.subscriptions.push(logger);
@@ -946,8 +954,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const bitbucketPrClient = new BitbucketPrClient(atlassianBridge, readAtlassianSetting);
 
   // ───── Ticket-link status-bar buttons (ticket-work mode) ───────────
-  // Two icon-only buttons beside the Ghola pill: $(issues) opens the Jira
-  // ticket derived from the branch name, $(git-pull-request) opens the
+  // Two text-label buttons beside the Ghola pill: the ticket key (e.g.
+  // CMMS-2791) opens the Jira ticket, the PR number (e.g. #1539) opens the
   // branch's Bitbucket PR. Both are gated on mode.ticket-work and share the
   // pill's ghola.statusBar.enabled toggle. The PR lookup is adapted from
   // BitbucketPrClient.findOpenPrForBranch via a never-throwing shim that
@@ -987,6 +995,14 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
   ticketLinkStatusBar.refresh();
+
+  // Session-log record indicator: a right-aligned $(record) icon with amber
+  // background, shown while a session transcript is being captured. The launcher
+  // (SWE-2's scope) calls `sessionRecordItem.show(path)` when recording starts.
+  // Created here and pushed into subscriptions so it is disposed with the
+  // extension. Exported as `sessionRecordItem` so the launcher can reach it.
+  sessionRecordItem = new SessionRecordStatusBarItem();
+  context.subscriptions.push(sessionRecordItem);
 
   // Host-side Jira ticket fetcher passed into the loopback bridge. Reads the
   // current email + jiraBase settings and the Jira token via the bridge, builds

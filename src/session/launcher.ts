@@ -126,6 +126,14 @@ export class SessionLauncher {
   ) {}
 
   /**
+   * Absolute path of the session transcript log file for the most recent
+   * launch. Set during `launch()` so the record status bar item (owned by
+   * extension.ts) can read it after the session starts. `undefined` before the
+   * first launch or when log-directory creation failed.
+   */
+  sessionLogPath: string | undefined;
+
+  /**
    * Loopback URL of the host-side Bitbucket bridge, when it started. Injected
    * into the session terminal env (never the banner/log) so the CLI agent can
    * reach the host-side `BitbucketPrClient`. Undefined when the bridge failed
@@ -499,6 +507,24 @@ export class SessionLauncher {
       }
     }
 
+    // Session transcript: resolve the log file path and fire-and-forget the
+    // cleanup script BEFORE creating the terminal. The log directory lives
+    // inside the extension tree and is gitignored.
+    const sessionLogPath = this.resolveSessionLogPath(
+      (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
+    );
+    this.sessionLogPath = sessionLogPath;
+    if (sessionLogPath) {
+      // Fire-and-forget cleanup: the script handles Monday detection and
+      // deletion internally. Never blocks the session launch.
+      const logDir = path.dirname(sessionLogPath);
+      const scriptPath = path.join(this.extensionPath, 'scripts', 'ghola-session-log.mjs');
+      childProcess.spawn('node', [scriptPath, '--dir', logDir], {
+        stdio: 'ignore',
+        detached: true,
+      }).unref();
+    }
+
     const terminal = vscode.window.createTerminal({
       name: terminalName,
       shellPath,
@@ -584,14 +610,47 @@ export class SessionLauncher {
       remoteControlName === ''
         ? ''
         : ` --remote-control ${isPwshShell ? this.pwshQuote(remoteControlName) : this.shellQuote(remoteControlName)}`;
+    // Session transcript: inject the transcript capture command BEFORE the CLI
+    // command so the entire session is logged. PowerShell gets
+    // `Start-Transcript` as a separate command; bash wraps the CLI command
+    // inside `script -q -a <path> -c '<command>'`.
+    if (sessionLogPath && isPwshShell) {
+      terminal.sendText(
+        `Start-Transcript -Path ${this.pwshQuote(sessionLogPath)} -Append`,
+        true,
+      );
+      this.logger?.appendLine(`[session] transcript: Start-Transcript -> ${sessionLogPath}`);
+    }
+
     const useArgPrompt = !!cliCommand && (isBashShell || isPwshShell) && !!phaseTwoMessage;
     if (useArgPrompt) {
       const quoted = isPwshShell
         ? this.pwshQuote(phaseTwoMessage)
         : this.shellQuote(phaseTwoMessage);
-      terminal.sendText(`${cliCommand}${permFlag}${remoteFlag} ${quoted}`, true);
+      if (sessionLogPath && isBashShell) {
+        // Wrap the entire CLI invocation inside `script` so the transcript
+        // captures everything. The `-q` flag suppresses the "Script started"
+        // banner, `-a` appends, and `-c` runs the command non-interactively.
+        const innerCmd = `${cliCommand}${permFlag}${remoteFlag} ${quoted}`;
+        terminal.sendText(
+          `script -q -a ${this.shellQuote(sessionLogPath)} -c ${this.shellQuote(innerCmd)}`,
+          true,
+        );
+        this.logger?.appendLine(`[session] transcript: script -q -a -> ${sessionLogPath}`);
+      } else {
+        terminal.sendText(`${cliCommand}${permFlag}${remoteFlag} ${quoted}`, true);
+      }
     } else if (cliCommand) {
-      terminal.sendText(`${cliCommand}${permFlag}${remoteFlag}`, true);
+      if (sessionLogPath && isBashShell) {
+        const innerCmd = `${cliCommand}${permFlag}${remoteFlag}`;
+        terminal.sendText(
+          `script -q -a ${this.shellQuote(sessionLogPath)} -c ${this.shellQuote(innerCmd)}`,
+          true,
+        );
+        this.logger?.appendLine(`[session] transcript: script -q -a -> ${sessionLogPath}`);
+      } else {
+        terminal.sendText(`${cliCommand}${permFlag}${remoteFlag}`, true);
+      }
       // RETAINED AS A FALLBACK, not because it is reachable today. Reaching the
       // two branches below needs `useArgPrompt` false with a non-empty
       // `phaseTwoMessage`, and with one-shot dispatch gone the only remaining way
@@ -924,6 +983,48 @@ export class SessionLauncher {
     if (p === '~') return os.homedir();
     if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
     return p;
+  }
+
+  /**
+   * Resolve the absolute path for this session's transcript log file. Creates
+   * the `.session-logs/` directory under the extension path if it does not
+   * exist. Returns `undefined` when the directory cannot be created or no
+   * identity can be resolved. Never throws.
+   *
+   * Filename format: `<YYYY-MM-DD>_<identity>_<HH-mm>.txt`
+   *   - Identity from `resolveTeamIdentity` (the same name the status-bar pill
+   *     uses), sanitized for the filesystem.
+   *   - Example: `2026-08-06_Ghola-win_18-05.txt`
+   */
+  private resolveSessionLogPath(
+    workspaceFolderPaths: readonly string[],
+  ): string | undefined {
+    try {
+      const logDir = path.join(this.extensionPath, '.session-logs');
+      fs.mkdirSync(logDir, { recursive: true });
+
+      const now = new Date();
+      const date = [
+        now.getFullYear(),
+        String(now.getMonth() + 1).padStart(2, '0'),
+        String(now.getDate()).padStart(2, '0'),
+      ].join('-');
+      const time = [
+        String(now.getHours()).padStart(2, '0'),
+        String(now.getMinutes()).padStart(2, '0'),
+      ].join('-');
+
+      const identity = resolveTeamIdentity(workspaceFolderPaths);
+      const identitySlug = (identity?.name ?? 'session').replace(/[^a-zA-Z0-9_-]/g, '-');
+
+      const filename = `${date}_${identitySlug}_${time}.txt`;
+      return path.join(logDir, filename);
+    } catch (err) {
+      this.logger?.appendLine(
+        `[session] transcript: failed to resolve log path (${(err as Error).message})`,
+      );
+      return undefined;
+    }
   }
 
   /**

@@ -1,7 +1,7 @@
-// Two ICON-ONLY status-bar buttons that sit immediately to the right of the
+// Two TEXT-LABEL status-bar buttons that sit immediately to the right of the
 // Ghola pill and open, in the operator's browser, the two things a ticket-work
-// session is always about: the Jira ticket, and the branch's Bitbucket pull
-// request.
+// session is always about: the Jira ticket (shown as its key, e.g. CMMS-2791),
+// and the branch's Bitbucket pull request (shown as its number, e.g. #1539).
 //
 // WHY A SEPARATE FILE FROM `mode-status-bar.ts`. That item renders ONE pill whose
 // every segment is derived from state the extension host already holds
@@ -477,28 +477,19 @@ function readOriginUrl(repoRoot: string): string {
 }
 
 /**
- * Two icon-only status-bar buttons for a ticket-work session: `$(issues)` opening
- * `<jiraBase>/browse/<KEY>`, and `$(git-pull-request)` opening the branch's
- * Bitbucket pull request.
+ * Two text-label status-bar buttons for a ticket-work session: the Jira ticket key
+ * (e.g. `CMMS-2791`) opening `<jiraBase>/browse/<KEY>`, and the PR number
+ * (e.g. `#1539`) opening the branch's Bitbucket pull request.
  *
- * VISIBILITY IS ALL-OR-NOTHING ON THE MODALITY. Both appear in ticket-work and
- * neither appears anywhere else. Inside ticket-work they are ALWAYS BOTH PRESENT —
- * a button that vanishes when its target is missing makes the status bar's width
- * jitter and leaves the operator unable to tell "no PR" from "the feature broke".
- *
- * PRESENT-BUT-INERT IS THE DEGRADED STATE, NOT HIDDEN. VS Code has no disabled
- * state for a `StatusBarItem`, so it is approximated exactly the way the operator
- * specified: the item stays visible, its `command` is CLEARED so a click does
- * nothing at all, and its foreground is dimmed to the theme's `disabledForeground`.
- * Every inert state carries a tooltip that says WHY it is inert, because a dimmed
- * glyph that a click does not answer is otherwise indistinguishable from a bug.
+ * VISIBILITY IS CONDITIONAL ON DATA. The Jira button appears only when a ticket key
+ * is detected in the branch name; the PR button appears only when a PR is found.
+ * When neither is available the button hides rather than showing an empty label —
+ * a text button that says nothing is worse than no button at all.
  *
  * BOTH BUTTONS USE THE SAME AMBER BACKGROUND as the Ghola pill beside them, via
  * `statusBarItem.warningBackground` and `statusBarItem.warningForeground`. Active
- * buttons render with `warningForeground`; inert buttons remain dimmed with
- * `disabledForeground`, which still reads as visually distinct from `warningForeground`
- * against the amber fill in both light and dark themes and preserves the dim/normal
- * contrast as the signal for whether a click does anything.
+ * buttons render with `warningForeground`; the amber background makes them read as
+ * part of the Ghola pill group.
  */
 export class TicketLinkStatusBarItems implements vscode.Disposable {
   private readonly jiraItem: vscode.StatusBarItem;
@@ -573,17 +564,15 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
       JIRA_ITEM_PRIORITY,
     );
     this.jiraItem.name = 'Ghola Ticket';
-    // Icon-only in the pill, so the label the screen reader announces is the only
-    // place the words live for a non-sighted operator. Restated on every repaint
-    // alongside the tooltip so the two can never describe different targets.
-    this.jiraItem.text = '$(tasklist)';
+    // Text is set dynamically by renderJira() — starts hidden until a ticket key
+    // is resolved from the branch name.
 
     this.prItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
       PR_ITEM_PRIORITY,
     );
     this.prItem.name = 'Ghola Pull Request';
-    this.prItem.text = '$(git-merge)';
+    // Text is set dynamically by renderPr() — starts hidden until a PR is found.
 
     this.applyWarningStyle();
 
@@ -666,8 +655,8 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
   }
 
   /**
-   * The Jira button. Active when the branch carries a key AND a Jira base URL is
-   * configured; present-but-inert, with the reason spelled out, otherwise.
+   * The Jira button. Shows the ticket key as text when the branch carries a key
+   * AND a Jira base URL is configured; hidden otherwise.
    */
   private renderJira(branch: string | undefined): void {
     const ticketKey = ticketKeyFromBranch(branch);
@@ -676,53 +665,27 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
     this.jiraUrl = url;
 
     if (url !== undefined && ticketKey !== undefined) {
-      // The URL goes in the tooltip, on its own line. A button that opens the
-      // WRONG page is a silent failure — the operator lands somewhere plausible
-      // and never notices — so the exact target is made checkable BEFORE the
-      // click rather than only afterwards in the address bar.
+      this.jiraItem.text = ticketKey;
       this.activate(this.jiraItem, OPEN_TICKET_COMMAND, `Open ${ticketKey} in Jira`, [
         `Open ${ticketKey} in Jira`,
         url,
       ]);
-    } else if (ticketKey === undefined) {
-      this.deactivate(
-        this.jiraItem,
-        'No Jira ticket in this branch',
-        branch === undefined
-          ? [
-              'No Jira ticket to open — this window has no git branch (no folder open, no repository, or a detached HEAD).',
-            ]
-          : [
-              `No Jira ticket to open — the branch '${branch}' carries no <PROJECT>-<NUMBER> key.`,
-            ],
-      );
+      this.jiraItem.show();
     } else {
-      this.deactivate(this.jiraItem, 'Jira base URL is not configured', [
-        `No Jira link for ${ticketKey} — the Atlassian Suite "Jira Base URL" setting is empty.`,
-        'Set it in Ghola settings > Modules > Atlassian Suite to enable this button.',
-      ]);
+      // No ticket key or no Jira base URL — hide instead of showing an empty label.
+      this.jiraItem.hide();
     }
-    this.jiraItem.show();
   }
 
   /**
-   * The PR button. Active whenever a PR EXISTS FOR THE BRANCH IN ANY STATE — open,
-   * merged, declined, superseded. State is reported in the tooltip and never gates
-   * the click: a merged PR is still the page the operator wants when they ask for
-   * "the PR for this branch", and `AtlassianClient.findOpenPrForBranch` already
-   * falls back to the closed states for exactly that reason.
-   *
-   * Every non-`found` state renders present-but-inert, and the three of them use
-   * DIFFERENT tooltips on purpose — see `PrLookupKind` for why a non-answer must
-   * never be worded as an absence.
+   * The PR button. Shows the PR number (e.g. `#1539`) when a PR EXISTS FOR THE
+   * BRANCH IN ANY STATE — open, merged, declined, superseded. Hidden when no PR
+   * is found or the lookup has not yet returned.
    */
   private renderPr(repoRoot: string | undefined, branch: string | undefined): void {
     if (branch === undefined) {
       this.prUrl = undefined;
-      this.deactivate(this.prItem, 'No branch to find a pull request for', [
-        'No pull request to open — this window has no git branch (no folder open, no repository, or a detached HEAD).',
-      ]);
-      this.prItem.show();
+      this.prItem.hide();
       return;
     }
 
@@ -733,52 +696,34 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
       // No answer yet for THIS branch. Not an absence — the lookup kicked off
       // above has simply not returned, and it repaints when it does.
       this.prUrl = undefined;
-      this.deactivate(this.prItem, 'Looking up the pull request', [
-        `Looking up the pull request for '${branch}'...`,
-      ]);
-      this.prItem.show();
+      this.prItem.hide();
       return;
     }
 
     const answer = cached.answer;
     if (answer.kind === 'found' && answer.url !== undefined) {
       this.prUrl = answer.url;
-      // Bitbucket returned the id and state on every real hit; both are optional
-      // in `PrLookupResult`, so the label degrades rather than printing
-      // `PR #undefined`.
-      const label = answer.id === undefined ? 'PR' : `PR #${answer.id}`;
+      const label = answer.id === undefined ? 'PR' : `#${answer.id}`;
       const state = answer.state === undefined ? '' : ` (${answer.state})`;
+      this.prItem.text = label;
       this.activate(
         this.prItem,
         OPEN_PR_COMMAND,
-        `Open ${label} in Bitbucket`,
-        [`Open ${label}${state} in Bitbucket`, answer.url],
+        `Open PR ${label} in Bitbucket`,
+        [`Open PR ${label}${state} in Bitbucket`, answer.url],
       );
-    } else if (answer.kind === 'none') {
-      this.prUrl = undefined;
-      this.deactivate(this.prItem, 'No pull request for this branch', [
-        'No pull request for this branch.',
-        `Bitbucket has no pull request for '${branch}' in any state, so this button does nothing.`,
-      ]);
+      this.prItem.show();
     } else {
+      // No PR found or lookup failed — hide the button.
       this.prUrl = undefined;
-      // The wording NEVER says "no PR". Nothing was ruled out; the lookup failed.
-      this.deactivate(this.prItem, 'Pull-request lookup did not answer', [
-        `Could not check for a pull request on '${branch}' — this does NOT mean there is none.`,
-        answer.reason === undefined ? 'The lookup did not answer.' : `Reason: ${answer.reason}`,
-        'Ghola retries on its own; the button activates as soon as a lookup succeeds.',
-      ]);
+      this.prItem.hide();
     }
-    this.prItem.show();
   }
 
   /**
-   * Give an item a working command, the warning foreground, and a tooltip. The
-   * `color` is set to `warningForeground` explicitly — an item that was inert on
-   * the previous repaint is still carrying `disabledForeground`, and the whole
-   * present-but-inert convention collapses if a re-activated button stays dim.
+   * Give an item a working command, the warning foreground, and a tooltip.
    * `warningForeground` pairs with the amber `warningBackground` applied by
-   * `applyWarningStyle` and keeps the glyph legible in both light and dark themes.
+   * `applyWarningStyle` and keeps the text legible in both light and dark themes.
    */
   private activate(
     item: vscode.StatusBarItem,
@@ -788,23 +733,6 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
   ): void {
     item.command = command;
     item.color = new vscode.ThemeColor('statusBarItem.warningForeground');
-    item.tooltip = tooltipLines.join('\n');
-    item.accessibilityInformation = { label: accessibleLabel };
-  }
-
-  /**
-   * VS Code's closest thing to a disabled status-bar item: still visible, no
-   * command at all so a click is genuinely inert (not "runs and silently does
-   * nothing"), and dimmed with the theme's own `disabledForeground` so it reads as
-   * unavailable in light and dark alike.
-   */
-  private deactivate(
-    item: vscode.StatusBarItem,
-    accessibleLabel: string,
-    tooltipLines: readonly string[],
-  ): void {
-    item.command = undefined;
-    item.color = new vscode.ThemeColor('disabledForeground');
     item.tooltip = tooltipLines.join('\n');
     item.accessibilityInformation = { label: accessibleLabel };
   }
