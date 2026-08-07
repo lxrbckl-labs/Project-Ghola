@@ -21,13 +21,14 @@ export class SessionRecordStatusBarItem implements vscode.Disposable {
   private logFilePath: string | undefined;
 
   constructor() {
-    // Right-aligned, lowest priority so it sits at the far right of the bar.
+    // Left-aligned, priority 97 — immediately right of the PR button (98)
+    // and part of the Ghola pill group.
     this.item = vscode.window.createStatusBarItem(
-      vscode.StatusBarAlignment.Right,
-      0,
+      vscode.StatusBarAlignment.Left,
+      97,
     );
     this.item.name = 'Ghola Session Log';
-    this.item.text = '$(record)';
+    this.item.text = '$(pulse)';
     this.item.tooltip = 'Session log recording';
     this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     this.item.color = new vscode.ThemeColor('statusBarItem.warningForeground');
