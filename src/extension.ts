@@ -704,6 +704,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const composer = new PromptComposer(loader, coresPath, logger);
 
   const session = new SessionLauncher(loader, context.extensionPath, context.globalState, context.workspaceState, logger);
+  session.onSessionLogStarted = (logPath) => {
+    if (sessionRecordItem) sessionRecordItem.show(logPath);
+  };
   const configurationsStore = new ConfigurationsStore(context.workspaceState);
   const resolveModulesDir = resolveModulesDirFn(context);
   // Path used by the `tool.feedback-log` module: the host reads/writes this

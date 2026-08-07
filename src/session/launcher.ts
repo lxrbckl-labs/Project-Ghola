@@ -133,6 +133,10 @@ export class SessionLauncher {
    */
   sessionLogPath: string | undefined;
 
+  /** Called when a session transcript starts recording. Extension.ts sets this
+   *  to light up the record status bar icon. */
+  onSessionLogStarted?: (logPath: string) => void;
+
   /**
    * Loopback URL of the host-side Bitbucket bridge, when it started. Injected
    * into the session terminal env (never the banner/log) so the CLI agent can
@@ -523,6 +527,12 @@ export class SessionLauncher {
         stdio: 'ignore',
         detached: true,
       }).unref();
+
+      // Light up the record icon so the operator knows the session is being
+      // logged and can click to open the log file.
+      if (this.onSessionLogStarted) {
+        this.onSessionLogStarted(sessionLogPath);
+      }
     }
 
     const terminal = vscode.window.createTerminal({
