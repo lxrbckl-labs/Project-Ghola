@@ -1000,7 +1000,7 @@ export class SessionLauncher {
     workspaceFolderPaths: readonly string[],
   ): string | undefined {
     try {
-      const logDir = path.join(this.extensionPath, '.session-logs');
+      const logDir = path.join(os.homedir(), '.ghola', 'session-logs');
       fs.mkdirSync(logDir, { recursive: true });
 
       const now = new Date();
