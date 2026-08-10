@@ -2,7 +2,7 @@
   "id": "tool.conversational-settings",
   "name": "Conversational Settings",
   "version": "0.1.1",
-  "description": "Lets users edit module settings via natural language — TPM parses the request, identifies the target setting, and proposes the change or applies it when write infrastructure is available.",
+  "description": "Lets users edit module settings via natural language — TPM parses the request, identifies the target setting, and either proposes the change or applies it directly via the settings-write verb, gated by Application Mode and the Enable Settings Write master switch. Phase 1: scalar settings only.",
   "proactive": false,
   "category": "utility",
   "kind": "capability",
@@ -28,8 +28,14 @@
       "applicationMode": {
         "type": "string",
         "label": "Application Mode",
-        "description": "How TPM responds to a recognized settings-edit intent. propose surfaces the exact panel edit needed (e.g., Modules tab → Database Access → toggle off) for the user to apply manually. apply attempts to apply the change directly when write infrastructure is available — falls back to propose otherwise. ask prompts the user to choose per occurrence. Default propose matches the current infrastructure (no settings-write API yet); flip to apply when that lands.",
+        "description": "How TPM responds to a recognized settings-edit intent. propose surfaces the exact panel edit needed (e.g., Modules tab → Database Access → toggle off) for the user to apply manually. apply attempts to apply the change directly via the settings-write verb — falls back to propose if Enable Settings Write is off or the host refuses the write for any reason (undeclared key, bad value, autonomous mode active, kv-table target, host-managed value). ask prompts the user to choose per occurrence. Default propose is the conservative choice: flip to apply only once you also want the write gate itself on (see Enable Settings Write below) — the two settings are independent switches, and this one alone never writes anything.",
         "default": "propose"
+      },
+      "enableSettingsWrite": {
+        "type": "boolean",
+        "label": "Enable Settings Write",
+        "description": "The master gate the host enforces on every settings write this module attempts. While this is off — and off is the default — set-module-setting is refused outright for every request regardless of Application Mode, however the operator phrases it. Turning it on does not by itself cause any write: Application Mode must also be apply (or ask, with the operator choosing apply) for a write to be attempted at all, and every write is still subject to the host's other checks (schema membership, value validation, the self-reference denylist protecting this module's own settings, and the bar on writing during mode.ticket-pr or War Mode). This setting and Application Mode are two independent switches; neither one opens the other.",
+        "default": false
       },
       "requireConfirmationFor": {
         "type": "string",

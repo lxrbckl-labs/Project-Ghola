@@ -82,7 +82,7 @@ The learning loop has scope limits, and the following are explicitly out of scop
 
 - **Secrets, tokens, or credentials** accidentally posted in comment bodies. When `tool.secrets-wrapper-pattern` is enabled, its filter applies before QA reads the log entries — secret-shaped values are scrubbed at that boundary, not by this module.
 - **Personal opinions or off-topic discussion** in comments. Pattern extraction is bounded to review-related content; chat-style threads, social asides, and non-review remarks are excluded from the buckets.
-- **Comments older than the log's retention window**, set by `integration.bitbucket-pr-comments::logRetentionDays`. Once entries roll off the writer's retention, this module no longer sees them — that retention boundary is the writer's, not the reader's.
+- **Comments older than what the log actually retains.** `integration.bitbucket-pr-comments::logRetentionDays` is a legacy setting for a pruning design that was never implemented — nothing enforces it, and no automatic deletion of the log occurs. The log's actual bound is the coded `capture-comments` path's size-based rotation (documented in `tool.reviewer-dossier`); entries that rotate out of that file are the ones this module no longer sees.
 
 ## Module-disabled vs feature-disabled
 

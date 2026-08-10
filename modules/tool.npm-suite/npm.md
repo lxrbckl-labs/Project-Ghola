@@ -19,10 +19,10 @@ Per the preamble's parameter-allowlist rule, the entries in `parameters.allowedC
 When an agent is about to run an `npm` or `ng` command:
 
 1. Read `parameters.allowedCommands` from the Session Manifest entry for `tool.npm-suite`.
-2. Check how it appears:
-   - `(defaults)` — the user has not yet overridden the module settings. The factory allowlist applies: `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, `npm ls`, `npm outdated`, `ng test`, `ng lint`, `ng build` are all enabled. Treat these as the operative keys and proceed to step 3.
+2. Check how it appears — `allowedCommands` declares a default in the module schema, so the manifest always shows the resolved object, never a sentinel:
+   - The object matches the factory allowlist (`npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, `npm ls`, `npm outdated`, `ng test`, `ng lint`, `ng build`) — the user has not customized the list, and the composer filled in the declared default. Treat these as the operative keys and proceed to step 3.
    - `{}` (an empty JSON object) — the user explicitly cleared every entry. Refuse with: "Cannot run `<command>` — this module's `allowedCommands` is empty, so all npm and ng invocations are refused. Add the command in the Modules tab or run it manually."
-   - A non-empty JSON object — proceed to step 3.
+   - Any other non-empty JSON object — proceed to step 3.
 3. If the requested command string is not a key in the effective allowlist, refuse with: "Cannot run `<command>` — `<command>` is not in this module's `allowedCommands`. Add it in the Modules tab to authorize it for this session."
 4. If the command string is a key, proceed. Surface the run in the agent's return so TPM has an audit trail.
 
@@ -36,7 +36,7 @@ Commonly seeded values (the defaults this module ships with): `npm test`, `npm r
 
 Bare `npm version <patch|minor|major>` (without `--no-git-tag-version`) is NOT authorized: npm defaults to creating a git commit and tag, which is out of scope for this module. Never drop the `--no-git-tag-version` flag, and never add flags such as `-m` / `--message` that re-introduce a commit. Because this command writes `package.json` and `package-lock.json`, it is the one allowlisted command whose file changes fall under the package/lockfile always-applied protections below — call the bump out in your return, since visibility is the point of that guardrail.
 
-This command is NOT part of the global factory default allowlist (the `(defaults)` set above). It is enabled by default only in the **Project** preset; in any other configuration the user must add it explicitly before an agent may run it.
+This command is NOT part of the global factory default allowlist (the default catalog described in step 2 above). It is enabled by default only in the **Project** preset; in any other configuration the user must add it explicitly before an agent may run it.
 
 ## Always-applied protections (regardless of allowlist)
 

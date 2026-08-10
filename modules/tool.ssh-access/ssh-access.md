@@ -12,7 +12,7 @@ Per the preamble's parameter-allowlist rule, the values in `parameters.allowedHo
 - Strict prefix match — match on string equality, byte-for-byte, against the host token of the SSH invocation. `prod-server` does NOT match `prod-server-2`. If a user enabled `prod-server` but not `prod-server-2`, then `ssh prod-server-2 ...` is refused even though the prefix overlaps.
 - Each row carries an Enabled toggle (per the kv-table). Disabled rows persist in the panel but are filtered out at compose time — the agent sees only the enabled hosts.
 - Order does not matter. Duplicates are deduplicated silently.
-- Default `{}` (empty) means **no** SSH invocations are allowed — every `ssh <host> ...` is refused. When the Session Manifest renders `parameters: (defaults)` instead of an explicit value, the default applies — treat it the same as an empty object: no hosts are allowed.
+- Default `{}` (empty) means **no** SSH invocations are allowed — every `ssh <host> ...` is refused. `allowedHosts` declares `{}` as its default in the module schema, so the manifest always renders a live object — the user's stored hosts, or the empty-object default when they haven't added any — never a sentinel.
 - The allowlist is **not** validated against any system inventory. Whatever the user types in is trusted verbatim — the user owns the contents of the list.
 
 ## Configurable: allowed command patterns

@@ -354,9 +354,21 @@ done
 # first file that actually CARRIES a statusLine command wins — a project settings
 # file that exists but says nothing about the statusline must not mask the
 # user-level one, which is how the merge behaves for a single key.
-# `$CLAUDE_CONFIG_DIR` comes before `$HOME` because it RELOCATES the whole config
-# directory when set (it IS set in this operator's live environment), so preferring
-# `$HOME` would read a file the harness never reads and report a confident `none`.
+# `$CLAUDE_CONFIG_DIR` REPLACES `$HOME/.claude` rather than merely outranking it,
+# and that distinction is the whole point of the `if/else` below. The variable
+# RELOCATES the entire config directory: with it set, the harness reads
+# `$CLAUDE_CONFIG_DIR/settings.json` and NEVER OPENS `~/.claude/settings.json` at
+# all. An earlier revision listed both, `$CLAUDE_CONFIG_DIR` first, and fell
+# through to `$HOME` whenever the first file carried no `statusLine` key — which
+# is exactly this operator's live layout (`~/.claude-2/settings.json` has no
+# statusLine, `~/.claude/settings.json` does). The probe read the second file, saw
+# a healthy renderer command in a file the harness never consults, and reported
+# `statusline_health=ok` for a session whose statusline had not run once in two
+# days. A FALSE `ok` is the worst value this field can take — it is the only
+# notice the operator gets — so the two candidates are now mutually exclusive.
+# `$CLAUDE_CONFIG_DIR` is also translated (it arrives in `C:\...` form on this
+# operator's host and would not resolve under a WSL probe), with the raw spelling
+# tried first per the try-then-verify discipline blocks 8a/8b use.
 # Two limits, recorded rather than guessed at: an enterprise `managed-settings.json`
 # outranks every file below and is not consulted, and the project candidates are
 # derived from `$PWD` because that is the surface the harness resolves them from.
@@ -377,12 +389,23 @@ sl_files=()
 # candidate licenses `none`; a positive hit is still taken from whichever file
 # carries it, project files first, because that is the harness's precedence.
 sl_user_from="${#sl_files[@]}"
-[ -n "$CLAUDE_CONFIG_DIR" ] && sl_files+=("$CLAUDE_CONFIG_DIR/settings.json")
-[ -n "$HOME" ] && sl_files+=("$HOME/.claude/settings.json")
-if [ "$shell_os" = "windows" ] && [ -n "$USERPROFILE" ]; then
-  # Same reasoning as block 8's windows arm: Git Bash inherits `%USERPROFILE%` in
-  # `C:\...` form, and step 1 of `translate_path` alone repairs the separators.
-  sl_files+=("$(translate_path "$USERPROFILE")/.claude/settings.json")
+if [ -n "$CLAUDE_CONFIG_DIR" ]; then
+  # RELOCATED config dir: this is the ONLY user-level file the harness reads, so
+  # no `$HOME`/`$USERPROFILE` candidate is appended. If it is unreadable, nothing
+  # licenses `none` and the field stays `unknown` — the honest answer — instead of
+  # borrowing a verdict from a file that is not in play.
+  sl_files+=("$CLAUDE_CONFIG_DIR/settings.json")
+  _sl_cfg="$(translate_path "$CLAUDE_CONFIG_DIR")"
+  # Only when translation actually changed the spelling; both name one directory,
+  # so the duplicate is harmless and the first readable one wins.
+  [ "$_sl_cfg" != "$CLAUDE_CONFIG_DIR" ] && sl_files+=("$_sl_cfg/settings.json")
+else
+  [ -n "$HOME" ] && sl_files+=("$HOME/.claude/settings.json")
+  if [ "$shell_os" = "windows" ] && [ -n "$USERPROFILE" ]; then
+    # Same reasoning as block 8's windows arm: Git Bash inherits `%USERPROFILE%` in
+    # `C:\...` form, and step 1 of `translate_path` alone repairs the separators.
+    sl_files+=("$(translate_path "$USERPROFILE")/.claude/settings.json")
+  fi
 fi
 sl_user_seen="no"; sl_key="no"; sl_cmd=""; _sl_i=0
 # Guarded expansion (empty array), matching block 8 — this probe must never error.
@@ -450,6 +473,108 @@ fi
 # Every other outcome — no readable user-level settings file, or a `statusLine`
 # block that yielded no command — keeps the initialized `unknown`, which is the
 # honest answer for a check that could not be completed.
+
+# 2c. statusline STATE FRESHNESS — did the configured renderer actually RUN?
+# Block 2b answers "is a renderer configured and could it run", which is a
+# CONFIGURATION fact. It cannot answer "is it running", and the two came apart
+# badly once already: a session under a relocated config dir had a perfectly
+# healthy `~/.claude/settings.json` and a renderer that was never invoked. 2b's
+# candidate fix closes that particular cause; this block closes the CLASS, because
+# a state file written 54 hours ago while a session is live is the one signal that
+# is true no matter WHY the renderer is dead.
+#
+# The key is taken from `$GHOLA_STATE_KEY` — exported by `src/session/launcher.ts`
+# and honored VERBATIM by both writers — and the check is SKIPPED when it is unset.
+# That is deliberate and not a gap: deriving the key here would be a FOURTH copy of
+# the algorithm `scripts/ghola-statusline-parity.mjs` exists to keep from drifting
+# (and one the checker does not know to compare), which is a worse bug than a
+# missing signal. The launcher omits the variable only when no workspace folder is
+# open, and that is not a session this field is diagnosing.
+#
+# Gated on `statusline_health=ok` so it never double-reports: `none`/`broken`
+# already name the cause and their remedies differ, and a stale file under either
+# of them is a consequence, not a second finding.
+#
+# The 900s bound is NOT the reader's 90s staleness window and must not be reduced
+# to it. The harness renders the statusline before the first user turn and again
+# every `refreshInterval` seconds, so a live renderer is only ever seconds old by
+# the time this probe runs; 900 buys an order of magnitude of headroom against a
+# slow boot, a suspended laptop, or a clock that stepped, and still catches the
+# real case by a factor of 200. `absent` and `stale` are reported separately
+# because a file that was never created and one that stopped being updated look
+# the same to a reader and have different histories.
+#
+# Absent-means-healthy, like `bridge_state` and the vault fields: emitted ONLY when
+# the abnormal condition is CONFIRMED. Every guard failure — no resolvable home, no
+# state directory, an unreadable file, no parseable `updated`, no `date` — leaves
+# the field empty and says nothing, because a check that could not be completed is
+# never evidence of a fault.
+statusline_state=""
+if [ "$statusline_health" = "ok" ] && [ -n "$GHOLA_STATE_KEY" ]; then
+  sl_home=""
+  [ -n "$HOME" ] && [ -d "$HOME" ] && sl_home="$HOME"
+  if [ -z "$sl_home" ] && [ "$shell_os" = "windows" ] && [ -n "$USERPROFILE" ]; then
+    # Same `%USERPROFILE%` reasoning as blocks 2b and 8: only reached when `$HOME`
+    # itself is unusable, and adopted only after `-d`.
+    _sl_up="$(translate_path "$USERPROFILE")"
+    [ -d "$_sl_up" ] && sl_home="$_sl_up"
+  fi
+  if [ -n "$sl_home" ] && [ -d "$sl_home/.ghola/statusline/state" ]; then
+    _sl_state="$sl_home/.ghola/statusline/state/${GHOLA_STATE_KEY}.json"
+    if [ ! -e "$_sl_state" ]; then
+      statusline_state="absent"
+    elif [ -f "$_sl_state" ] && [ -r "$_sl_state" ]; then
+      # Pure bash again, for the same reason 2b is: this block has to keep working
+      # on a host where the interpreters are the thing that is broken.
+      _sl_json=""
+      { _sl_json="$(<"$_sl_state")"; } 2>/dev/null
+      _sl_upd="${_sl_json#*\"updated\"}"
+      if [ "$_sl_upd" != "$_sl_json" ]; then
+        _sl_upd="${_sl_upd#*:}"
+        # Trim the whitespace JSON permits between the colon and the number. A
+        # BOUNDED loop rather than an extglob strip: the cap makes it obvious this
+        # can never walk past the value into the rest of the object.
+        _sl_ws=0
+        while [ "$_sl_ws" -lt 8 ]; do
+          case "$_sl_upd" in
+            ' '*|$'\t'*) _sl_upd="${_sl_upd#?}" ;;
+            *) break ;;
+          esac
+          _sl_ws=$((_sl_ws + 1))
+        done
+        # Digits only, from the front; anything else yields nothing and says nothing.
+        # The 12-digit cap is a guard, not a range check: an epoch is 10 digits
+        # (11 from the year 2286), and refusing anything longer keeps a corrupt
+        # file from reaching bash arithmetic at all.
+        _sl_num=""
+        case "$_sl_upd" in [0-9]*) _sl_num="${_sl_upd%%[!0-9]*}" ;; esac
+        [ "${#_sl_num}" -gt 12 ] && _sl_num=""
+        # The digit run must END at a JSON delimiter. Without this, `"updated":09xx`
+        # yields `09` and this block reports a CONFIRMED `stale` off a corrupt file —
+        # a real-looking verdict derived from nothing, which is the failure mode the
+        # whole block exists to remove. A malformed value now says nothing at all.
+        if [ -n "$_sl_num" ]; then
+          case "${_sl_upd#"$_sl_num"}" in
+            ''|,*|\}*|' '*|$'\t'*|$'\n'*|$'\r'*) ;;
+            *) _sl_num="" ;;
+          esac
+        fi
+        _sl_now="$(date +%s 2>/dev/null)"
+        case "$_sl_now" in ''|*[!0-9]*) _sl_now="" ;; esac
+        # `10#` on both operands is load-bearing: bash reads a leading-zero literal
+        # as OCTAL, so a corrupt `"updated":09...` would print `value too great for
+        # base` to stderr — and this probe must never print error text.
+        #
+        # A NEGATIVE age (a future timestamp, i.e. a stepped clock) is deliberately
+        # not `stale`: it is a clock problem, and this field must not claim a
+        # renderer fault it has no evidence for.
+        if [ -n "$_sl_num" ] && [ -n "$_sl_now" ] && [ "$((10#$_sl_now - 10#$_sl_num))" -gt 900 ]; then
+          statusline_state="stale"
+        fi
+      fi
+    fi
+  fi
+fi
 
 # 3. team
 perf="${SWE_PERFORMANCE_CORES:-2}"; eff="${SWE_EFFICIENCY_CORES:-1}"; qa="${QA_AGENT_COUNT:-1}"
@@ -777,6 +902,19 @@ emit env_state "$env_state"; [ -n "$missing" ] && emit env_missing "$missing"
 # all follow). `ok` is the healthy value and the module renders NO line for it, so
 # a healthy boot trace is unchanged even though the digest gained a line.
 emit statusline_health "$statusline_health"
+# Emitted ONLY when a CONFIGURED-AND-RUNNABLE renderer has demonstrably not written
+# this session's pill state (block 2c), so the digest's shape is unchanged for every
+# healthy boot — the `bridge_state`/`vault_state` convention, not `statusline_health`'s
+# unconditional one. TWO values, one meaning, different histories:
+#   absent — no state file exists for this session's key at all.
+#   stale  — a state file exists and its `updated` epoch is over 900s old.
+# Both say THE RENDERER IS NOT RUNNING even though `statusline_health=ok` says it
+# could. That combination is what a false `ok` looked like from the outside, so a
+# consumer should render it as a fault and NOT as a variation on healthy: the pill's
+# figures are frozen or blank, and the likeliest causes are a harness that is not
+# invoking the configured command (check which settings file is actually active —
+# `$CLAUDE_CONFIG_DIR` relocates it) or a renderer that is failing before its write.
+[ -n "$statusline_state" ] && emit statusline_state "$statusline_state"
 emit team "${perf}p/${eff}e/${qa}qa"
 emit team_models "perf=${pm},eff=${em},qa=${qm}"
 emit work_repo "${repo:-none}"

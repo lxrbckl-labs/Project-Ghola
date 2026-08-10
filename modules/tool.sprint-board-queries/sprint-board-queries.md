@@ -1,5 +1,9 @@
 # Sprint and Board Queries (TPM playbook)
 
+**Availability gate — read this before offering any query below.** This playbook calls `searchJiraIssuesUsingJql`, an **Atlassian MCP tool**. No configuration shipped in this repo provides that MCP server — nothing under `src/` or `scripts/` implements search, and `integration.atlassian-suite`'s own "Sprint and Board Queries" section is prose over the same not-yet-configured tool, not a second implementation of it. Before answering a sprint or board question, check whether `searchJiraIssuesUsingJql` is actually present as a callable tool in this session. If it is not, board and sprint queries are **UNAVAILABLE**: say so plainly ("this needs the Atlassian MCP server configured in your CLI, which isn't set up here") rather than attempting the flow, guessing at an answer, or falling back to `bb-bridge.mjs get-ticket` (which fetches one key at a time and cannot answer a board-scoped question). The playbook below is kept for the day the operator configures that MCP server — it is not deleted, but it is dormant until then.
+
+**Never a source of `mode.ticket-pr` queue entries.** `mode.ticket-pr/ticket-pr.md`'s own rule ("Board and column queries are NOT available in this mode, and asking for one is not a queue") is authoritative there: that mode's ticket queue is an explicit, operator-supplied list of Jira keys, and a board or sprint query answered here — even on a session where the MCP tool happens to be present — is never itself a queue and must never be used to populate or extend one.
+
 ## Purpose
 Answer natural language sprint and board questions by forming JQL and running it read only via `searchJiraIssuesUsingJql` (Atlassian MCP). This module requires `integration.atlassian-suite` for the live connection and credentials. Read `parameters.boardId` for the active board to scope queries; if it is empty, scope by project and `openSprints()` instead.
 

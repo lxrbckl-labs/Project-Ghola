@@ -17,7 +17,7 @@ Parsing rules:
 - **The connection name (value) is the authoritative gate.** Project keys are documentation/routing context only — they let TPM and SWE talk about "the CMMS connection" without ambiguity, but the security check is on the value.
 - Connection names are **case-sensitive** and must match exactly — do not normalize, lowercase, or guess.
 - Project keys are unique within the map. If the user enters a duplicate key, the existing value is overwritten.
-- An empty object `{}` means **no** DB access is granted for this session, even though the module is enabled. SWE must ask TPM to populate the map before running any query. When the Session Manifest renders `parameters: (defaults)` instead of an explicit map, the default applies — treat it the same as an empty object: no DB access is granted.
+- An empty object `{}` means **no** DB access is granted for this session, even though the module is enabled. SWE must ask TPM to populate the map before running any query. `allowlist` declares `{}` as its default in the module schema, so the manifest always renders a live map — the user's stored entries, or the empty-object default when they haven't added any — never a sentinel; an unpopulated map reads the same as an explicitly emptied one.
 - SWE may **only** query a connection whose name appears verbatim as a value in the map — never invent connection names, pull credentials from `appsettings.json` or environment variables, or construct an ad-hoc connection.
 
 Example:

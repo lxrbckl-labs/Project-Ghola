@@ -97,6 +97,24 @@ export interface SettingsField {
   multiSelect?: boolean;
   /** When true and `type` is `'string'`, the settings panel renders the field as a multi-line textarea instead of a single-line input. */
   multiline?: boolean;
+  /**
+   * Marks a field whose CONVERSATIONAL write requires a modal operator
+   * confirmation before it is applied.
+   *
+   * Panel-irrelevant: the settings panel already puts a human in front of the
+   * control, so this flag changes nothing there. It exists for the
+   * `tool.conversational-settings` write path, where the change is requested in
+   * chat and the operator is not necessarily looking at the field. When it is
+   * `true`, `extension.ts` raises a `showWarningMessage({ modal: true })` naming
+   * the module, the field, and the old -> new values, and AWAITS an explicit
+   * Apply before anything is persisted; Cancel refuses the write.
+   *
+   * Set it on any field whose value widens a permission, relaxes a guardrail, or
+   * changes what an agent is allowed to touch. Absent means "not sensitive" —
+   * the write still happens, and still announces itself with a non-modal toast,
+   * but it does not stop to ask.
+   */
+  securitySensitive?: boolean;
   /** For `type === 'number'`: optional inclusive minimum, applied as the input's `min` attribute (spinner floor + browser validation). */
   min?: number;
   /** For `type === 'number'`: optional inclusive maximum, applied as the input's `max` attribute (spinner ceiling + browser validation). */

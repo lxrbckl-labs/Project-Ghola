@@ -25,6 +25,22 @@ import { resolveTeamIdentity } from './team-identity';
  */
 const CLI_BOOT_DELAY_MS = 3000;
 
+/**
+ * How long the conversation-transcript watcher waits between re-scans of the
+ * project transcript directory, and how many scans it makes before giving up.
+ *
+ * Claude Code writes its conversation transcript itself, as a JSON Lines file
+ * under `<config dir>/projects/<workspace slug>/<session id>.jsonl`, and the
+ * session id is generated INSIDE the CLI — Ghola cannot know the filename at
+ * launch time, only the directory it will appear in. So the watcher polls that
+ * directory for the newest `.jsonl` touched at or after the launch instant. One
+ * second is well under the CLI's cold-start time, and 60 attempts (one minute)
+ * covers a cold start on a loaded machine with room to spare; after that the
+ * watcher gives up quietly rather than polling for the life of the window.
+ */
+const TRANSCRIPT_POLL_INTERVAL_MS = 1000;
+const TRANSCRIPT_POLL_MAX_ATTEMPTS = 60;
+
 /** Module id whose enablement gates the WSL fast-path `cd`. */
 const FASTPATH_MODULE_ID = 'tool.fastpath-check';
 
@@ -173,6 +189,124 @@ type ClaudeCliIdentity =
   | { known: true; binary: string; via: string }
   | { known: false; reason: string; resolvedNonClaudeBinary?: string };
 
+/**
+ * Slugify an absolute workspace path the way Claude Code names the per-project
+ * directory under `<config dir>/projects/`: every character that is not a
+ * letter or a digit becomes a hyphen, and case is preserved verbatim.
+ *
+ * Verified against the directories the CLI has actually created on disk —
+ * `C:\Users\aarbuckle\source\repos\cmms1\cmms-api` becomes
+ * `C--Users-aarbuckle-source-repos-cmms1-cmms-api` (drive colon and each
+ * separator each contribute one hyphen, the digit survives), and the WSL form
+ * `/home/aarbuckle/projects/Project-Ghola` becomes
+ * `-home-aarbuckle-projects-Project-Ghola`.
+ *
+ * Case is the one part callers must not lean on: VS Code hands us a workspace
+ * path whose Windows drive letter may be lower-cased (`c:\Users\...`) while the
+ * CLI recorded it upper-cased, and both spellings exist side by side in a real
+ * `projects/` directory. `resolveTranscriptDirOnDisk` therefore matches the
+ * slug case-INSENSITIVELY rather than trusting this string exactly.
+ */
+function claudeProjectSlug(workspacePath: string): string {
+  return workspacePath.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+/**
+ * Resolve the Claude Code CONFIG DIRECTORY that the session being launched will
+ * actually use — the directory whose `projects/` subtree holds the conversation
+ * transcripts.
+ *
+ * This is the whole reason transcript discovery cannot simply hardcode
+ * `~/.claude`. Ghola launches the CLI through a registered alias, and an alias
+ * is free to redirect the config dir: the shipped registry pattern is literally
+ * `CLAUDE_CONFIG_DIR=$HOME/.claude-2 command claude`, which puts every
+ * transcript under `~/.claude-2/projects/` and none under `~/.claude/`. An
+ * operator running a second, isolated CLI profile is the normal case, not an
+ * exotic one, so the alias expansion is the FIRST place we look.
+ *
+ * Order: the `CLAUDE_CONFIG_DIR` assignment parsed out of the selected alias's
+ * expansion, then the extension host's own environment (set when the operator
+ * launched VS Code with it exported), then the CLI's documented default of
+ * `~/.claude`. `$HOME`, `${HOME}` and a leading `~` are expanded because the
+ * alias stores the value as a shell string, and mixed separators are normalized
+ * because `$HOME/.claude-2` on Windows expands to `C:\Users\name/.claude-2`.
+ */
+function resolveClaudeConfigDir(
+  aliasCommand: string | undefined,
+  homeDir: string = os.homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const parsed = aliasCommand ? parseBashCommand(aliasCommand) : null;
+  const fromAlias = parsed?.envVars.find((v) => v.name === 'CLAUDE_CONFIG_DIR')?.value;
+  const raw = (fromAlias ?? env.CLAUDE_CONFIG_DIR ?? '').trim();
+  if (raw === '') return path.join(homeDir, '.claude');
+  const expanded = raw
+    .replace(/^~(?=[\\/]|$)/, homeDir)
+    .replace(/\$\{HOME\}/g, homeDir)
+    .replace(/\$HOME/g, homeDir);
+  return path.normalize(expanded);
+}
+
+/**
+ * Locate the on-disk transcript directory for `workspacePath` under `configDir`,
+ * matching the project slug case-insensitively (see `claudeProjectSlug` for why
+ * an exact match is not safe). Returns `undefined` when the config dir has no
+ * `projects/` subtree yet or no entry matches. Never throws: transcript
+ * discovery is an indicator, and an unreadable directory must not take a
+ * session launch down with it.
+ */
+function resolveTranscriptDirOnDisk(
+  configDir: string,
+  workspacePath: string,
+): string | undefined {
+  try {
+    const projectsDir = path.join(configDir, 'projects');
+    const wanted = claudeProjectSlug(workspacePath).toLowerCase();
+    for (const entry of fs.readdirSync(projectsDir)) {
+      if (entry.toLowerCase() === wanted) return path.join(projectsDir, entry);
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Newest `.jsonl` in `dir` last written at or after `notBeforeMs`, or
+ * `undefined` when there is none.
+ *
+ * The `notBeforeMs` floor is what keeps the watcher from latching onto a
+ * transcript left behind by a PREVIOUS session in the same repo: the file the
+ * CLI is writing right now is touched continuously, every older one is frozen
+ * at its final write. A resumed session is still matched correctly, because
+ * resuming appends to the existing file and so refreshes its mtime. Never
+ * throws, for the same reason as `resolveTranscriptDirOnDisk`.
+ */
+function findNewestTranscript(dir: string, notBeforeMs: number): string | undefined {
+  try {
+    let newestPath: string | undefined;
+    let newestMs = -1;
+    for (const entry of fs.readdirSync(dir)) {
+      if (!entry.endsWith('.jsonl')) continue;
+      const candidate = path.join(dir, entry);
+      try {
+        const stat = fs.statSync(candidate);
+        if (!stat.isFile()) continue;
+        if (stat.mtimeMs < notBeforeMs) continue;
+        if (stat.mtimeMs > newestMs) {
+          newestMs = stat.mtimeMs;
+          newestPath = candidate;
+        }
+      } catch {
+        // A file that vanished or cannot be stat'd is simply not a candidate.
+      }
+    }
+    return newestPath;
+  } catch {
+    return undefined;
+  }
+}
+
 export class SessionLauncher {
   constructor(
     private readonly loader: ModuleLoader,
@@ -187,12 +321,23 @@ export class SessionLauncher {
    * launch. Set during `launch()` so the record status bar item (owned by
    * extension.ts) can read it after the session starts. `undefined` before the
    * first launch or when log-directory creation failed.
+   *
+   * Re-pointed at Claude Code's own conversation transcript once
+   * `watchForConversationTranscript` finds it, so whatever the operator opens
+   * from the record icon is the file that actually holds the conversation.
    */
   sessionLogPath: string | undefined;
 
   /** Called when a session transcript starts recording. Extension.ts sets this
    *  to light up the record status bar icon. */
   onSessionLogStarted?: (logPath: string) => void;
+
+  /**
+   * Pending timer for the conversation-transcript watcher. Held so a second
+   * launch cancels the first launch's watcher instead of leaving two of them
+   * racing to re-point `sessionLogPath` at different sessions' transcripts.
+   */
+  private transcriptWatchTimer?: NodeJS.Timeout;
 
   /**
    * Loopback URL of the host-side Bitbucket bridge, when it started. Injected
@@ -251,6 +396,15 @@ export class SessionLauncher {
     const selectedAlias = cfg.get<string>('selectedAlias', '').trim();
     const cliCommand = (selectedAlias !== '' ? selectedAlias : cfg.get<string>('cliCommand', 'claude')).trim();
     const sessionCommand = cfg.get<string>('sessionCommand', 'initiate').trim();
+
+    // Bash-canonical expansion of the alias being launched, when one was picked.
+    // Needed by transcript discovery and nothing else: the alias is where a
+    // `CLAUDE_CONFIG_DIR=...` redirect lives, and that decides which config-dir
+    // tree the CLI will write this session's conversation transcript into.
+    const aliasCommand =
+      selectedAlias !== ''
+        ? cfg.get<CliAlias[]>('cliAliases', []).find((entry) => entry?.alias === selectedAlias)?.command
+        : undefined;
 
     // Permission mode the session launches Claude Code in, so the user does not
     // have to press Shift+Tab. Read the same way as cliCommand/sessionCommand.
@@ -617,29 +771,20 @@ export class SessionLauncher {
       }
     }
 
-    // Session transcript: resolve the log file path and fire-and-forget the
-    // cleanup script BEFORE creating the terminal. The log directory lives
-    // inside the extension tree and is gitignored.
+    // Session transcript: resolve the log file path before creating the
+    // terminal. The log directory lives under the user's home directory
+    // (`~/.ghola/session-logs`), outside the extension tree and outside git.
     const sessionLogPath = this.resolveSessionLogPath(
       (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
     );
     this.sessionLogPath = sessionLogPath;
-    if (sessionLogPath) {
-      // Fire-and-forget cleanup: the script handles Monday detection and
-      // deletion internally. Never blocks the session launch.
-      const logDir = path.dirname(sessionLogPath);
-      const scriptPath = path.join(this.extensionPath, 'scripts', 'ghola-session-log.mjs');
-      childProcess.spawn('node', [scriptPath, '--dir', logDir], {
-        stdio: 'ignore',
-        detached: true,
-      }).unref();
 
-      // Light up the record icon so the operator knows the session is being
-      // logged and can click to open the log file.
-      if (this.onSessionLogStarted) {
-        this.onSessionLogStarted(sessionLogPath);
-      }
-    }
+    // NOT where the record icon is lit. Resolving a path is not evidence that
+    // anything is being captured into it, and lighting the icon here made the
+    // indicator claim a recording on PowerShell, where nothing was ever
+    // captured (see the transcript note further down). The icon is lit at the
+    // two places capture genuinely begins: the bash `script` wrapper below,
+    // and the conversation-transcript watcher after it.
 
     const terminal = vscode.window.createTerminal({
       name: terminalName,
@@ -744,17 +889,26 @@ export class SessionLauncher {
           .join(', ')}`,
       );
     }
-    // Session transcript: inject the transcript capture command BEFORE the CLI
-    // command so the entire session is logged. PowerShell gets
-    // `Start-Transcript` as a separate command; bash wraps the CLI command
-    // inside `script -q -a <path> -c '<command>'`.
-    if (sessionLogPath && isPwshShell) {
-      terminal.sendText(
-        `Start-Transcript -Path ${this.pwshQuote(sessionLogPath)} -Append`,
-        true,
-      );
-      this.logger?.appendLine(`[session] transcript: Start-Transcript -> ${sessionLogPath}`);
-    }
+    // Session transcript: bash wraps the CLI command inside
+    // `script -q -a <path> -c '<command>'`, which captures the CLI's console
+    // output because `script` allocates the pty the CLI writes to.
+    //
+    // PowerShell used to get a `Start-Transcript -Path ... -Append` here. It was
+    // REMOVED because it captured nothing, ever. Windows PowerShell's
+    // transcription records the PowerShell HOST's own output streams; a native
+    // child process writes straight to the console handle it inherits and never
+    // passes through the host, so none of its output is transcribed. Verified
+    // directly: inside an active `Start-Transcript`, a `Write-Output` marker
+    // lands in the transcript while the stdout of both `cmd.exe` and `node`
+    // markers does not appear at all. `claude` is such a native process, so
+    // every Windows session log this produced was the same ~1.1 KB stub — the
+    // transcript header plus the echoed command line — with not one line of the
+    // conversation in it, and it lit a "recording" indicator over that stub.
+    //
+    // Windows now gets what it always should have: Claude Code's OWN
+    // conversation transcript, which the CLI writes as JSON Lines regardless of
+    // shell. `watchForConversationTranscript` (started after the command is
+    // sent) finds it and points the record icon at it.
 
     const useArgPrompt = !!cliCommand && (isBashShell || isPwshShell) && !!phaseTwoMessage;
     if (useArgPrompt) {
@@ -814,7 +968,79 @@ export class SessionLauncher {
       terminal.sendText(phaseTwoMessage, true);
     }
 
+    // Light the record icon for the bash `script` wrapper — the one shell-level
+    // capture that genuinely records. The condition mirrors the two branches
+    // above that actually emit `script`: a resolved log path, a bash-equivalent
+    // shell, and a CLI command to wrap.
+    if (sessionLogPath && isBashShell && cliCommand && this.onSessionLogStarted) {
+      this.onSessionLogStarted(sessionLogPath);
+    }
+
+    // Conversation transcript: on EVERY shell, once Ghola has positively
+    // identified the CLI as Claude Code, start watching for the JSON Lines
+    // transcript the CLI writes itself and re-point the record icon at it when
+    // it appears. This is the file that actually holds the conversation, so it
+    // wins over the shell-level capture above wherever both exist.
+    const transcriptWorkspacePath =
+      cwd ?? (vscode.workspace.workspaceFolders ?? [])[0]?.uri.fsPath;
+    if (claudeCli.known && transcriptWorkspacePath !== undefined) {
+      this.watchForConversationTranscript(transcriptWorkspacePath, aliasCommand, Date.now());
+    }
+
     this.logger?.appendLine(`[session] launched terminal with shell: ${shellPath ?? '<default>'}`);
+  }
+
+  /**
+   * Poll for the conversation transcript Claude Code writes for the session just
+   * launched, and hand its path to `onSessionLogStarted` once it appears.
+   *
+   * Why polling rather than a path computed up front: the transcript filename is
+   * the CLI-generated session id, which does not exist until the CLI starts, so
+   * only the DIRECTORY is knowable at launch. `startedAtMs` is the launch
+   * instant, used as the floor that separates this session's transcript from the
+   * older ones sitting in the same directory.
+   *
+   * Fire-and-forget and non-fatal throughout — a session that never yields a
+   * transcript simply leaves the record icon showing whatever the shell-level
+   * capture set, and logs one line saying where it looked.
+   */
+  private watchForConversationTranscript(
+    workspacePath: string,
+    aliasCommand: string | undefined,
+    startedAtMs: number,
+  ): void {
+    // A relaunch supersedes the previous launch's watcher; without this, an old
+    // watcher could still fire and re-point the icon at the previous session.
+    if (this.transcriptWatchTimer) {
+      clearTimeout(this.transcriptWatchTimer);
+      this.transcriptWatchTimer = undefined;
+    }
+
+    const configDir = resolveClaudeConfigDir(aliasCommand);
+    let attempts = 0;
+    const tick = (): void => {
+      attempts += 1;
+      const transcriptDir = resolveTranscriptDirOnDisk(configDir, workspacePath);
+      const found = transcriptDir
+        ? findNewestTranscript(transcriptDir, startedAtMs)
+        : undefined;
+      if (found !== undefined) {
+        this.transcriptWatchTimer = undefined;
+        this.sessionLogPath = found;
+        this.logger?.appendLine(`[session] transcript: conversation log -> ${found}`);
+        if (this.onSessionLogStarted) this.onSessionLogStarted(found);
+        return;
+      }
+      if (attempts >= TRANSCRIPT_POLL_MAX_ATTEMPTS) {
+        this.transcriptWatchTimer = undefined;
+        this.logger?.appendLine(
+          `[session] transcript: no conversation log appeared under ${path.join(configDir, 'projects')} for ${workspacePath} within ${Math.round((TRANSCRIPT_POLL_INTERVAL_MS * TRANSCRIPT_POLL_MAX_ATTEMPTS) / 1000)}s — if this CLI writes to a different config directory, set CLAUDE_CONFIG_DIR in the alias you launch with`,
+        );
+        return;
+      }
+      this.transcriptWatchTimer = setTimeout(tick, TRANSCRIPT_POLL_INTERVAL_MS);
+    };
+    this.transcriptWatchTimer = setTimeout(tick, TRANSCRIPT_POLL_INTERVAL_MS);
   }
 
   /**
@@ -1121,9 +1347,9 @@ export class SessionLauncher {
 
   /**
    * Resolve the absolute path for this session's transcript log file. Creates
-   * the `.session-logs/` directory under the extension path if it does not
-   * exist. Returns `undefined` when the directory cannot be created or no
-   * identity can be resolved. Never throws.
+   * the `~/.ghola/session-logs` directory under the user's home directory if
+   * it does not exist. Returns `undefined` when the directory cannot be
+   * created or no identity can be resolved. Never throws.
    *
    * Filename format: `<YYYY-MM-DD>_<identity>_<HH-mm>.txt`
    *   - Identity from `resolveTeamIdentity` (the same name the status-bar pill

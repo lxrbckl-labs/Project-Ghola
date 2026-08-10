@@ -22,7 +22,7 @@ node "$GHOLA_ROOT/scripts/bb-bridge.mjs" <subcommand> [flags]
 
 The wrapper prints the operation's JSON result to stdout and exits non-zero on failure — loud, never silent. Internally the bridge server authenticates through the AtlassianBridge / `integration.atlassian-suite` credentials exactly as before, so the Bitbucket token still never crosses the agent boundary. The agent also never sees the bridge server's own bearer token: the wrapper resolves its own coordinates, preferring a 0600 JSON coordinates file at `GHOLA_BRIDGE_FILE` (re-read fresh on every invocation, so a restarted extension host's new port and token are picked up without relaunching the session) and falling back to the legacy `GHOLA_BRIDGE_URL` / `GHOLA_BRIDGE_TOKEN` env pair. Never echo either the file's contents or the token in chat or logs, and never pass a token as a flag — this is the same secrets discipline the module already applies to the Bitbucket token itself.
 
-Eight subcommands are available:
+The subcommands relevant to this module's flows:
 
 - `find-pr --repo <slug> --branch <name>` — resolves the open PR id for the current branch.
 - `list-comments --repo <slug> --pr <id>` — fetches PR comments (resolved + unresolved, inline + general); this is the `address comments` snapshot source. Each comment carries: `id`, `parentId` (`null` for top-level thread starters), `kind` (`'inline'`/`'general'`), `author` (`{ displayName, accountId }`), `body`, `inline?` (`{ path, to, from? }`), `resolved`, `createdAt`, `updatedAt`. The response also carries `truncated` (true when the fetch stopped early) and `totalAvailable` (Bitbucket's own total when it reported one) — see the Fetch step for how to handle a partial result.
@@ -32,6 +32,11 @@ Eight subcommands are available:
 - `mark-ready --repo <slug> --pr <id>` — marks a DRAFT PR ready for review. This is a Bitbucket write; see "Mark Ready Verb" below for the confirmation gate that guards it.
 - `to-draft --repo <slug> --pr <id>` — flips a READY PR back to draft (the reverse of `mark-ready`). This is a Bitbucket write; see "To Draft Verb" below for the confirmation gate that guards it.
 - `delete-comment --repo <slug> --pr <id> --comment <id>` — deletes a single PR comment. This is a DESTRUCTIVE, IRREVERSIBLE Bitbucket write; see "Delete Verb" below for the confirmation gate that guards it.
+- `capture-comments --repo <slug> --pr <id> [...]` — the append-only JSONL capture path `tool.reviewer-dossier` reads from; documented there, not duplicated here.
+- `update-pr --repo <slug> --pr <id> [--title ... --description ... --reviewers ...]` — edits an existing PR's title/description/reviewer list. Owned by `integration.atlassian-suite`'s "Update PR" section, not by this module.
+- `whoami` — no flags. Returns `{ status, user: { accountId, nickname, displayName, uuid } }`, the Bitbucket identity of the API token itself. This is how "is this comment ours?" gets answered: compare a comment's `author.accountId` against `whoami.user.accountId`. It is a plain read, cached for the process lifetime on success, and never exposes the token — only the account identity behind it.
+
+The bridge also exposes `workspace-members` (the reviewer-picker's member list); that verb belongs to `tool.pr-prep`, which documents it — see that module rather than looking for it here.
 
 Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). PR id comes from `find-pr`.
 
@@ -109,7 +114,7 @@ Within a snapshot, ordinals are stable. If the user resolves comments 1, 2, and 
 
 ## Round-Trip Flow
 
-1. **PR resolution.** Resolve the open PR for the current branch via `find-pr --repo <slug> --branch <name>`. Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). When more than one PR matches the branch, the bridge picks deterministically: `pickPr` (`src/integration/atlassian-client.ts`) sorts the candidates by newest `updated_on` first, breaking any tie (or a missing timestamp) by the higher `id`. This is not an unordered `values[0]` — it is a defined, repeatable selection. On success the bridge returns `status: 'ok'` with `prId` / `prUrl` / `prTitle` (exit 0); when no open PR exists it returns `status: 'not-found'` with a "No open PR for branch ..." message (non-zero exit). No matches -> ask the user.
+1. **PR resolution.** Resolve the open PR for the current branch via `find-pr --repo <slug> --branch <name>`. Repo slug comes from `git remote get-url origin` (strip `.git`, take the last path segment). When more than one PR matches the branch, the bridge picks deterministically: `pickPr` (`src/integration/atlassian-client.ts`) sorts the candidates by newest `updated_on` first, breaking any tie (or a missing timestamp) by the higher `id`. This is not an unordered `values[0]` — it is a defined, repeatable selection. On success the bridge returns `status: 'ok'` (exit 0) carrying the full lookup result: `prId` / `prUrl` / `prTitle`, `prState` (`'OPEN'` when the open-state query matched, else `'MERGED'` / `'DECLINED'` / `'SUPERSEDED'` from the fallback — so a found-but-closed PR is distinct from a genuine "no PR at all"), `draft` (true = still a draft, false = ready for review — **absent means UNKNOWN, never read a missing `draft` as "ready"**), and `prAuthor` / `prAuthorDisplay` (the author's Bitbucket nickname handle and display name, for telling author mode from review mode). `draft`, `prAuthor`, and `prAuthorDisplay` are each optional because Bitbucket's list response can omit them — absence is unknown, not a negative fact, same as `outdated` below. When no open PR exists the bridge returns `status: 'not-found'` with a "No open PR for branch ..." message (non-zero exit). No matches -> ask the user.
 2. **Fetch.** Call `list-comments --repo <slug> --pr <id>`. The bridge filters out deleted comments, any comment missing a numeric `id`, and any comment with an empty body before returning. Include resolved + unresolved in the snapshot (mark them visually).
 
    **Large PRs.** This call walks the Bitbucket comments API page by page, so it is the one read verb that can take tens of seconds on a heavily-commented PR. Two outcomes need handling:
@@ -368,12 +373,12 @@ The second (`isReply: true`) line is written only when `parameters.logIncludeRep
 
 ### Retention
 
-On every write, TPM checks the existing log file and prunes entries older than `parameters.logRetentionDays` days. Set to 0 to disable pruning entirely (the log grows unbounded). Pruning is best-effort — failures (e.g., concurrent writes) surface as warnings but never block the new entry's write.
+The legacy log settings above (`logCommentsEnabled` / `logFilePath` / `logRetentionDays` / `logIncludeReplies`) describe a design that was never implemented — there is no writer for this log at all. They are superseded by the coded `capture-comments` path (size-based rotation, documented in `tool.reviewer-dossier`). `logRetentionDays` is NOT enforced by anything, and no automatic deletion of any log occurs — the operator deletes logs manually.
 
 ### What Logging Does NOT Do
 
 - Does NOT send the log anywhere external.
-- Does NOT include credentials, tokens, or secret-shaped values from comment bodies (the `tool.secrets-wrapper-pattern` filter applies if enabled).
+- Does NOT include credentials, tokens, or secret-shaped values from comment bodies via any filter of this module's own — this legacy log has no writer and no redaction step (see Retention above). The actual redaction that exists lives in the coded `capture-comments` path's built-in, unconditional, best-effort redaction pass — a mitigation, not a guarantee — documented in `tool.reviewer-dossier`'s "What bounds the capture file" paragraph. It is a different write path than this one, not a filter this module applies.
 - Does NOT modify the comment workflow's existing behavior — logging is a passive side effect on top of the fetch.
 - Does NOT auto-load on session start (this module remains `proactive: false`).
 

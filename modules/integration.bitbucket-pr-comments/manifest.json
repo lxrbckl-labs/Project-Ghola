@@ -101,6 +101,7 @@
         "type": "boolean",
         "label": "Require User Approval",
         "default": true,
+        "securitySensitive": true,
         "description": "When on, TPM presents the polished findings for user approval before posting (the user types ok, revise N: <change>, or cancel). When off, TPM posts immediately after polishing — faster but no safety gate. On is strongly recommended; the off path exists only for scripted bulk workflows. One narrow exception exists even when on: in a Ticket PR (mode.ticket-pr) session the preview is waived for a top-level comment whose body is exactly '@coderabbitai review' and nothing else, so the sentry can request a re-review without stopping. Any other text, including any other @coderabbitai command, still gates."
       },
       "logCommentsEnabled": {
@@ -131,18 +132,21 @@
         "type": "boolean",
         "label": "Mark Ready Enabled",
         "default": false,
+        "securitySensitive": true,
         "description": "Enables the mark ready / ready for review verb, which marks the current branch's draft Bitbucket PR ready for review via the bb-bridge.mjs wrapper's mark-ready subcommand. This is a Bitbucket draft-to-ready write, always behind an explicit user confirmation gate before it runs. Off by default so first-run installs cannot flip a PR's state without opting in."
       },
       "toDraftEnabled": {
         "type": "boolean",
         "label": "To Draft Enabled",
         "default": false,
+        "securitySensitive": true,
         "description": "Enables the to draft / back to draft verb, which flips the current branch's ready-for-review Bitbucket PR back to draft via the bb-bridge.mjs wrapper's to-draft subcommand. The exact reverse of mark ready and, like it, a Bitbucket write always behind an explicit user confirmation gate. Off by default so first-run installs cannot flip a PR's state without opting in."
       },
       "deleteCommentEnabled": {
         "type": "boolean",
         "label": "Delete Comment Enabled",
         "default": true,
+        "securitySensitive": true,
         "description": "Enables the delete verb, which deletes PR comment(s) via the bb-bridge.mjs wrapper's delete-comment subcommand — either specific comments by ordinal/id or, via delete resolved, every resolved comment on the PR. Deletion is DESTRUCTIVE and IRREVERSIBLE on Bitbucket (there is no undo), so it is always behind an explicit user confirmation gate. Its primary use is freeing room under Bitbucket's 200-comment-per-PR cap by clearing resolved comments. On by default; every deletion still requires explicit per-delete confirmation before it runs."
       }
     }

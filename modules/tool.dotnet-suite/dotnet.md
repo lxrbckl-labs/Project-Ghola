@@ -12,7 +12,7 @@ Per the preamble's parameter-allowlist rule, the values in `parameters.allowedCo
 - Each entry is the subcommand only — `build`, not `dotnet build`. A leading `dotnet ` token, if present, is stripped before comparison. Entries may be multi-word (e.g. `tool install`, `tool uninstall`) — these match the full token after `dotnet ` (so `dotnet tool install` is allowed if and only if `tool install` is in the list).
 - Order does not matter.
 - Duplicates are deduplicated silently.
-- An empty string (the default) means **no** `dotnet` commands are allowed — every `dotnet` invocation is refused. This matches the legacy behavior of this module. When the Session Manifest renders `parameters: (defaults)` instead of an explicit value, the default applies — treat it the same as an empty string: no dotnet commands are allowed.
+- An empty string (the default) means **no** `dotnet` commands are allowed — every `dotnet` invocation is refused. This matches the legacy behavior of this module. `allowedCommands` declares `""` as its default in the module schema, so the manifest always renders a live value — the user's stored list, or the empty-string default when they haven't set one — never a sentinel.
 - The allowlist is **not** validated against a hardcoded master list of known subcommands. Whatever the user types in is trusted verbatim. If they list `whoami`, then `dotnet whoami` is permitted by this module even though it is not a real subcommand. The user owns the contents of the list.
 
 When an agent is about to run `dotnet <X>`:

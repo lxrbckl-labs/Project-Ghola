@@ -4,10 +4,10 @@ When this module is loaded, the session participates in a shared cross-team comm
 
 ## Reading parameters
 
-Locate this module's entry in the Session Manifest. Its `parameters` object may appear as `(defaults)`, be absent entirely, or be a live JSON object.
+Locate this module's entry in the Session Manifest. Every parameter this module declares carries a default in the module schema, so the manifest entry always renders a live JSON object with a value for each key — the user's stored override where set, the declared default otherwise. There is no `(defaults)` sentinel to decode for this module.
 
-- If the entry shows `(defaults)` or a parameter key is absent, the default for that parameter applies. Defaults: `commsRoot` = `""` (derive at runtime), `staleAfterDays` = `14`, `checkInboxOnBoot` = `false`, `heartbeatOnBoot` = `false`, `handledMessageRetentionDays` = `3`, `detectParentProject` = `true`, `mergeDeadChildren` = `true`. There is no automatic session-start run — `checkInboxOnBoot` and `heartbeatOnBoot` only matter once the operator has already asked for an on-demand switchboard check; they control whether that on-demand check includes the inbox summary / roster heartbeat, not whether anything happens at session start.
-- If `parameters` is a live object, read each key present and fall back to the documented default for any key that is missing.
+- Defaults: `commsRoot` = `""` (derive at runtime), `staleAfterDays` = `14`, `checkInboxOnBoot` = `false`, `heartbeatOnBoot` = `false`, `handledMessageRetentionDays` = `3`, `detectParentProject` = `true`, `mergeDeadChildren` = `true`. There is no automatic session-start run — `checkInboxOnBoot` and `heartbeatOnBoot` only matter once the operator has already asked for an on-demand switchboard check; they control whether that on-demand check includes the inbox summary / roster heartbeat, not whether anything happens at session start.
+- Read each key's rendered value directly from the object.
 
 ### Resolving `commsRoot`
 

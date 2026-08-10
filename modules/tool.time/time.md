@@ -8,10 +8,7 @@ Training data has a knowledge cutoff -- it is not a clock. The agent MUST NOT gu
 
 ## How to read parameters
 
-Locate this module's entry in the Session Manifest. Its `parameters` object may appear as `(defaults)`, be absent, or be a live JSON object.
-
-- `(defaults)` or absent: `timezone` = `""` (host local time), `timestampFormat` = `"friendly"`.
-- Live object: read `timezone` and `timestampFormat`; fall back to the documented default for any key that is missing.
+Locate this module's entry in the Session Manifest. `timezone` and `timestampFormat` both declare a default in the module schema, so the manifest always renders live values for them — the user's stored override where one is set, the declared default otherwise (`timezone` = `""`, i.e. host local time; `timestampFormat` = `"friendly"`). Read `timezone` and `timestampFormat` directly from the rendered object; there is no sentinel to decode here.
 
 ## Getting the current time
 

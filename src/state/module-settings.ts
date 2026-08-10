@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { SettingsField } from '../manifest/types';
+import type { SettingsField, SettingsFieldType } from '../manifest/types';
 import type { ModuleHandle } from '../modules/handle';
 import { WORKSPACE_STATE_KEYS } from './keys';
 
@@ -445,4 +445,528 @@ async function reconcileAllStoredKeyValueTables(
 
   await writeModuleSettings(globalState, next);
   return `reconciled ${summary.length} table(s): ${summary.join('; ')}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CONVERSATIONAL SETTINGS WRITE (phase 1 — scalar fields only)
+//
+// The primitive behind `tool.conversational-settings`: the operator asks TPM to
+// change a module setting in chat, TPM calls the bridge, and the bridge calls
+// this. Everything below is the VALIDATION half of that capability. The
+// AUTHORIZATION half lives in `src/integration/settings-write-gate.ts` and is
+// resolved by the bridge BEFORE any of this runs — nothing here consults a gate,
+// and reaching this code is not permission to have reached it.
+//
+// TWO HONESTY NOTES that belong in code rather than only in a design doc:
+//
+//   1. "TPM-only" IS NOT ENFORCEABLE. There is exactly one bridge bearer token
+//      per session and every subagent inherits it, so an SWE or QA that decides
+//      to call `bb-bridge set-module-setting` is indistinguishable here from
+//      TPM. The restriction is DOCTRINE, written in module prose and honored by
+//      role discipline. Do not add a comment anywhere claiming this layer
+//      enforces it, and do not build a feature that depends on it doing so.
+//
+//   2. EFFECT TIMING IS SPLIT, and the split is not cosmetic. A setting the HOST
+//      reads per request (the `enableJira*` gates, this module's own write gate)
+//      changes behavior on the very next call. A setting an AGENT reads from its
+//      composed Session Manifest (allowlists, mode parameters, personas) is
+//      baked into a prompt that was composed at session launch, so changing it
+//      now changes nothing until the next session. `settingWriteEffect` below
+//      reports which case a key falls into so the answer travels with the write
+//      instead of living in someone's memory.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** One conversational write request: a `moduleId::fieldKey` target and a value. */
+export interface ModuleSettingWriteRequest {
+  moduleId: string;
+  fieldKey: string;
+  /**
+   * The requested value. Arrives from the CLI as a STRING in practice (flags
+   * are strings), so `coerceSettingValue` narrows it against the field's
+   * declared type; an already-typed value passes through unchanged.
+   */
+  value: unknown;
+}
+
+/** When a written value actually starts affecting behavior. */
+export type ModuleSettingWriteEffect = 'immediate' | 'next-session';
+
+/**
+ * What the operator is being asked to approve, handed to the confirm callback
+ * for a `securitySensitive` field. Contains everything a modal needs to name the
+ * change precisely — module, human label, and both values.
+ */
+export interface ModuleSettingWritePreview {
+  moduleId: string;
+  fieldKey: string;
+  settingKey: string;
+  label: string;
+  type: SettingsFieldType;
+  /** The value in force before the write — the stored override, or the manifest default when there is none. */
+  oldValue: unknown;
+  newValue: unknown;
+  effect: ModuleSettingWriteEffect;
+}
+
+/**
+ * Operator-confirmation hook, injected so this file stays free of `vscode.window`
+ * and the whole decision remains drivable in isolation. Called ONLY for a field
+ * declaring `securitySensitive: true`, and AWAITED before anything is persisted.
+ * Anything other than `true` refuses the write.
+ */
+export type ModuleSettingWriteConfirm = (
+  preview: ModuleSettingWritePreview,
+) => Promise<boolean>;
+
+/**
+ * Outcome of a write attempt. `status` separates the three things a caller has
+ * to tell apart:
+ *   - `written`   — persisted; `oldValue` / `newValue` are both populated.
+ *   - `refused`   — the request itself was not acceptable (undeclared key, a
+ *                   `keyValue` field, a value that failed validation). Nothing
+ *                   was written and nothing will be written by retrying the same
+ *                   request.
+ *   - `cancelled` — the field was sensitive and the operator said no at the
+ *                   modal. Deliberately NOT `refused`: the request was valid and
+ *                   asking again is a legitimate thing to do.
+ */
+export interface ModuleSettingWriteResult {
+  ok: boolean;
+  status: 'written' | 'refused' | 'cancelled';
+  moduleId: string;
+  fieldKey: string;
+  settingKey: string;
+  /** True when the resolved field declares `securitySensitive: true`. False when the field never resolved. */
+  sensitive: boolean;
+  label?: string;
+  type?: SettingsFieldType;
+  oldValue?: unknown;
+  newValue?: unknown;
+  effect?: ModuleSettingWriteEffect;
+  /** Operator-facing explanation. Always present on `refused` / `cancelled`. */
+  message?: string;
+}
+
+/**
+ * Flat keys the EXTENSION HOST reads per request, so a write to one is in force
+ * immediately rather than at the next session launch. Everything not listed is
+ * reported as `next-session`, which is the safe direction to be wrong in: a
+ * change announced as taking effect later and actually taking effect now
+ * surprises nobody, while the reverse makes an operator believe a guardrail
+ * moved when it has not.
+ *
+ * Kept as an explicit list rather than derived, because "does the host read
+ * this?" is a fact about host code, not about the manifest — there is nothing in
+ * a `SettingsField` that could answer it.
+ */
+const HOST_ENFORCED_SETTING_KEYS: ReadonlySet<string> = new Set([
+  'integration.atlassian-suite::enableJiraCommentWrite',
+  'integration.atlassian-suite::enableJiraTransition',
+  'tool.conversational-settings::enableSettingsWrite',
+  // tool.terminal's config is re-read from `moduleSettingsEmitter` in
+  // extension.ts, so these are live for terminals created after the write.
+  'tool.terminal::maxConcurrentTerminals',
+  'tool.terminal::defaultShell',
+  'tool.terminal::autoDisposeOnSessionEnd',
+  'tool.terminal::commandTimeoutMs',
+  'tool.terminal::humanInterventionTimeoutMs',
+]);
+
+/** See the EFFECT TIMING note at the top of this section. */
+function settingWriteEffect(settingKey: string): ModuleSettingWriteEffect {
+  return HOST_ENFORCED_SETTING_KEYS.has(settingKey) ? 'immediate' : 'next-session';
+}
+
+/** Scalar field types phase 1 accepts. `keyValue` is deliberately absent. */
+const WRITABLE_SCALAR_TYPES: ReadonlySet<string> = new Set([
+  'string',
+  'number',
+  'boolean',
+  'enum',
+  'path',
+]);
+
+/** Build a `refused` result without a resolved field. */
+function refuse(
+  req: ModuleSettingWriteRequest,
+  settingKey: string,
+  message: string,
+): ModuleSettingWriteResult {
+  return {
+    ok: false,
+    status: 'refused',
+    moduleId: req.moduleId,
+    fieldKey: req.fieldKey,
+    settingKey,
+    sensitive: false,
+    message,
+  };
+}
+
+/** Result of narrowing a requested value against a field's declared type. */
+type CoercionOutcome =
+  | { ok: true; value: unknown }
+  | { ok: false; message: string };
+
+/**
+ * Narrow a requested value to the field's declared type.
+ *
+ * THE COERCIONS ARE DELIBERATELY SMALL AND NAMED, because a permissive coercion
+ * on a permission-bearing boolean is a security bug wearing convenience's
+ * clothes. The CLI can only send strings, so a string form is accepted for every
+ * type; nothing else is guessed.
+ *
+ *   boolean  'true'|'false'|'1'|'0'|'yes'|'no'|'on'|'off' (case/space-insensitive)
+ *            and the real booleans. NOTHING ELSE — in particular a bare
+ *            non-empty string is NOT truthy here, so a typo like `--value ture`
+ *            is refused instead of quietly turning a gate ON.
+ *   number   a real finite number, or a string that `Number()` maps to one.
+ *            NaN and +/-Infinity are refused. '' is refused (Number('') === 0,
+ *            which is the classic way an empty flag becomes a real setting).
+ *            `min` / `max` are enforced INCLUSIVELY when declared.
+ *   enum     an exact member of `options`. A case-insensitive match is accepted
+ *            ONLY when it is unambiguous, and resolves to the manifest's own
+ *            spelling, so what lands in storage is always a declared option.
+ *   string   any string, INCLUDING the empty string (a legitimate "cleared but
+ *   path     present" value under `mergeChangedModuleSettings` semantics). A
+ *            non-string is refused rather than stringified.
+ */
+function coerceSettingValue(field: SettingsField, raw: unknown): CoercionOutcome {
+  switch (field.type) {
+    case 'boolean': {
+      if (typeof raw === 'boolean') return { ok: true, value: raw };
+      if (typeof raw === 'string') {
+        const t = raw.trim().toLowerCase();
+        if (t === 'true' || t === '1' || t === 'yes' || t === 'on') return { ok: true, value: true };
+        if (t === 'false' || t === '0' || t === 'no' || t === 'off') return { ok: true, value: false };
+      }
+      return {
+        ok: false,
+        message: 'this is a boolean setting; the value must be one of true/false, 1/0, yes/no, on/off',
+      };
+    }
+    case 'number': {
+      let n: number;
+      if (typeof raw === 'number') {
+        n = raw;
+      } else if (typeof raw === 'string' && raw.trim() !== '') {
+        n = Number(raw.trim());
+      } else {
+        return { ok: false, message: 'this is a number setting; the value must be a number' };
+      }
+      if (!Number.isFinite(n)) {
+        return { ok: false, message: 'this is a number setting; the value must be a finite number' };
+      }
+      if (typeof field.min === 'number' && n < field.min) {
+        return { ok: false, message: `value ${n} is below this setting's minimum of ${field.min}` };
+      }
+      if (typeof field.max === 'number' && n > field.max) {
+        return { ok: false, message: `value ${n} is above this setting's maximum of ${field.max}` };
+      }
+      return { ok: true, value: n };
+    }
+    case 'enum': {
+      const options = Array.isArray(field.options) ? field.options : [];
+      if (options.length === 0) {
+        return { ok: false, message: 'this enum setting declares no options, so no value is valid' };
+      }
+      if (typeof raw !== 'string') {
+        return { ok: false, message: `this is an enum setting; the value must be one of: ${options.join(', ')}` };
+      }
+      const exact = options.find((o) => o === raw);
+      if (exact !== undefined) return { ok: true, value: exact };
+      // Case-insensitive fallback, accepted ONLY when a single option matches —
+      // an ambiguous match is refused rather than resolved by list order.
+      const lowered = raw.trim().toLowerCase();
+      const near = options.filter((o) => o.toLowerCase() === lowered);
+      if (near.length === 1) return { ok: true, value: near[0] };
+      return {
+        ok: false,
+        message: `'${raw}' is not one of this setting's options: ${options.join(', ')}`,
+      };
+    }
+    case 'string':
+    case 'path': {
+      if (typeof raw !== 'string') {
+        return { ok: false, message: `this is a ${field.type} setting; the value must be a string` };
+      }
+      return { ok: true, value: raw };
+    }
+    default:
+      // Unreachable for the five scalar types the caller already filtered on;
+      // present so a NEW SettingsFieldType is refused by default rather than
+      // silently written through un-validated.
+      return { ok: false, message: `settings of type '${field.type}' cannot be written conversationally` };
+  }
+}
+
+/**
+ * Apply ONE conversational write to ONE scalar module setting.
+ *
+ * RESOLUTION IS AGAINST THE DISCOVERED MODULE SCHEMAS, AND AN UNDECLARED KEY IS
+ * REFUSED. That is load-bearing and is not a tidiness check — do not "fix" it by
+ * falling back to writing whatever key was asked for:
+ *
+ *   - It structurally blocks `mode.war::enabled`. War Mode is NOT a
+ *     loader-toggleable module; its enablement lives as a flat settings key that
+ *     NO manifest declares (see `prompts/composer.ts` and the Agents-tab
+ *     handling in `settings-panel/host.ts`). Because no `contributes.settings`
+ *     entry exists for it, this function cannot resolve it and refuses — so a
+ *     conversational request can never switch a whole session modality on. That
+ *     refusal is a DESIGNED property of schema resolution, not an accident of
+ *     it, and any change that lets an unknown key through re-opens it.
+ *   - It bounds the blast radius generally: the writable surface is exactly the
+ *     set of fields some module author declared, with the type, options, and
+ *     bounds they declared. Nothing can invent a key.
+ *
+ * `keyValue` fields are OUT OF PHASE 1 and refused explicitly. The reason is
+ * mechanical, not squeamish: a stored kv value SHADOWS the manifest default map
+ * wholesale rather than deep-merging into it (see `reconcileKeyValueTable`'s
+ * header), so writing a single row into a table the operator has never saved
+ * would replace the entire default catalog with that one row — silently revoking
+ * the other ~55 entries of, say, `tool.git::allowedCommands`. Phase 2 needs
+ * seed-from-default logic before a one-row write is safe.
+ *
+ * THE WRITE ITSELF USES A FRESH READ, twice. `globalState` is shared by every VS
+ * Code window on the machine, so the map is re-read immediately before the merge
+ * and only the ONE key is folded on (`mergeChangedModuleSettings`) — a sibling
+ * window's concurrent edit to a different key survives. The second read matters
+ * more here than in the panel: a `securitySensitive` field's modal can sit
+ * unanswered for minutes, and the map read before the modal is stale by the time
+ * it is dismissed.
+ *
+ * Never throws for a bad REQUEST — those come back as `refused`. A genuine
+ * persistence failure (a broken Memento) still propagates, because a write that
+ * did not happen must not report success.
+ */
+export async function applyModuleSettingWrite(
+  globalState: vscode.Memento,
+  workspaceState: vscode.Memento,
+  modules: readonly ModuleHandle[],
+  req: ModuleSettingWriteRequest,
+  confirm?: ModuleSettingWriteConfirm,
+): Promise<ModuleSettingWriteResult> {
+  const moduleId = typeof req.moduleId === 'string' ? req.moduleId.trim() : '';
+  const fieldKey = typeof req.fieldKey === 'string' ? req.fieldKey.trim() : '';
+  const settingKey = `${moduleId}::${fieldKey}`;
+
+  if (moduleId === '' || fieldKey === '') {
+    return refuse(req, settingKey, 'both a module id and a field key are required');
+  }
+
+  const handle = modules.find((m) => m.manifest.id === moduleId);
+  if (!handle) {
+    return refuse(
+      req,
+      settingKey,
+      `no module with id '${moduleId}' is installed, so it declares no settings to write`,
+    );
+  }
+
+  const field = handle.manifest.contributes?.settings?.[fieldKey];
+  if (!field) {
+    // The undeclared-key refusal. See the header: this is what keeps
+    // `mode.war::enabled` (and any other flat key no manifest declares)
+    // structurally unwritable from a conversation.
+    return refuse(
+      req,
+      settingKey,
+      `'${moduleId}' declares no setting called '${fieldKey}'. Only settings a module's `
+      + 'manifest declares can be written; a flat key that no manifest declares (such as the '
+      + 'War Mode toggle) is not writable this way and must be changed in the settings panel.',
+    );
+  }
+
+  if (field.type === 'keyValue') {
+    return refuse(
+      req,
+      settingKey,
+      `'${field.label}' is a key/value table. Table settings are PANEL-ONLY for now — open `
+      + "Ghola's Modules tab and edit the table there. (A stored table replaces the module's "
+      + 'entire default map rather than merging into it, so writing one row here would silently '
+      + 'drop every other entry.)',
+    );
+  }
+
+  if (!WRITABLE_SCALAR_TYPES.has(field.type)) {
+    return refuse(
+      req,
+      settingKey,
+      `settings of type '${field.type}' cannot be written conversationally`,
+    );
+  }
+
+  const coerced = coerceSettingValue(field, req.value);
+  if (!coerced.ok) {
+    return refuse(req, settingKey, `'${field.label}': ${coerced.message}`);
+  }
+
+  const sensitive = field.securitySensitive === true;
+  const effect = settingWriteEffect(settingKey);
+  // The value IN FORCE, which is the stored override when there is one and the
+  // manifest default otherwise — the panel resolves it the same way
+  // (`settingsValues[key] ?? field.default`). Reporting a bare `undefined` for a
+  // defaulted field would tell the operator the setting is unset when it is very
+  // much in effect.
+  const before = readModuleSettings(globalState, workspaceState);
+  const oldValue = Object.prototype.hasOwnProperty.call(before, settingKey)
+    ? before[settingKey]
+    : field.default;
+
+  if (sensitive) {
+    const approved = confirm
+      ? await confirm({
+        moduleId,
+        fieldKey,
+        settingKey,
+        label: field.label,
+        type: field.type,
+        oldValue,
+        newValue: coerced.value,
+        effect,
+      })
+      // No confirm hook wired means no way to ask, and "we could not ask" must
+      // never read as "the operator said yes" — same fail-closed rule the
+      // capability gates follow.
+      : false;
+    if (approved !== true) {
+      return {
+        ok: false,
+        status: 'cancelled',
+        moduleId,
+        fieldKey,
+        settingKey,
+        sensitive: true,
+        label: field.label,
+        type: field.type,
+        oldValue,
+        newValue: coerced.value,
+        effect,
+        message: confirm
+          ? `The operator declined the change to '${field.label}'. Nothing was written.`
+          : `'${field.label}' requires an operator confirmation and no confirmation channel is `
+            + 'available, so the write was refused.',
+      };
+    }
+  }
+
+  // FRESH read again, deliberately not reusing `before`: the modal above may
+  // have been open for minutes, and a sibling window's save in that window must
+  // not be rolled back by this one.
+  const live = readModuleSettings(globalState, workspaceState);
+  const next = mergeChangedModuleSettings(live, { [settingKey]: coerced.value }, [settingKey]);
+  await writeModuleSettings(globalState, next);
+
+  return {
+    ok: true,
+    status: 'written',
+    moduleId,
+    fieldKey,
+    settingKey,
+    sensitive,
+    label: field.label,
+    type: field.type,
+    oldValue,
+    newValue: coerced.value,
+    effect,
+  };
+}
+
+/** One setting as reported by the conversational READ path. */
+export interface ModuleSettingSummary {
+  moduleId: string;
+  moduleName: string;
+  fieldKey: string;
+  settingKey: string;
+  label: string;
+  type: SettingsFieldType;
+  description?: string;
+  /** Whether the owning module is enabled in THIS window (enablement is per-workspace). */
+  moduleEnabled: boolean;
+  /** The value in force: the stored override, else the manifest default. */
+  value: unknown;
+  /** True when no override is stored and `value` is therefore the manifest default. */
+  isDefault: boolean;
+  /** Whether `applyModuleSettingWrite` would accept this field at all (phase 1: scalars only). */
+  writable: boolean;
+  sensitive: boolean;
+  /** Declared options, for an `enum`. */
+  options?: string[];
+  min?: number;
+  max?: number;
+  effect: ModuleSettingWriteEffect;
+}
+
+/**
+ * Enumerate module settings for the conversational READ path, optionally
+ * narrowed to one module. Pure and side-effect free — this is what makes the
+ * echo-the-old-value confirmation possible before a write is proposed.
+ *
+ * `keyValue` tables are LISTED but their contents are NOT dumped: `value` is
+ * replaced by a small `{ kind, entryCount, enabledCount }` summary. A table like
+ * `tool.git::allowedCommands` is ~55 rich rows, and pouring that into an agent's
+ * context to answer "what is this setting?" costs more than it tells. They are
+ * reported with `writable: false`, which is the phase-1 truth.
+ */
+export function summarizeModuleSettings(
+  globalState: vscode.Memento,
+  workspaceState: vscode.Memento,
+  modules: readonly ModuleHandle[],
+  moduleId?: string,
+): ModuleSettingSummary[] {
+  const flat = readModuleSettings(globalState, workspaceState);
+  const wanted = typeof moduleId === 'string' && moduleId.trim() !== ''
+    ? moduleId.trim()
+    : undefined;
+  const out: ModuleSettingSummary[] = [];
+
+  for (const handle of modules) {
+    if (wanted !== undefined && handle.manifest.id !== wanted) continue;
+    const schema = handle.manifest.contributes?.settings;
+    if (!schema) continue;
+    for (const fieldKey of Object.keys(schema)) {
+      const field = schema[fieldKey];
+      const settingKey = `${handle.manifest.id}::${fieldKey}`;
+      const stored = Object.prototype.hasOwnProperty.call(flat, settingKey);
+      const isKv = field.type === 'keyValue';
+      const raw = stored ? flat[settingKey] : field.default;
+      out.push({
+        moduleId: handle.manifest.id,
+        moduleName: handle.manifest.name,
+        fieldKey,
+        settingKey,
+        label: field.label,
+        type: field.type,
+        ...(field.description !== undefined ? { description: field.description } : {}),
+        moduleEnabled: handle.isEnabled,
+        value: isKv ? summarizeKeyValueTable(raw) : raw,
+        isDefault: !stored,
+        writable: WRITABLE_SCALAR_TYPES.has(field.type),
+        sensitive: field.securitySensitive === true,
+        ...(Array.isArray(field.options) ? { options: field.options } : {}),
+        ...(typeof field.min === 'number' ? { min: field.min } : {}),
+        ...(typeof field.max === 'number' ? { max: field.max } : {}),
+        effect: settingWriteEffect(settingKey),
+      });
+    }
+  }
+  return out;
+}
+
+/** Row-count summary of a kv table, so the read path never dumps a 55-row map. */
+function summarizeKeyValueTable(raw: unknown): {
+  kind: 'keyValue';
+  entryCount: number;
+  enabledCount: number;
+} {
+  if (!isPlainObject(raw)) return { kind: 'keyValue', entryCount: 0, enabledCount: 0 };
+  const keys = Object.keys(raw);
+  let enabled = 0;
+  for (const key of keys) {
+    const row = raw[key];
+    // A table without an Enabled column grants by PRESENCE (see git.md), so a
+    // row with no `enabled` field counts as enabled rather than as off.
+    if (!isPlainObject(row) || (row as KeyValueEntry).enabled !== false) enabled += 1;
+  }
+  return { kind: 'keyValue', entryCount: keys.length, enabledCount: enabled };
 }

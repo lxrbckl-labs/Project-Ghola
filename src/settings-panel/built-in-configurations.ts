@@ -83,7 +83,11 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
     ],
     settings: {
       'tool.lenses': { autoKickReviewOnColleagueBranch: true, autoKickPlanningOnFreshBranch: true },
-      'integration.bitbucket-pr-comments': { logCommentsEnabled: true, markReadyEnabled: true, toDraftEnabled: true, deleteCommentEnabled: true },
+      // `logCommentsEnabled` is deliberately absent: the legacy comment log it
+      // names has no writer at all (see `pr-monitor.md` - superseded by the coded
+      // `capture-comments` path), so pinning it on promised a log nobody writes.
+      // The manifest default is `false`, which is what this preset now inherits.
+      'integration.bitbucket-pr-comments': { markReadyEnabled: true, toDraftEnabled: true, deleteCommentEnabled: true },
       // Ticket Work needs to cut a fresh branch for the ticket it is starting.
       // Because a keyValue override REPLACES tool.git's default allowedCommands
       // (it is not merged), we ship the FULL default map here with only
@@ -164,6 +168,7 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
       // reproduced entry would silently revoke it in Ticket Work sessions.
       // Only the non-destructive `--no-git-tag-version` bump is added: it edits
       // package.json + package-lock.json only, with no git commit, tag, or publish.
+      // Manifest em-dashes are rewritten to ASCII here to satisfy the source rule.
       'tool.npm-suite': {
         allowedCommands: {
           'npm test': { value: "Run the project's test script.", enabled: true },
@@ -215,26 +220,16 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
     ],
     settings: {
       // Every value below is `mode.ticket-pr`'s MANIFEST DEFAULT, copied verbatim.
-      // This looks redundant and is not: the composer's `renderParameters` prints
-      // the literal string `(defaults)` for a module that has a settings schema but
-      // no stored overrides - it never resolves the schema's default VALUES - so
-      // with no block here the Session Manifest hands the agent this mode's
-      // parameters as an opaque `(defaults)` with no numbers or names in it.
-      // Three of them cannot survive that. `maxAutonomousIterations` and
-      // `maxTicketsPerRun` are the mode's only two runaway backstops and its prose
-      // cites them by name, so an agent that cannot read their values has no
-      // numeric bound to honor. `reviewStatusNames` is worse than invisible: the
-      // preamble's "Parameter Allowlists Are Authoritative" rule makes a
-      // comma-separated allowlist the ONLY permitted values and forbids
-      // substituting when one is absent, so `(defaults)` reads as an EMPTY set of
-      // review statuses. Pinning the defaults here changes no behavior; it only
-      // makes the values visible to the agent.
+      // The composer now resolves a module's declared schema defaults into the
+      // Session Manifest on its own, so this block is no longer load-bearing for
+      // visibility - it exists for stability: pinning the values here keeps this
+      // preset's behavior fixed and auditable in the panel even if the manifest's
+      // declared defaults are ever tuned for other presets or a fresh install.
       //
       // Because these are copies, they can drift: change a default in
       // `modules/mode.ticket-pr/manifest.json` and this block silently keeps
-      // pinning the old one. Update both together until the composer renders
-      // resolved defaults instead of the `(defaults)` sentinel, at which point
-      // this block can go.
+      // pinning the old one. Keep the two in sync by hand whenever the manifest's
+      // declared defaults change.
       'mode.ticket-pr': {
         pullOnStart: true,
         crossTicketStrictness: 'ask',
@@ -248,7 +243,11 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
         statusReportVerbosity: 'summary',
       },
       'tool.lenses': { autoKickReviewOnColleagueBranch: true, autoKickPlanningOnFreshBranch: true },
-      'integration.bitbucket-pr-comments': { logCommentsEnabled: true, markReadyEnabled: true, toDraftEnabled: true, deleteCommentEnabled: true },
+      // `logCommentsEnabled` is deliberately absent: the legacy comment log it
+      // names has no writer at all (see `pr-monitor.md` - superseded by the coded
+      // `capture-comments` path), so pinning it on promised a log nobody writes.
+      // The manifest default is `false`, which is what this preset now inherits.
+      'integration.bitbucket-pr-comments': { markReadyEnabled: true, toDraftEnabled: true, deleteCommentEnabled: true },
       // Ticket PR lands fixes on the PR's own branch and pushes them, so unlike
       // Ticket Work it needs the commit path: `mode.ticket-pr`'s "Commit and
       // push" section states outright that its authority comes from this
@@ -338,7 +337,8 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
       // same set. Dropping any reproduced entry would silently revoke it in
       // Ticket PR sessions. Only the non-destructive `--no-git-tag-version` bump
       // is added: it edits package.json + package-lock.json only, with no git
-      // commit, tag, or publish.
+      // commit, tag, or publish. Manifest em-dashes are rewritten to ASCII here
+      // to satisfy the source rule.
       'tool.npm-suite': {
         allowedCommands: {
           'npm test': { value: "Run the project's test script.", enabled: true },
@@ -482,6 +482,7 @@ export const BUILT_IN_CONFIGURATIONS: BuiltInConfiguration[] = [
       // reproduced entry would silently revoke it in Self Upgrade sessions.
       // Only the non-destructive `--no-git-tag-version` bump is added: it edits
       // package.json + package-lock.json only, with no git commit, tag, or publish.
+      // Manifest em-dashes are rewritten to ASCII here to satisfy the source rule.
       'tool.npm-suite': {
         allowedCommands: {
           'npm test': { value: "Run the project's test script.", enabled: true },

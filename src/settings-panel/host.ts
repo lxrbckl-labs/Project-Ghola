@@ -1011,6 +1011,30 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   /**
+   * Re-pull everything after a module setting was written by something OTHER
+   * than this panel — currently the conversational settings-write path, where
+   * an agent changes a value through the loopback bridge while the panel may be
+   * sitting open showing the old one.
+   *
+   * Runs the same refresh `saveSettings` does, plus `postSettings`: an external
+   * write did not come from the webview, so the webview's snapshot of the map is
+   * stale and has to be replaced rather than merely re-derived from. (This is
+   * exactly what `discoverSupportPaths` does for the same reason.)
+   *
+   * Deliberately does NOT fire `moduleSettingsEmitter` — the caller in
+   * `extension.ts` owns that, because it must fire whether or not this panel has
+   * ever been opened, and firing here as well would double-notify every
+   * subscriber. Every method below no-ops when the panel is closed, so calling
+   * this unconditionally is safe.
+   */
+  public refreshAfterExternalSettingsWrite(): void {
+    this.postSettings();
+    this.recomputeModified();
+    this.postConfigurations();
+    this.broadcastComposedPrompts();
+  }
+
+  /**
    * Host-side auto-discovery of Support-mode app repo paths. Scans the
    * filesystem (see `discoverAppPaths`) for every UNMAPPED `mode.support` app —
    * a key whose `appMap` value is empty/whitespace — and writes any found path
@@ -1048,10 +1072,7 @@ export class SettingsPanel implements vscode.Disposable {
 
       // Mirror the saveSettings refresh side effects so the panel + prompts
       // reflect the newly written paths.
-      this.postSettings();
-      this.recomputeModified();
-      this.postConfigurations();
-      this.broadcastComposedPrompts();
+      this.refreshAfterExternalSettingsWrite();
       this.moduleSettingsEmitter.fire();
 
       this.post({
@@ -1100,10 +1121,7 @@ export class SettingsPanel implements vscode.Disposable {
 
         // Mirror the saveSettings refresh side effects so the panel + prompts
         // reflect the newly written path.
-        this.postSettings();
-        this.recomputeModified();
-        this.postConfigurations();
-        this.broadcastComposedPrompts();
+        this.refreshAfterExternalSettingsWrite();
         this.moduleSettingsEmitter.fire();
       }
 
@@ -1228,14 +1246,20 @@ export class SettingsPanel implements vscode.Disposable {
    * The settings dict handed to `composer.compose`. This is `getCurrentSettings`
    * plus host-materialized `mode.war` defaults.
    *
-   * The composer renders a module's parameters as `(defaults)` when the user
-   * has no overrides, so a pristine War Mode session would hide its five
-   * sub-toggles (autoOpenWarRoom / tournament / maxConcurrentGholas / dryRun /
-   * autoVerify)
-   * from TPM — yet those values gate real autonomous behavior. To fix this we
-   * resolve `mode.war`'s schema defaults from the loaded manifest and layer
-   * any user overrides on top, so all five keys always render with concrete
-   * values in the Session Manifest.
+   * The original justification for this method was that the composer rendered
+   * a module's parameters as `(defaults)` when the user had no overrides,
+   * hiding War Mode's five sub-toggles (autoOpenWarRoom / tournament /
+   * maxConcurrentGholas / dryRun / autoVerify) from TPM even though those
+   * values gate real autonomous behavior. That is no longer true — the
+   * composer now resolves declared defaults itself, so the composer-facing
+   * call sites (`writeAllAgentPromptFiles`, the direct `composer.compose`
+   * call) no longer depend on this pre-resolution.
+   *
+   * The method still earns its keep for its non-composer consumers:
+   * `gholaSettingsSnapshot` (backing the War Room UI) and the RUN auto-open
+   * gate (`getResolvedGholaSettings` in `src/commands/index.ts`) both need a
+   * plain object with `mode.war`'s five keys resolved to concrete values,
+   * not a manifest-shaped `(defaults)` placeholder.
    *
    * This is deliberately NARROW to `mode.war`: materializing defaults for
    * every module would bloat every prompt. It also lives here (compose-time)

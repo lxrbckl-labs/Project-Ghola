@@ -17,7 +17,7 @@
       "pullOnStart": {
         "type": "boolean",
         "label": "Pull On Start",
-        "description": "When on, TPM auto-pulls the ticket from Jira at session start via the Atlassian Suite integration. When off, TPM uses the configured Ticket Id for notes file location but does not fetch the ticket description, so the user must provide context manually. Leave on for the common I want to work this ticket flow.",
+        "description": "When on, TPM auto-pulls the ticket from Jira at session start via the Atlassian Suite integration. When off, no Jira pull runs and the ticket description must be supplied manually. This setting governs only that pull: the ticket key is always derived from the branch name, so the notes file location is the same either way. Leave on for the common I want to work this ticket flow.",
         "default": true
       },
       "crossTicketStrictness": {

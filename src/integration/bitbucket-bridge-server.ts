@@ -16,6 +16,18 @@
  * matching flow's gate — `enableJiraCommentWrite` or `enableJiraTransition` — is
  * on.
  *
+ * It ALSO serves two routes that touch NEITHER Atlassian product: reading the
+ * operator's module settings (`/get-module-settings`, ungated — a read changes
+ * nothing and it is what lets a caller echo the current value back before
+ * proposing a change) and changing ONE scalar module setting
+ * (`/set-module-setting`). That write is local to this extension's own
+ * configuration and is gated exactly like the Jira writes below, through its own
+ * separate setting (`tool.conversational-settings`'s `enableSettingsWrite`) and
+ * its own gate file — plus a hardcoded refusal of any write targeting that
+ * module itself, and an outright bar while an autonomous session mode is
+ * running. See `settings-write-gate.ts`. `keyValue` table settings are OUT OF
+ * SCOPE for now and are refused.
+ *
  * NOTHING HERE CHOOSES A TRANSITION. `/transition` executes the `transitionId`
  * it is given and never derives one: no name matching, no closest-match
  * fallback, no defaulting to the first available. Reading the options
@@ -89,6 +101,10 @@ import type { RequestFailure } from './atlassian-client';
 import type { TerminalManager } from '../terminal/terminal-manager';
 import { JIRA_COMMENT_WRITE_DISABLED_MESSAGE } from './jira-comment-write-gate';
 import { JIRA_TRANSITION_DISABLED_MESSAGE } from './jira-transition-gate';
+import {
+  SETTINGS_WRITE_AUTONOMOUS_MODE_MESSAGE,
+  SETTINGS_WRITE_DISABLED_MESSAGE,
+} from './settings-write-gate';
 
 /** Hard cap on inbound request bodies. The agent's payloads are tiny JSON
  *  objects; anything larger is treated as abuse and rejected with 413. */
@@ -263,11 +279,105 @@ export type TransitionIssueFn = (key: string, transitionId: string) => Promise<T
  */
 export type TransitionResolver = () => TransitionIssueFn | undefined;
 
+/** One conversational module-setting write on the wire. */
+export interface BridgeSettingWriteRequest {
+  moduleId: string;
+  fieldKey: string;
+  /** Arrives as a STRING from the CLI; the host narrows it against the field's declared type. */
+  value: unknown;
+}
+
 /**
- * Refusal body sent when a gated write route (`/post-comment`, `/transition`) is
- * hit with the capability withheld. `status` is its own value (not
- * `unknown-error`) so the wrapper can print a tailored, actionable refusal
- * instead of a generic transport failure; each route supplies its own
+ * Host-side result of a module-setting write. `status` mirrors the applier's own
+ * three-way outcome so the wrapper can say the right thing:
+ *   - `ok`        — persisted. `oldValue` / `newValue` are both populated.
+ *   - `refused`   — the request was not acceptable (undeclared key, a table
+ *                   setting, a value that failed validation, or a target on the
+ *                   self-reference denylist). Retrying it unchanged cannot help.
+ *   - `cancelled` — a `securitySensitive` field whose modal the operator
+ *                   declined. Valid request, answered "no"; asking again is
+ *                   legitimate.
+ * `effect` carries the SPLIT-TIMING answer (see `state/module-settings.ts`):
+ * `immediate` for a setting the host reads per request, `next-session` for one
+ * an agent reads out of its composed manifest.
+ */
+export interface BridgeSettingWriteResult {
+  status: 'ok' | 'refused' | 'cancelled';
+  settingKey?: string;
+  label?: string;
+  oldValue?: unknown;
+  newValue?: unknown;
+  sensitive?: boolean;
+  effect?: 'immediate' | 'next-session';
+  message?: string;
+}
+
+/**
+ * Host-side module-setting applier injected by the extension. It owns the schema
+ * validation, the modal confirmation for a `securitySensitive` field, the write,
+ * and the panel refresh; this file only carries the request and the result.
+ */
+export type ApplySettingWriteFn = (
+  req: BridgeSettingWriteRequest,
+) => Promise<BridgeSettingWriteResult>;
+
+/**
+ * WHY the settings-write capability was withheld. Unlike the two Jira gates,
+ * this capability has TWO independent shut states with OPPOSITE remedies, so a
+ * bare `undefined` cannot carry the answer:
+ *   - `gate-off`        — `enableSettingsWrite` is not on (or the module is not
+ *                         enabled). The operator has to go and tick a box.
+ *   - `autonomous-mode` — the gate is ON and an autonomous session mode refused
+ *                         anyway. Sending that operator to the box would send
+ *                         them to a box that is already ticked.
+ * See the two message constants in `settings-write-gate.ts`, whose header
+ * requires the texts stay distinct.
+ */
+export type SettingsWriteWithheldReason = 'gate-off' | 'autonomous-mode';
+
+/** The resolver's discriminated "no", carrying the reason above. */
+export interface SettingsWriteWithheld {
+  withheld: SettingsWriteWithheldReason;
+}
+
+/**
+ * Per-request supplier of the module-setting applier, and the mechanism that
+ * makes `tool.conversational-settings`'s `enableSettingsWrite` gate REAL rather
+ * than advisory. The `PostCommentResolver` / `TransitionResolver` contract
+ * applied to the third capability — and deliberately a SEPARATE resolver reading
+ * a SEPARATE setting, so no gate can be opened by another.
+ *
+ * The extension returns the applier only while the gate is open (module enabled,
+ * the setting affirmatively `true`, and no autonomous session mode running), and
+ * a `SettingsWriteWithheld` naming the reason otherwise; see
+ * `settings-write-gate.ts` for the decision.
+ *
+ * FAIL CLOSED: this file treats ANYTHING that is not a function as "capability
+ * withheld" and refuses `/set-module-setting` without touching any setting. The
+ * reason only chooses which refusal TEXT is sent — an unrecognized, absent, or
+ * thrown answer is `gate-off`, never permission.
+ *
+ * Called on every request on purpose: a guardrail you must reload the window to
+ * apply is a guardrail people forget to apply. A resolver that THROWS is also
+ * treated as withheld — unknown is never permission.
+ */
+export type SettingsWriteResolver = () =>
+  ApplySettingWriteFn | SettingsWriteWithheld | undefined;
+
+/**
+ * Host-side module-settings READER injected by the extension. Ungated on
+ * purpose: reading changes nothing, it is how a caller echoes the current value
+ * back to the operator before proposing a change, and withholding it would only
+ * leave someone with the write gate off unable to see what the write would even
+ * do. Returns the same shape for every module or for one named module.
+ */
+export type ReadModuleSettingsFn = (moduleId?: string) => unknown[];
+
+/**
+ * Refusal body sent when a gated write route (`/post-comment`, `/transition`,
+ * `/set-module-setting`) is hit with the capability withheld. `status` is its own
+ * value (not `unknown-error`) so the wrapper can print a tailored, actionable
+ * refusal instead of a generic transport failure; each route supplies its own
  * operator-facing `message` naming the setting that is off.
  */
 const CAPABILITY_DISABLED_STATUS = 'capability-disabled';
@@ -319,6 +429,8 @@ export function startBitbucketBridge(
   resolvePostComment: PostCommentResolver,
   getTransitions: GetTransitionsFn,
   resolveTransition: TransitionResolver,
+  resolveSettingsWrite: SettingsWriteResolver,
+  readModuleSettingsForBridge: ReadModuleSettingsFn,
   coordinatesPath?: string,
   logger?: vscode.OutputChannel,
   terminalManager?: TerminalManager,
@@ -337,6 +449,8 @@ export function startBitbucketBridge(
         resolvePostComment,
         getTransitions,
         resolveTransition,
+        resolveSettingsWrite,
+        readModuleSettingsForBridge,
         expectedAuth,
         terminalManager,
       ).catch(() => {
@@ -474,6 +588,8 @@ async function handleRequest(
   resolvePostComment: PostCommentResolver,
   getTransitions: GetTransitionsFn,
   resolveTransition: TransitionResolver,
+  resolveSettingsWrite: SettingsWriteResolver,
+  readModuleSettingsForBridge: ReadModuleSettingsFn,
   expectedAuth: Buffer,
   terminalManager?: TerminalManager,
 ): Promise<void> {
@@ -694,6 +810,112 @@ async function handleRequest(
       // this file's contract is that request payloads never reach a log line.
       const posted = await postComment(key, body);
       sendJson(res, 200, posted);
+      return;
+    }
+
+    // MODULE-SETTINGS READ. Ungated, and deliberately so — for the same reason
+    // `/get-transitions` is: seeing what a setting currently IS changes nothing,
+    // and withholding it would only leave an operator with the write gate off
+    // unable to find out what a write would even do. It is also what makes the
+    // echo-the-old-value confirmation possible ("Database Access allowlist is
+    // currently X — change it to Y?") BEFORE a write is proposed.
+    //
+    // `moduleId` is OPTIONAL: absent means every discovered module. An unknown
+    // module id is not an error — it yields an empty list, which is the honest
+    // answer and keeps "no such module" from looking like a bridge failure.
+    //
+    // The reader summarizes `keyValue` tables to a row count rather than dumping
+    // them; see `summarizeModuleSettings`.
+    if (route === '/get-module-settings') {
+      const moduleId = typeof args.moduleId === 'string' ? args.moduleId.trim() : '';
+      const settings = readModuleSettingsForBridge(moduleId === '' ? undefined : moduleId);
+      sendJson(res, 200, { status: 'ok', settings });
+      return;
+    }
+
+    // MODULE-SETTINGS WRITE — the only write in this bridge that touches
+    // Ghola's OWN configuration rather than an external system, and therefore
+    // the only one whose misuse is self-amplifying: module settings are where
+    // every other capability's gate is stored.
+    //
+    // THE GATE IS RESOLVED FIRST, ahead of argument validation, exactly as
+    // `/transition` does, so a withheld capability refuses identically for a
+    // well-formed and a malformed call and no work happens before the refusal.
+    // `resolveSettingsWrite` runs per request: toggling the setting off — or
+    // entering an autonomous session mode — takes effect on the very next call,
+    // no reload. Anything that is not a function means withheld, a THROWING
+    // resolver included. It reads its OWN setting; neither Jira gate opens this
+    // door and this one opens neither of theirs.
+    //
+    // The refusal TEXT is chosen from the resolver's discriminated reason, and
+    // the distinction is the whole point: the gate-off message tells the operator
+    // to tick "Enable Settings Write", which is exactly the wrong instruction
+    // when they already have and it was the AUTONOMOUS-MODE BAR that refused.
+    //
+    // Everything past the gate is the APPLIER's job, in `extension.ts` and
+    // `state/module-settings.ts`: resolving `moduleId::fieldKey` against the
+    // discovered manifests (an undeclared key is refused, which is what makes
+    // `mode.war::enabled` structurally unwritable), refusing `keyValue` tables,
+    // validating the value against the declared type/options/bounds, raising the
+    // MODAL confirmation for a `securitySensitive` field and awaiting it, and
+    // only then persisting. This file deliberately does none of that — a second
+    // copy of the validation here would be a second thing to keep correct.
+    //
+    // A refused/cancelled request comes back as HTTP 200 with `status`
+    // `refused` / `cancelled`, NOT as a 4xx: the call was well-formed at the
+    // transport level and the answer is a real answer. Only a missing/empty
+    // `moduleId` or `fieldKey` is a 400, because that is a caller error rather
+    // than a decision.
+    if (route === '/set-module-setting') {
+      let resolved: ApplySettingWriteFn | SettingsWriteWithheld | undefined;
+      try {
+        resolved = resolveSettingsWrite();
+      } catch {
+        // A resolver that blew up tells us nothing about the operator's intent,
+        // and "we could not tell" must never read as "go ahead".
+        resolved = undefined;
+      }
+      if (typeof resolved !== 'function') {
+        // Only an explicit `autonomous-mode` reason selects the other text.
+        // Every other shape — `undefined`, a thrown resolver, an object this
+        // build does not recognize — falls back to the gate-off message, which
+        // is the conservative direction: it can be a slightly wrong explanation
+        // but never a wrongly-granted write.
+        const autonomous =
+          typeof resolved === 'object'
+          && resolved !== null
+          && (resolved as SettingsWriteWithheld).withheld === 'autonomous-mode';
+        sendJson(res, 403, {
+          status: CAPABILITY_DISABLED_STATUS,
+          message: autonomous
+            ? SETTINGS_WRITE_AUTONOMOUS_MODE_MESSAGE
+            : SETTINGS_WRITE_DISABLED_MESSAGE,
+        });
+        return;
+      }
+      const applySettingWrite: ApplySettingWriteFn = resolved;
+      const moduleId = typeof args.moduleId === 'string' ? args.moduleId.trim() : '';
+      if (!moduleId) {
+        sendJson(res, 400, {
+          status: 'unknown-error',
+          message: 'moduleId must be a non-empty string',
+        });
+        return;
+      }
+      const fieldKey = typeof args.fieldKey === 'string' ? args.fieldKey.trim() : '';
+      if (!fieldKey) {
+        sendJson(res, 400, {
+          status: 'unknown-error',
+          message: 'fieldKey must be a non-empty string (read it from get-module-settings)',
+        });
+        return;
+      }
+      // `value` is passed through UNTOUCHED — no defaulting and no coercion
+      // here. The applier narrows it against the field's declared type, and a
+      // second, looser coercion at this layer is exactly how a typo'd boolean
+      // becomes a permission grant.
+      const written = await applySettingWrite({ moduleId, fieldKey, value: args.value });
+      sendJson(res, 200, written);
       return;
     }
 

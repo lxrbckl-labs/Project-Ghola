@@ -1,7 +1,7 @@
 // A small status-bar item that shows a record icon when a session log is being
-// captured. Sits at the far right of the status bar (Right alignment, priority 0)
-// with an amber background matching the Ghola pill. Clicking it opens the log
-// file in the editor.
+// captured. Sits at Left alignment, priority 97 — immediately right of the PR
+// button — with an amber background matching the Ghola pill. Clicking it opens
+// the log file in the editor.
 
 import * as vscode from 'vscode';
 

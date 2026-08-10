@@ -69,6 +69,21 @@
 //        with a `capability-disabled` refusal, having sent nothing to Jira and
 //        leaving the issue's status untouched. The id must come from
 //        get-transitions; this verb never matches on a status name)
+//   node scripts/bb-bridge.mjs get-module-settings [--module <id>]
+//       (READ-ONLY and ungated: the operator's Ghola module settings — every
+//        module, or one named module. Reports each setting's current value, its
+//        declared type/options/bounds, whether it is still the manifest default,
+//        whether it can be written conversationally, and when a write would take
+//        effect. keyValue tables are summarized to a row count, never dumped)
+//   node scripts/bb-bridge.mjs set-module-setting --module <id> --key <k> --value <v>
+//       (LOCAL WRITE to Ghola's own configuration. Requires the
+//        conversational-settings enableSettingsWrite gate, which the extension
+//        HOST enforces — with it off, or with an autonomous session mode
+//        running, the capability is withheld and this verb exits 1 with a
+//        `capability-disabled` refusal having changed nothing. A setting the
+//        module manifest marks security-sensitive raises a MODAL dialog in VS
+//        Code and waits for the operator; scalar settings only — key/value
+//        tables are panel-only)
 //   node scripts/bb-bridge.mjs workspace-members [--workspace <slug>] [--query <search>] [--json]
 //   node scripts/bb-bridge.mjs whoami
 //       (READ-ONLY: the Bitbucket identity of the API TOKEN the extension host
@@ -264,7 +279,21 @@ const RETRYABLE_ROUTES = new Set([
   // at all — but that caching is a host-side optimization and is emphatically
   // NOT the reason this route is here: it is here because it is a pure read.
   '/whoami',
+  // /get-module-settings reads the extension's own in-process settings map. It
+  // touches neither Atlassian product and changes nothing, so a replay costs a
+  // few microseconds and can duplicate nothing.
+  '/get-module-settings',
 ]);
+
+// /set-module-setting IS DELIBERATELY ABSENT from the set above, and this needs
+// saying because it is the route most likely to look replayable: it changes
+// nothing outside this machine, and re-writing the same value looks idempotent.
+// It is not. A replay is a SECOND WRITE — and for a setting the manifest marks
+// security-sensitive, a second MODAL in front of the operator, who has already
+// answered once. Worse, the two writes race the operator's answer: if the first
+// modal is still open when the replay's modal appears, an operator who cancels
+// one and applies the other has no way to tell which write they just authorized.
+// One request, one decision.
 
 // Per-attempt request timeouts, in THREE READ TIERS plus the mutation bound.
 // The tier is chosen by ROUTE, and the only thing that makes a tier correct is
@@ -276,7 +305,9 @@ const RETRYABLE_ROUTES = new Set([
 // this hop at all — a wedged bridge hung the caller forever.
 //
 // TIER 1 — FAST READS: routes the host answers WITHOUT any upstream call. Today
-// that is `/health` alone. 3s is generous for a loopback hop with no Atlassian
+// that is `/health` and `/get-module-settings` — the latter walks the discovered
+// manifests and reads an in-process Memento, which is synchronous and costs
+// microseconds. 3s is generous for a loopback hop with no Atlassian
 // request behind it: a bridge that has not answered in 3s is wedged, not slow.
 // Kept deliberately tight because the worst case is
 // 2 * READ_TIMEOUT_MS + RETRY_DELAY_MS (~6.25s) and scripts/ghola-boot-probe.sh
@@ -386,6 +417,35 @@ const SLOW_READ_ROUTES = new Set(['/list-comments', '/get-comments']);
 // NOT overridable from GHOLA_BRIDGE_TIMEOUT_MS — it is a write, and the env knob
 // is reads-only for the reasons documented at TIMEOUT_ENV_VAR.
 const CAPTURE_TIMEOUT_MS = SLOW_READ_TIMEOUT_MS + HOST_REQUEST_CEILING_MS;
+
+// THE MUTATION THAT WAITS FOR A HUMAN. /set-module-setting is a write, so
+// without a case of its own it would be judged at MUTATION_TIMEOUT_MS — 30s —
+// and that is the wrong bound for a reason none of the tiers above cover: its
+// host-side work is not a network call at all. When the targeted field is marked
+// `securitySensitive`, the host raises a MODAL VS Code dialog and AWAITS the
+// operator's Apply/Cancel before it writes. The connection stays open for the
+// whole of that. 30s is roughly the time it takes to alt-tab.
+//
+// UNLIKE EVERY OTHER TIER HERE, THIS IS NOT DERIVED ARITHMETIC — it is a
+// judgement about a person, and pretending otherwise by dressing it up in a sum
+// would be worse than saying so. There is no host-side ceiling to mirror: the
+// dialog has no auto-dismiss, so the true worst case is unbounded.
+//
+// 300s (5 minutes) is the bound: long enough for an operator to notice the
+// dialog, read the old -> new line, think about it, and answer, without leaving
+// a wedged bridge undetectable for a quarter of an hour. It is a CEILING, not a
+// wait — an unattended field returns in milliseconds.
+//
+// WHAT HAPPENS WHEN IT IS EXCEEDED IS THE PART THAT MATTERS. The client giving
+// up does NOT cancel the modal, and the host will still apply the write if the
+// operator clicks Apply a minute later. So this deadline produces the one
+// genuinely ambiguous outcome in the whole settings-write path, and
+// describeTransport has a branch that says so instead of implying the change was
+// dropped.
+//
+// NOT overridable from GHOLA_BRIDGE_TIMEOUT_MS — it is a write, and the env knob
+// is reads-only for the reasons documented at TIMEOUT_ENV_VAR.
+const SETTINGS_WRITE_TIMEOUT_MS = 300000;
 
 // TIER 3 — RETRY-BUDGET READS: ONE logical host-side call, with NO pagination,
 // but a call that carries the FULL transient-retry budget — so its ceiling is
@@ -501,6 +561,12 @@ function timeoutForRoute(routePath) {
   // write, so the check below would pin it at MUTATION_TIMEOUT_MS, which is far
   // under the paginated walk it performs. See CAPTURE_TIMEOUT_MS.
   if (routePath === '/capture-comments') return CAPTURE_TIMEOUT_MS;
+
+  // /set-module-setting is likewise handled before the retryable check: it is a
+  // write, so the check below would pin it at MUTATION_TIMEOUT_MS, which is far
+  // under the time a human needs to answer a modal dialog. See
+  // SETTINGS_WRITE_TIMEOUT_MS.
+  if (routePath === '/set-module-setting') return SETTINGS_WRITE_TIMEOUT_MS;
 
   const isRead = RETRYABLE_ROUTES.has(routePath);
   if (!isRead) {
@@ -743,6 +809,28 @@ function describeTransport(url, routePath, err, timeoutMs) {
       + 'ambiguous on a timeout and must not be replayed.)\n'
       + 'Confirm the bridge is healthy first with `bb-bridge health`; if that succeeds, the\n'
       + 'bridge is fine and relaunching the session will NOT help.';
+  }
+
+  // /set-module-setting is a write, so it must not take the generic
+  // `bridge-unreachable` treatment below — but the generic MUTATION message is
+  // wrong for it too, in every specific: nothing was "forwarded to Atlassian",
+  // there is no pull request or issue to go and check, and the most likely cause
+  // is not a slow network but an operator who has not yet answered a modal
+  // dialog that is sitting on their screen RIGHT NOW. Its outcome is genuinely
+  // ambiguous (the dialog outlives this client, so a later Apply still writes),
+  // which is why the advice is "look at VS Code", not "retry" and not "relaunch".
+  if (routePath === '/set-module-setting' && isTimeoutTransport(err)) {
+    const secs = Math.round(timeoutMs / 1000);
+    return `${MARKER_TIMEOUT}: ${routePath} did not answer within ${secs}s (${code}).\n`
+      + 'This is NOT a dead bridge and NOTHING was sent to Atlassian — this verb changes a LOCAL\n'
+      + "Ghola module setting. The most likely cause is that the setting is marked\n"
+      + 'security-sensitive and a MODAL confirmation dialog is still open in VS Code, unanswered.\n'
+      + 'The outcome is UNKNOWN: this client stopped waiting, but the dialog did not close, so if\n'
+      + 'the operator clicks Apply the write will still happen.\n'
+      + 'Fix: ask the operator to look at VS Code and answer the dialog, then read the CURRENT\n'
+      + 'value back with `bb-bridge get-module-settings --module <id>` before deciding anything.\n'
+      + 'DO NOT re-run this command first — a second request raises a SECOND dialog racing the\n'
+      + 'first, and an operator answering two identical prompts cannot tell which one they applied.';
   }
 
   if (!RETRYABLE_ROUTES.has(routePath) && isTimeoutTransport(err)) {
@@ -1017,12 +1105,13 @@ async function callBridge(routePath, body) {
     const message = (parsed && typeof parsed.message === 'string')
       ? parsed.message
       : (text ? text.slice(0, 200) : res.statusText || 'bridge error');
-    // A host-side CAPABILITY GATE refusal, not a failure. Two routes can produce
-    // it — `/post-comment` and `/transition` — because the extension withholds
-    // each Jira write function unless its OWN integration.atlassian-suite setting
-    // (enableJiraCommentWrite / enableJiraTransition) is on. This branch is
-    // deliberately route-agnostic: it prints the server's message, which names the
-    // specific setting, rather than hardcoding which capability was refused. It
+    // A host-side CAPABILITY GATE refusal, not a failure. Several routes can
+    // produce it — `/post-comment`, `/transition`, and `/set-module-setting` —
+    // because the extension withholds each gated write function unless its OWN
+    // setting (enableJiraCommentWrite / enableJiraTransition / the settings-write
+    // master gate) is on. This branch is deliberately route-agnostic: it prints
+    // the server's message, which names the specific setting, rather than
+    // hardcoding which capability was refused. It
     // must not be reported through the generic
     // `bridge-error` line below: that line reads like a dead bridge or a bad
     // token and sends the reader off checking transport, when the real answer is
@@ -1032,7 +1121,7 @@ async function callBridge(routePath, body) {
     if (parsed && parsed.status === 'capability-disabled') {
       printJson({ status: 'capability-disabled', httpStatus: res.status, message });
       console.error(
-        `bb-bridge: ${routePath} REFUSED — this capability is disabled host-side. Nothing was sent to Atlassian.\n`
+        `bb-bridge: ${routePath} REFUSED — this capability is disabled host-side. Nothing was changed.\n`
         + `bb-bridge: ${message}\n`
         + 'bb-bridge: Retrying cannot help; the setting has to be turned on first.',
       );
@@ -1534,6 +1623,147 @@ async function cmdTransition(flags) {
   process.exit(1);
 }
 
+// Read the operator's Ghola module settings. READ-ONLY and UNGATED: it reports
+// what a setting IS, it does not change one, and the enableSettingsWrite gate has
+// no bearing on it — exactly the relationship get-transitions has to transition.
+//
+// THIS IS WHERE A --module / --key COMES FROM, and it is also where the value to
+// echo back before proposing a change comes from. Each row carries:
+//   settingKey / label / type   what the setting is
+//   value / isDefault           what it is right now, and whether that is still
+//                               the manifest default rather than a saved override
+//   options / min / max         what a valid new value looks like
+//   writable                    false for key/value TABLE settings, which are
+//                               panel-only and cannot be written by set-module-setting
+//   sensitive                   true means writing it raises a MODAL dialog the
+//                               operator has to answer before anything happens
+//   moduleEnabled               whether the owning module is on in this window
+//   effect                      'immediate' if the extension host reads this
+//                               setting per request, 'next-session' if agents read
+//                               it out of their composed prompt (see below)
+//
+// keyValue tables report a row COUNT, not their contents — dumping a 55-row
+// command allowlist to answer "what is this setting?" costs more than it tells.
+//
+// EFFECT TIMING IS SPLIT AND THE `effect` FIELD IS NOT DECORATION. A change to a
+// host-enforced setting is live on the next bridge call. A change to anything an
+// agent reads from its Session Manifest — allowlists, mode parameters, personas —
+// is baked into a prompt composed at session launch and changes NOTHING until the
+// next session. Report that to the operator; do not let them believe a guardrail
+// moved when their running session still has the old one.
+async function cmdGetModuleSettings(flags) {
+  const usage = 'bb-bridge get-module-settings [--module <id>]';
+  const payload = {};
+  if (typeof flags.module === 'string') {
+    if (flags.module.trim() === '') {
+      usageFail(`--module must not be empty. Usage: ${usage}`);
+    }
+    payload.moduleId = flags.module;
+  }
+  await postToBridge('/get-module-settings', payload);
+}
+
+// Change ONE Ghola module setting. This is a WRITE — the only one in this
+// wrapper that changes GHOLA'S OWN configuration rather than an external system,
+// which is exactly what makes it the one to be careful with: module settings are
+// where every other capability's gate is stored.
+//
+// Authorization is NOT this script's job and must not be inferred from the verb's
+// mere existence. `tool.conversational-settings` is what contributes the
+// capability, and only when the operator has turned on its `enableSettingsWrite`
+// setting (which defaults to off). With that gate off, this verb is not to be
+// invoked — and it also CANNOT work: the extension withholds the applier from the
+// bridge, so the route answers 403 `capability-disabled` and this verb exits 1
+// with nothing changed.
+//
+// THESE REFUSALS ARE ENFORCED HOST-SIDE, not here, and none of them is negotiable
+// from this side:
+//   - the gate itself being off;
+//   - an AUTONOMOUS session mode running (mode.ticket-pr, or War Mode) — a
+//     hands-free agent must not be able to edit the settings that decide what it
+//     may do;
+//   - any write targeting `tool.conversational-settings` itself, refused
+//     unconditionally, because widening your own permission to write is not a
+//     permission anyone granted;
+//   - a `moduleId::fieldKey` that no module MANIFEST declares. Only declared
+//     settings are writable, which is also why the War Mode toggle cannot be
+//     flipped this way;
+//   - a `moduleId::fieldKey` the host itself injects (HOST_INJECTED_SETTING_KEYS),
+//     refused as a host-managed value — the extension overwrites it at every
+//     compose, so a write here would be silently discarded rather than honored.
+// A key/value TABLE setting is refused too: phase 1 is scalar settings only.
+//
+// TPM-ONLY IS DOCTRINE, NOT ENFORCEMENT. There is one bridge bearer token per
+// session and every subagent inherits it, so nothing on either side of this call
+// can tell TPM's request from an SWE's. Honor the rule because it is the rule.
+//
+// A SECURITY-SENSITIVE FIELD RAISES A MODAL DIALOG IN VS CODE and this call
+// BLOCKS until the operator answers it. That is why this verb has its own 300s
+// deadline instead of the 30s every other write gets. `status: 'cancelled'` means
+// the operator said no — a real answer to a valid request, not a failure of it.
+//
+// NEVER auto-retry a failure from this verb. A timeout does not cancel the
+// operator's dialog, so a retry raises a second one racing the first; read the
+// value back with get-module-settings instead.
+async function cmdSetModuleSetting(flags) {
+  const usage = 'bb-bridge set-module-setting --module <id> --key <k> --value <v>';
+  const moduleId = requireFlag(flags, 'module', usage);
+  if (String(moduleId).trim() === '') {
+    usageFail(`--module must not be empty. Usage: ${usage}`);
+  }
+  const fieldKey = requireFlag(flags, 'key', usage);
+  if (String(fieldKey).trim() === '') {
+    usageFail(`--key must not be empty. Usage: ${usage}`);
+  }
+  // `--value ''` is deliberately ALLOWED: an empty string is a legitimate value
+  // for a string/path setting ("cleared but present"), and requireFlag only
+  // rejects an absent flag or a bare `--value` with nothing after it. The host
+  // narrows the string against the field's declared type; nothing is coerced here,
+  // because a second, looser coercion on this side is how a typo'd boolean turns
+  // into a permission grant.
+  const value = requireFlag(flags, 'value', usage);
+
+  const parsed = await callBridge('/set-module-setting', {
+    moduleId: String(moduleId),
+    fieldKey: String(fieldKey),
+    value: String(value),
+  });
+  printJson(parsed);
+  if (parsed && parsed.status === 'ok') {
+    if (parsed.effect === 'next-session') {
+      console.error(
+        `bb-bridge: NOTE — ${parsed.settingKey} was written, but agents read this setting from`
+        + ' their COMPOSED prompt.\n'
+        + 'bb-bridge: The running session still has the OLD value; the change applies at the next'
+        + ' session launch.',
+      );
+    }
+    process.exit(0);
+  }
+  // `cancelled` is the operator answering "no" at the modal. It exits 1 like any
+  // other non-ok status (nothing was written), but it must never be reported as a
+  // failure: the request was valid, a human considered it, and they declined.
+  // Telling an agent this "failed" invites it to try again, which is the one
+  // response a declined confirmation must not produce.
+  if (parsed && parsed.status === 'cancelled') {
+    console.error(
+      `bb-bridge: /set-module-setting was DECLINED by the operator at the confirmation dialog.\n`
+      + 'bb-bridge: Nothing was written. This is an answer, not an error — do not re-run it '
+      + 'without being asked to.',
+    );
+    process.exit(1);
+  }
+  const reason = (parsed && typeof parsed.message === 'string' && parsed.message)
+    ? parsed.message
+    : "the setting was not written (status !== 'ok')";
+  console.error(
+    `bb-bridge: /set-module-setting failed: ${reason}\n`
+    + 'bb-bridge: Nothing was changed. Re-running the identical request cannot help — check the '
+    + 'module id and field key with `bb-bridge get-module-settings`.',
+  );
+  process.exit(1);
+}
+
 // Workspace member search. Pure read — retryable. Default output: one line per
 // member as `<displayName> (<accountId>)`. --json prints the raw bridge response.
 // --workspace is optional: the bridge defaults to the configured bitbucketWorkspace.
@@ -1718,6 +1948,39 @@ Usage:
                                              ACCEPTED the request (204), not that
                                              the status is now what you asked
                                              for; never auto-retry)
+  node scripts/bb-bridge.mjs get-module-settings [--module <id>]
+                                            (read-only and ungated; every module
+                                             or one named module. Each row gives
+                                             settingKey, label, type, current
+                                             value, isDefault, options/min/max,
+                                             writable (false for key/value
+                                             TABLES — panel-only), sensitive
+                                             (true = writing it raises a modal),
+                                             moduleEnabled, and effect. keyValue
+                                             tables report a row count, never
+                                             their contents. THE ONLY SOURCE OF A
+                                             VALID --module/--key pair)
+  node scripts/bb-bridge.mjs set-module-setting --module <id> --key <k> --value <v>
+                                            (LOCAL WRITE to Ghola's own settings
+                                             — requires the Conversational
+                                             Settings module's "Enable Settings
+                                             Write" to be on. Refused outright
+                                             while an autonomous mode
+                                             (mode.ticket-pr / War Mode) is
+                                             running, for any write targeting
+                                             tool.conversational-settings itself,
+                                             for any key no manifest declares,
+                                             and for key/value tables. A
+                                             security-sensitive field raises a
+                                             MODAL dialog in VS Code and this
+                                             call BLOCKS until it is answered —
+                                             hence its own 300s deadline.
+                                             status 'cancelled' means the
+                                             operator declined: an answer, not a
+                                             failure. Never auto-retry — a retry
+                                             raises a second dialog racing the
+                                             first. "TPM-only" is doctrine, not
+                                             something this bridge can enforce)
   node scripts/bb-bridge.mjs workspace-members [--workspace <slug>] [--query <search>] [--json]
                                             (list workspace members; defaults to
                                              configured bitbucketWorkspace;
@@ -1759,15 +2022,16 @@ Usage:
 Exit codes: 0 ok, 1 bridge-level failure, 2 usage error (env/args).
 
 Read verbs (health, get-ticket, get-comments, get-transitions, find-pr,
-list-comments, workspace-members, whoami) get one automatic retry on a transient
-transport error. Write
+list-comments, workspace-members, whoami, get-module-settings) get one automatic
+retry on a transient transport error. Write
 verbs NEVER retry: a timeout on a write is ambiguous and a replay could
-double-post — or, for transition, move the ticket a second time.
+double-post — or, for transition, move the ticket a second time, or, for
+set-module-setting, raise a second confirmation dialog racing the first.
 
 Timeouts come in three read tiers, each set above the HOST's worst case for that
 route (a bound below it would abort work the host is still doing correctly):
-  3s    health — answers without calling Atlassian at all, so anything slower
-        means a wedged bridge.
+  3s    health, get-module-settings — answered without calling Atlassian at all
+        (an in-process settings read), so anything slower means a wedged bridge.
   87s   find-pr, get-ticket, get-transitions, workspace-members, whoami — one
         logical upstream call, but the
         host retries a 429/5xx up to 4 times honoring Retry-After (41s per
@@ -1777,6 +2041,10 @@ route (a bound below it would abort work the host is still doing correctly):
         by page, so a long thread legitimately needs longer.
 capture-comments is a WRITE (to a local file) but performs the list-comments walk
 plus one PR read, so it gets its own 161s bound rather than the 30s write bound.
+set-module-setting is a WRITE that can WAIT FOR A HUMAN — a security-sensitive
+field opens a modal dialog in VS Code and the call blocks until it is answered —
+so it gets its own 300s bound. Exceeding it does NOT cancel the dialog: a later
+Apply still writes, so read the value back rather than retrying.
 Other writes are pinned at 30s and cannot be widened. Override the read budgets with
 GHOLA_BRIDGE_TIMEOUT_MS (1000-600000 ms); prefer prefixing it to one command over
 exporting it. These are CEILINGS, not waits — a healthy call still returns in
@@ -1825,6 +2093,8 @@ async function main() {
     'post-comment': cmdPostComment,
     'get-transitions': cmdGetTransitions,
     transition: cmdTransition,
+    'get-module-settings': cmdGetModuleSettings,
+    'set-module-setting': cmdSetModuleSetting,
     'workspace-members': cmdWorkspaceMembers,
     whoami: cmdWhoami,
     health: cmdHealth,

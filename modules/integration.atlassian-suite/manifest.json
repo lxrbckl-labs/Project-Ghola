@@ -85,6 +85,7 @@
         "type": "boolean",
         "label": "Enable Jira Comment Write",
         "default": false,
+        "securitySensitive": true,
         "description": "The outer gate on this suite's comment write. While this is off — and off is the default — every request to post a Jira comment is refused outright, however it is phrased and whatever Require Operator Approval is set to. Turning it on grants exactly one capability: posting a new comment to an existing issue. Every other Jira mutation stays refused by this gate — creating or cloning an issue, assigning it, changing any field, and editing or deleting any comment including one the agent posted itself. Transitioning an issue is not covered by this gate at all: it is a separate capability behind the separate Enable Jira Transition setting below, and stays refused unless that one is on. This gate decides whether comment posting exists at all; Require Operator Approval below decides whether each individual post is previewed and confirmed first."
       },
       "attributionSuffix": {
@@ -111,6 +112,7 @@
         "type": "boolean",
         "label": "Enable Jira Transition",
         "default": false,
+        "securitySensitive": true,
         "description": "The outer gate on this suite's second Jira write, and the only one that can move a ticket. While this is off — and off is the default — every request to transition a Jira issue is refused outright, however it is phrased. Turning it on grants exactly one capability: executing a workflow transition on an existing issue, by transition id, chosen from the list Jira reports as legal from that issue's current status. Every other Jira mutation stays refused — creating, cloning, or deleting an issue, assigning it, changing any field, and posting, editing, or deleting any comment (comment posting has its own separate Enable Jira Comment Write gate above; neither gate implies the other). Enforced host-side and re-read on every request: with this off, the transition route answers 403 and nothing reaches Jira. Turning it on does not remove the requirement that the agent resolve the target by destination status name and show the operator the resolved transition and its id before executing."
       }
     }

@@ -5,4 +5,5 @@ dist/
 .ghola/
 *.log
 .DS_Store
+# vestigial: leftover from an abandoned logs-in-extension-tree design; actual logs live under ~/.ghola/, outside the repo
 .session-logs/

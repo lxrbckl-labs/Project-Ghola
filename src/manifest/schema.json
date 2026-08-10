@@ -111,6 +111,10 @@
               "keywordsPath": { "type": "string", "minLength": 1 },
               "multiSelect": { "type": "boolean" },
               "multiline": { "type": "boolean" },
+              "securitySensitive": {
+                "type": "boolean",
+                "description": "Marks a field whose conversational write requires a modal operator confirmation before it is applied. No effect in the settings panel, which already has a human at the control."
+              },
               "min": { "type": "number" },
               "max": { "type": "number" },
               "valueSource": {

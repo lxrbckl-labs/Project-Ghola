@@ -13,7 +13,7 @@ When this module is loaded, the session has a per-command `gh` (GitHub CLI) allo
 - Order does not matter.
 - The user may add, remove, or toggle commands freely in the Modules tab. The contents of `allowedCommands` are trusted verbatim - whatever the user has marked enabled is permitted, whatever they have not is refused.
 
-If the manifest entry shows `(defaults)` rather than a live object, the user has not yet made changes - the default grant is all `r`-category commands enabled and all `w`/`d` commands disabled. Treat that as the operative allowlist. If `allowedCommands` is absent from the Session Manifest entirely (because the user saved only `protectedRepos` and never touched the command list), the default applies: all `r`-category commands enabled, all `w`/`d` disabled.
+`allowedCommands` declares a default in the module schema, so the manifest entry always shows a live object - the user's stored override when they've customized the list, or the module's declared default (all `r`-category commands enabled, all `w`/`d` commands disabled) when they haven't. Read the object directly; there is no sentinel to decode here.
 
 ## Categories - plain language
 
@@ -28,11 +28,10 @@ The category is for messaging only - actual permission is determined by whether 
 When a request implies a gh operation:
 
 1. Identify the specific gh command and its arguments. `gh pr create` vs `gh pr merge` are different entries; resolve to the most specific matching key in `allowedCommands`.
-2. Check how `parameters.allowedCommands` appears in the Session Manifest:
-   - `(defaults)` - the user has not yet overridden any module settings at all. The factory defaults apply: all `r`-category commands enabled, all `w`/`d` disabled. Treat the default allowlist as operative and proceed to step 3 with the default set.
-   - Absent (the key `allowedCommands` does not appear under this module's parameters) - the user has overridden other settings (e.g. `protectedRepos`) but never touched the command list. The default allowlist applies exactly as in the `(defaults)` case above: all `r`-category commands enabled, all `w`/`d` disabled. Proceed to step 3 with the default set.
+2. Check how `parameters.allowedCommands` appears in the Session Manifest - because the field declares a default, the manifest always shows the resolved object, never a sentinel:
+   - The object matches the factory catalog (all `r`-category commands enabled, all `w`/`d` disabled) - either the user has not customized the list, or they overrode other settings (e.g. `protectedRepos`) without touching this one, and the composer filled in the declared default. Treat it as the operative allowlist and proceed to step 3.
    - `{}` (an empty JSON object) - the user explicitly cleared every entry from `allowedCommands`. Refuse all gh with: "GitHub CLI Suite module is loaded but no commands are enabled. Toggle commands on in the Modules tab." Do not proceed.
-   - A non-empty JSON object - the user has customized the allowlist. Proceed to step 3.
+   - Any other non-empty JSON object - the user has customized the allowlist. Proceed to step 3.
 3. Look the specific command key up in the effective allowlist (resolved in step 2). If the key is absent, refuse in one sentence that names the command and its category. Example: "I can't run `gh pr merge` here - that command is category `d` (destructive) and is not enabled in this session's GitHub CLI Suite settings. Enable it in the Modules tab if you want to grant it."
 4. If the key is present, proceed (subject to the protected-repos guardrail below for any d-category operation).
 

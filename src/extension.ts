@@ -10,10 +10,14 @@ import { BitbucketPrClient } from './integration/bitbucket-pr-client';
 import { discoverObsidianVault } from './integration/vault-discovery';
 import { startBitbucketBridge } from './integration/bitbucket-bridge-server';
 import type {
+  ApplySettingWriteFn,
+  BridgeSettingWriteRequest,
+  BridgeSettingWriteResult,
   GetCommentsResult,
   GetTransitionsResult,
   PostCommentFn,
   PostCommentResult,
+  SettingsWriteWithheld,
   TransitionIssueFn,
   TransitionResult,
 } from './integration/bitbucket-bridge-server';
@@ -21,6 +25,17 @@ import { TerminalManager } from './terminal/terminal-manager';
 import type { TerminalManagerConfig } from './terminal/terminal-manager';
 import { isJiraCommentWriteEnabled } from './integration/jira-comment-write-gate';
 import { isJiraTransitionEnabled } from './integration/jira-transition-gate';
+import {
+  SETTINGS_WRITE_MODULE_ID,
+  SETTINGS_WRITE_SELF_REFERENCE_MESSAGE,
+  SETTINGS_WRITE_AUTONOMOUS_MODE_MESSAGE,
+  SETTINGS_WRITE_HOST_INJECTED_MESSAGE,
+  TICKET_PR_MODULE_ID,
+  isAutonomousModeActive,
+  isHostInjectedSettingWrite,
+  isSelfReferentialSettingsWrite,
+  isSettingsWriteEnabled,
+} from './integration/settings-write-gate';
 import { ModuleLoader } from './modules/loader';
 import { ModuleState } from './modules/state';
 import { PromptComposer } from './prompts/composer';
@@ -48,7 +63,10 @@ import {
   migrateModuleSettingsToGlobal,
   migrateGitBranchCommandsEnabled,
   reconcileStoredKeyValueTables,
+  applyModuleSettingWrite,
+  summarizeModuleSettings,
 } from './state/module-settings';
+import type { ModuleSettingWritePreview } from './state/module-settings';
 import { ModeStatusBarItem, MODE_STATUS_BAR_CONFIG_SECTION } from './status-bar/mode-status-bar';
 import { SessionRecordStatusBarItem } from './status-bar/session-record-status-bar';
 import { TicketLinkStatusBarItems, type PrLookupAnswer } from './status-bar/ticket-link-status-bar';
@@ -1343,6 +1361,247 @@ export function activate(context: vscode.ExtensionContext): void {
       ? jiraTransitionIssue
       : undefined;
 
+  // ───── Conversational module-settings write (tool.conversational-settings) ─────
+  //
+  // The only bridge write that changes GHOLA'S OWN configuration rather than an
+  // external system, which is what makes it the one whose misuse compounds:
+  // module settings are where every other capability's gate is stored. Phase 1
+  // is SCALAR fields only — `keyValue` tables are refused by the applier.
+  //
+  // TWO THINGS THIS DOES NOT DO, stated here because they are easy to assume:
+  //   - It is NOT restricted to TPM and cannot be. One bridge bearer token per
+  //     session, inherited by every subagent, so an SWE's call is
+  //     indistinguishable from TPM's at this layer. "TPM-only" is doctrine
+  //     carried in module prose, not a host-enforced fact.
+  //   - A successful write does NOT necessarily change agent behavior now. Host-
+  //     enforced settings (the `enableJira*` gates, this module's own gate) are
+  //     live on the next bridge call; anything an agent reads from its COMPOSED
+  //     Session Manifest — allowlists, mode parameters, personas — is baked into
+  //     a prompt written at launch and only changes at the next session. The
+  //     applier reports which case applies as `effect` on the result, and the
+  //     toast/log below repeat it, so nobody has to remember.
+
+  /**
+   * Panel refresh hook, assigned once the `SettingsPanel` below exists. Kept as
+   * a late-bound `let` rather than a direct reference because this closure is
+   * defined ABOVE the panel's construction (it has to be — the bridge start
+   * consumes it) and reaching into a `const` from its temporal dead zone would
+   * throw. In practice a bridge request cannot arrive before activation
+   * finishes, but "in practice" is not a guarantee worth relying on.
+   */
+  let refreshSettingsPanel: (() => void) | undefined;
+
+  /** Render a setting value for a modal / toast / log line without dumping an object. */
+  const describeSettingValue = (value: unknown): string => {
+    if (value === undefined) return '(unset)';
+    if (value === null) return '(none)';
+    if (typeof value === 'string') return value === '' ? '(empty)' : value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    // Nothing scalar reaches here (kv tables are refused before any value is
+    // resolved); a bare type name is safer than serializing an unknown blob into
+    // a modal.
+    return `(${typeof value})`;
+  };
+
+  /**
+   * THE MODAL. This is the heart of the safety design for a field a module
+   * declares `securitySensitive`, and it is the reason that flag exists at all:
+   * the change was requested in a CONVERSATION, so unlike a panel edit there is
+   * no guarantee the operator is looking at — or even aware of — the field being
+   * moved. A blocking, application-modal dialog naming the module, the field's
+   * human label, and the exact old -> new transition puts them back in front of
+   * it before anything is persisted.
+   *
+   * AWAITED before the write, by contract with `applyModuleSettingWrite`. Only
+   * the explicit Apply button returns true; Cancel, the Escape key, and a
+   * dismissed dialog all return undefined and therefore refuse. A modal that can
+   * be dismissed into consent is not a confirmation.
+   */
+  const confirmSensitiveSettingWrite = async (
+    preview: ModuleSettingWritePreview,
+  ): Promise<boolean> => {
+    const timing = preview.effect === 'immediate'
+      ? 'This takes effect immediately.'
+      : 'This takes effect at the NEXT session launch (agents read it from their composed prompt).';
+    const choice = await vscode.window.showWarningMessage(
+      `Ghola: an agent is asking to change a security-sensitive setting.\n\n`
+      + `Module: ${preview.moduleId}\n`
+      + `Setting: ${preview.label}\n\n`
+      + `${describeSettingValue(preview.oldValue)}  ->  ${describeSettingValue(preview.newValue)}\n\n`
+      + timing,
+      { modal: true },
+      'Apply',
+      'Cancel',
+    );
+    return choice === 'Apply';
+  };
+
+  /**
+   * The applier the bridge calls once the gate has already let the request
+   * through. Order matters and is deliberate:
+   *   1. SELF-REFERENCE DENYLIST first, before anything is resolved or read.
+   *      A write to `tool.conversational-settings` is a write to the permission
+   *      to write; an agent that can widen its own gate has no gate. This is the
+   *      only hardcoded target refusal in the path (see `settings-write-gate.ts`).
+   *   1b. HOST-INJECTED KEYS next, for a different reason: those values are
+   *      rewritten by the host on every compose, so accepting the write would
+   *      persist something nothing ever reads and report success for it. Checked
+   *      here rather than in `applyModuleSettingWrite` because that function's
+   *      contract is "the writable surface is exactly what the manifests
+   *      declare" — and `captureFilePath` IS declared — so the exception belongs
+   *      beside the other target-based refusal, in the gate.
+   *   2. Everything else goes to `applyModuleSettingWrite`, which resolves the
+   *      key against the DISCOVERED manifests (an undeclared key is refused —
+   *      which is precisely what keeps `mode.war::enabled` unwritable), refuses
+   *      `keyValue` tables, validates the value, raises the modal above for a
+   *      sensitive field, and writes on a fresh read of the map.
+   *
+   * EVERY outcome is logged with old -> new, including refusals and
+   * cancellations. A capability that changes the operator's configuration from a
+   * chat turn has to leave an audit trail that does not depend on anyone having
+   * scrolled back through the conversation.
+   */
+  const applySettingWriteRequest = async (
+    req: BridgeSettingWriteRequest,
+  ): Promise<BridgeSettingWriteResult> => {
+    const target = `${req.moduleId}::${req.fieldKey}`;
+    if (isSelfReferentialSettingsWrite(req.moduleId)) {
+      logger.appendLine(`[settings-write] REFUSED ${target}: self-reference denylist`);
+      return {
+        status: 'refused',
+        settingKey: target,
+        message: SETTINGS_WRITE_SELF_REFERENCE_MESSAGE,
+      };
+    }
+
+    if (isHostInjectedSettingWrite(req.moduleId, req.fieldKey)) {
+      logger.appendLine(`[settings-write] REFUSED ${target}: host-injected key`);
+      return {
+        status: 'refused',
+        settingKey: target,
+        message: SETTINGS_WRITE_HOST_INJECTED_MESSAGE,
+      };
+    }
+
+    const result = await applyModuleSettingWrite(
+      context.globalState,
+      context.workspaceState,
+      loader.getAll(),
+      { moduleId: req.moduleId, fieldKey: req.fieldKey, value: req.value },
+      confirmSensitiveSettingWrite,
+    );
+
+    if (!result.ok) {
+      logger.appendLine(
+        `[settings-write] ${result.status.toUpperCase()} ${result.settingKey}: ${result.message ?? ''}`,
+      );
+      return {
+        status: result.status === 'cancelled' ? 'cancelled' : 'refused',
+        settingKey: result.settingKey,
+        ...(result.label !== undefined ? { label: result.label } : {}),
+        ...(result.oldValue !== undefined ? { oldValue: result.oldValue } : {}),
+        ...(result.newValue !== undefined ? { newValue: result.newValue } : {}),
+        sensitive: result.sensitive,
+        ...(result.effect !== undefined ? { effect: result.effect } : {}),
+        ...(result.message !== undefined ? { message: result.message } : {}),
+      };
+    }
+
+    const oldText = describeSettingValue(result.oldValue);
+    const newText = describeSettingValue(result.newValue);
+    logger.appendLine(
+      `[settings-write] WROTE ${result.settingKey}: ${oldText} -> ${newText}`
+      + ` (${result.sensitive ? 'sensitive, operator-confirmed' : 'not sensitive'};`
+      + ` effect: ${result.effect})`,
+    );
+
+    // Panel + subscribers. The panel method no-ops when the panel is closed; the
+    // emitter is fired here rather than inside it so it reaches the status bar
+    // and the terminal-config rebuild whether or not the panel has ever opened.
+    try {
+      refreshSettingsPanel?.();
+    } catch (err) {
+      // A panel refresh failure must never make a completed write look failed.
+      logger.appendLine(`[settings-write] panel refresh failed (non-fatal): ${err}`);
+    }
+    moduleSettingsEmitter.fire();
+
+    // AUDIT VISIBILITY, NOT A GATE. A non-sensitive field is written first and
+    // announced after — the toast is non-modal and unblocking on purpose. Its
+    // job is to make sure a change to the operator's configuration is never
+    // invisible, not to ask permission; the sensitive fields are the ones that
+    // ask, and they asked before the write.
+    if (!result.sensitive) {
+      void vscode.window.showInformationMessage(
+        `Ghola: ${result.label} (${result.moduleId}) changed from ${oldText} to ${newText}`
+        + (result.effect === 'immediate' ? '.' : ' — takes effect at the next session launch.'),
+      );
+    }
+
+    return {
+      status: 'ok',
+      settingKey: result.settingKey,
+      ...(result.label !== undefined ? { label: result.label } : {}),
+      oldValue: result.oldValue,
+      newValue: result.newValue,
+      sensitive: result.sensitive,
+      ...(result.effect !== undefined ? { effect: result.effect } : {}),
+    };
+  };
+
+  // HOST-SIDE ENFORCEMENT of `tool.conversational-settings`'s
+  // `enableSettingsWrite` gate, plus the autonomous-mode bar. Same mechanism as
+  // `resolveJiraPostComment` / `resolveJiraTransition`, reading a SEPARATE
+  // setting through a SEPARATE gate module: the bridge asks for the applier on
+  // EVERY `/set-module-setting` request, and while either check is shut it gets
+  // a withheld marker instead of the function and refuses the route with nothing
+  // to call.
+  //
+  // WHY THIS ONE RETURNS A REASON AND THE JIRA RESOLVERS DO NOT: there are two
+  // ways to be shut here and they have opposite remedies. Gate off -> "tick the
+  // box". Bar fired -> the box is already ticked and telling the operator to tick
+  // it is simply wrong. So the "no" is discriminated (`{ withheld }`) and the
+  // route picks the matching message; the Jira gates have a single shut state and
+  // stay on bare `undefined`.
+  //
+  // The autonomous-mode bar is not a nicety. `mode.ticket-pr` and War Mode both
+  // run long stretches without a human reading each turn, and a hands-free agent
+  // that can edit the settings which decide what it may do can widen its own
+  // authorization while nobody is looking. Refused outright in those modes, with
+  // no per-setting carve-out. Both never throw and treat every non-`true` outcome
+  // as OFF; see `settings-write-gate.ts`.
+  const resolveSettingsWrite = (): ApplySettingWriteFn | SettingsWriteWithheld => {
+    const readers = {
+      isModuleEnabled: () => loader.find(SETTINGS_WRITE_MODULE_ID)?.isEnabled,
+      isTicketPrEnabled: () => loader.find(TICKET_PR_MODULE_ID)?.isEnabled,
+      readSettings: () => readModuleSettings(context.globalState, context.workspaceState),
+    };
+    if (!isSettingsWriteEnabled(readers)) return { withheld: 'gate-off' };
+    if (isAutonomousModeActive(readers)) {
+      // Logged rather than silent: an operator who deliberately turned the gate
+      // ON and still gets refused deserves to find out why without guessing.
+      // The route sends this same text to the caller, selected by the
+      // `autonomous-mode` reason returned below.
+      logger.appendLine(`[settings-write] withheld: ${SETTINGS_WRITE_AUTONOMOUS_MODE_MESSAGE}`);
+      return { withheld: 'autonomous-mode' };
+    }
+    return applySettingWriteRequest;
+  };
+
+  // Ungated module-settings READ for the bridge. Reading changes nothing, and it
+  // is what lets a caller echo the current value back before proposing a change
+  // — the same reasoning that leaves `/get-transitions` ungated. Walks EVERY
+  // discovered module, not just the enabled ones, so a question about a module
+  // the operator has switched off still gets a real answer (each row carries its
+  // own `moduleEnabled`).
+  const readModuleSettingsForBridge = (moduleId?: string): unknown[] =>
+    summarizeModuleSettings(
+      context.globalState,
+      context.workspaceState,
+      loader.getAll(),
+      moduleId,
+    );
+
   // ───── Terminal Manager wiring (tool.terminal) ─────────────────────
   // Constructed when `tool.terminal` is enabled, passed to the bridge so its
   // terminal routes return results instead of 404. When the module is not
@@ -1444,6 +1703,8 @@ export function activate(context: vscode.ExtensionContext): void {
       resolveJiraPostComment,
       jiraGetTransitions,
       resolveJiraTransition,
+      resolveSettingsWrite,
+      readModuleSettingsForBridge,
       bridgeCoordinatesPath,
       logger,
       terminalManager,
@@ -1468,6 +1729,11 @@ export function activate(context: vscode.ExtensionContext): void {
     logger,
   );
   context.subscriptions.push(panel);
+  // Late-bind the panel refresh the settings-write applier calls (see the
+  // `refreshSettingsPanel` declaration above for why it is not a direct
+  // reference). A bridge write that lands while the panel is open must not leave
+  // the panel rendering the old value.
+  refreshSettingsPanel = () => panel.refreshAfterExternalSettingsWrite();
 
   // Auto-reopen the settings panel after a window reload (e.g. the in-app
   // "Update Extension" flow ends with workbench.action.reloadWindow, which

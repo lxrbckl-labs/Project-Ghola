@@ -12,7 +12,7 @@ Per the preamble's parameter-allowlist rule, the values in `parameters.allowedCo
 - Each entry is the subcommand only — `ps`, not `docker ps`. A leading `docker ` token, if present, is stripped before comparison. Entries may be multi-word (e.g. `compose up`, `compose down`) — these match the full token after `docker ` (so `docker compose up` is allowed if and only if `compose up` is in the list).
 - Order does not matter.
 - Duplicates are deduplicated silently.
-- An empty string (the default) means **no** `docker` commands are allowed — every `docker` invocation is refused. When the Session Manifest renders `parameters: (defaults)` instead of an explicit value, the default applies — treat it the same as an empty string: no docker commands are allowed.
+- An empty string (the default) means **no** `docker` commands are allowed — every `docker` invocation is refused. `allowedCommands` declares `""` as its default in the module schema, so the manifest always renders a live value — the user's stored list, or the empty-string default when they haven't set one — never a sentinel.
 - The allowlist is **not** validated against a hardcoded master list of known subcommands. Whatever the user types in is trusted verbatim. If they list `whoami`, then `docker whoami` is permitted by this module even though it is not a real subcommand. The user owns the contents of the list.
 
 When an agent is about to run `docker <X>`:
