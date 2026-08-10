@@ -20,6 +20,8 @@ The source of truth is the persistent comment log written by `integration.bitbuc
 
 QA reads the file at `parameters.logSourcePath`. When that parameter is empty (the default), QA defers to the canonical path configured in `integration.bitbucket-pr-comments::logFilePath` — that integration owns the writer, and this module is a read-only consumer of the same file.
 
+When `tool.reviewer-dossier` is loaded, `parameters.logSourcePath` may instead point at that module's dossier — the curated, already-classified per-project record of recurring review patterns — rather than the raw comment log. **This requires the operator to explicitly set `logSourcePath` to the dossier location; loading `tool.reviewer-dossier` does not do this automatically, and the parameter's default remains `""`.** While `logSourcePath` is empty, this module defers to `integration.bitbucket-pr-comments::logFilePath` regardless of whether `tool.reviewer-dossier` is also loaded — and that path is a settings surface with no writer behind it by default, so an operator who enables the dossier module but never points `logSourcePath` at it is reading a legacy path nothing writes, with no indication anything is wrong: the activation gate below fails silently by design, and this module does not tell the user the loop is inactive. When `logSourcePath` IS set to the dossier, QA reads learned patterns directly from the dossier's existing classification and disposition instead of re-deriving them from raw comment bodies; the dossier's structure is documented by `tool.reviewer-dossier`, not by the `ts`/`prId`/`commentId`/... schema above, which still applies whenever `logSourcePath` points at the raw log. Either way this module stays a read-only consumer — it never writes to the dossier.
+
 ## Pattern extraction modes
 
 The behavior of the learning loop is determined by `parameters.patternExtractionMode`:
@@ -38,11 +40,32 @@ QA stores specific phrasings from past comments and surfaces them as exemplars w
 
 QA applies exactly one mode per session — whichever `parameters.patternExtractionMode` is set to. It does not blend modes.
 
+### Mode availability when the source is the dossier
+
+The three modes above are described against the raw comment log. When `logSourcePath` points at the `tool.reviewer-dossier` dossier instead, they are **not** equally available, because the dossier's record shape (`tool.reviewer-dossier`, "The record shape") is pattern-keyed and deliberately holds no raw comment text or per-reviewer index:
+
+- **`recurring-themes`** is the only mode with a real source in the dossier. Each `###` block already IS a theme — the dossier has done the grouping in advance, by pattern rather than by keyword bucket — so against a dossier source this mode reads the existing pattern blocks directly instead of deriving buckets from comment bodies. This is the mode to use when `logSourcePath` points at the dossier.
+- **`author-styles`** has no source in the dossier. The dossier has no `author` field to index by. Reviewer identity survives only as the `seen-by` attribute (normalized `slug@platform`) attached to individual evidence lines inside a pattern block, not as a top-level key — and `tool.reviewer-dossier` keeps it that way deliberately ("Pattern is the primary key; reviewer is an attribute"): keying by reviewer silently splits one accumulating pattern into two whenever an identity string changes (a Bitbucket account id, a GitHub handle, a bot's display name after a version bump), and neither half ever reaches the dossier's `acceptThreshold`. Do not reconstruct a per-author index by scanning `seen-by` across pattern blocks — that reintroduces the exact failure the dossier's design exists to avoid. If `author-styles` is selected while `logSourcePath` points at the dossier, treat it the same as a corrupted/unreadable log (see "Module-disabled vs feature-disabled" below): log the mismatch once, and proceed without learning for the remainder of the session.
+- **`literal-quotes`** has no source in the dossier either. The dossier deliberately stores no raw comment bodies — only a curated `pattern` statement and a two-line `example`, neither of which is a verbatim phrasing to quote. Raw bodies live in the `capture-comments` JSONL that `tool.reviewer-dossier` writes, and pointing `logSourcePath` at the dossier means QA is not reading that file. Same treatment as `author-styles`: unavailable against a dossier source, logged once, no learning for the session rather than a fabricated substitute.
+
+In short: against a dossier source, only `recurring-themes` is meaningful. `author-styles` and `literal-quotes` have nothing to read there.
+
 ## Activation gate
 
 QA only activates the learning loop when the log has at least `parameters.minLogEntriesToActivate` entries. Below the threshold, QA reverts to its non-learning behavior — review based solely on the in-session diff and SWE return — and the user is NOT told the learning loop is inactive. The threshold check is silent; log it once when first crossed if visibility is needed, but otherwise leave it implicit.
 
 The threshold exists because pattern extraction on too few entries produces noise rather than signal. Default 10 is conservative; teams in established repos can lower it for faster activation, and teams that want stricter signal can raise it.
+
+### Eligibility precedence when the source is the dossier
+
+This module's own gates — `recurring-themes`' ≥3-distinct-comments rule and `parameters.minLogEntriesToActivate` — are raw-log gates. They decide when a pattern earns attention while QA is deriving it from scratch out of uncurated comment bodies. They are not a second, competing eligibility model once `logSourcePath` points at the `tool.reviewer-dossier` dossier, because the dossier already carries its own, stricter one.
+
+**When the source is the dossier, `tool.reviewer-dossier`'s eligibility rules are authoritative, not this module's.** See that module's "Eligibility for pre-emption" and "The disposition rule" for the actual mechanics (`acceptThreshold` across distinct PRs, the `declineVetoDays` veto, the mandatory `trigger` match, the `(op)`/`(sentry)` severity cap) — they are deliberately not restated here, so this file cannot drift out of sync with the file that owns them. In particular:
+
+- A pattern the dossier vetoes (a `declined` or `accepted-under-protest` evidence line within `declineVetoDays`) is not a learned pattern for QA's purposes, no matter how many raw occurrences would otherwise satisfy `recurring-themes`' ≥3-comment count. The veto is a veto, not a weighting: a decline the team made on purpose must not resurface here just because a different module's raw count found it plausible.
+- `parameters.minLogEntriesToActivate` still gates whether the learning loop bothers consulting the dossier at all (there must be enough dossier content to be worth reading), but it never substitutes for, lowers, or overrides the dossier's own per-pattern eligibility. A dossier with far more than `minLogEntriesToActivate` evidence lines but zero patterns at `acceptThreshold` yields zero learned patterns, not a fallback to raw counting.
+
+Two eligibility models over one data set with no stated precedence is exactly the cargo-culting failure the dossier's disposition design exists to prevent — this rule is that precedence.
 
 ## How learned patterns appear in verdicts
 
@@ -76,6 +99,7 @@ Do not merge these cases.
 
 - **`integration.bitbucket-pr-comments`** (required upstream): produces the log this module consumes. When that module's `logCommentsEnabled` is off, the log is empty (or contains only legacy entries from a prior session) and this module's learning loop sits below the activation threshold. The two modules form a writer/reader pair: bitbucket-pr-comments writes, this module reads, and neither modifies the other's file ownership.
 - **`tool.secrets-wrapper-pattern`**: filters secret-shaped values out of log entries before QA reads them. When enabled, QA's pattern extraction operates on the scrubbed view; when disabled, raw comment bodies flow through unchanged. The filter is a boundary, not a transform owned by this module.
+- **`tool.reviewer-dossier`**: an alternate source for `parameters.logSourcePath`. When loaded, the dossier can substitute for the raw comment log as a curated, already-classified reference; pointing `logSourcePath` at it means QA reads its existing patterns directly rather than deriving them from raw comment lines. This module never writes to the dossier, in either configuration.
 
 ## Role-Specific Notes
 

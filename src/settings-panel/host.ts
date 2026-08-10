@@ -46,6 +46,22 @@ import type {
 const FEEDBACK_MODULE_ID = 'tool.feedback-log';
 
 /**
+ * Module id whose Session Manifest entry receives an injected
+ * `captureFilePath` parameter at compose time — the absolute path of the
+ * PR-comment capture file that `bb-bridge capture-comments` appends to.
+ *
+ * Same mechanism and same reason as `FEEDBACK_MODULE_ID` above: the agent must
+ * receive a RESOLVED ABSOLUTE PATH, never a relative string it has to resolve
+ * itself. The capability this replaces failed precisely there — it declared a
+ * relative `pr-comment-log.json` default, injected it nowhere, and so pointed an
+ * agent at its own cwd (the work repo) instead of extension storage.
+ */
+const REVIEWER_DOSSIER_MODULE_ID = 'tool.reviewer-dossier';
+
+/** Injected parameter key on `REVIEWER_DOSSIER_MODULE_ID`. */
+const CAPTURE_PATH_FIELD = 'captureFilePath';
+
+/**
  * Session-mode module whose sub-toggle setting VALUES must always reach TPM's
  * Session Manifest even when left at their schema defaults. See
  * `getComposeSettings` for why the composer's normal "(defaults)" rendering is
@@ -57,25 +73,44 @@ const GHOLA_MODE_ID = 'mode.war';
 const FEEDBACK_SCHEMA_VERSION = 1;
 
 /**
- * Return a shallow-cloned settings map with the host-injected
- * `tool.feedback-log.feedbackFilePath` removed (and the now-empty
- * `tool.feedback-log` entry dropped). Used only by modified-detection so the
- * machine-specific runtime path never registers as a user-visible diff. Does
- * not mutate the input; compose/apply/save still see the injected path.
+ * Return a shallow-cloned settings map with one host-injected path field removed
+ * from `moduleId` (and the module's now-empty entry dropped). Used only by
+ * modified-detection so a machine-specific runtime path never registers as a
+ * user-visible diff. Does not mutate the input; compose/apply/save still see the
+ * injected path.
  */
-function withoutInjectedFeedbackPath(
+function withoutInjectedPath(
   settings: Record<string, Record<string, unknown>>,
+  moduleId: string,
+  fieldKey: string,
 ): Record<string, Record<string, unknown>> {
-  const feedback = settings[FEEDBACK_MODULE_ID];
-  if (!feedback || !('feedbackFilePath' in feedback)) return settings;
+  const entry = settings[moduleId];
+  if (!entry || !(fieldKey in entry)) return settings;
   const out: Record<string, Record<string, unknown>> = { ...settings };
-  const { feedbackFilePath: _omit, ...rest } = feedback;
+  const { [fieldKey]: _omit, ...rest } = entry;
   if (Object.keys(rest).length === 0) {
-    delete out[FEEDBACK_MODULE_ID];
+    delete out[moduleId];
   } else {
-    out[FEEDBACK_MODULE_ID] = rest;
+    out[moduleId] = rest;
   }
   return out;
+}
+
+/**
+ * Strip EVERY host-injected runtime path from a settings map. Both injections
+ * (`tool.feedback-log.feedbackFilePath` and
+ * `tool.reviewer-dossier.captureFilePath`) are machine-specific state the host
+ * materializes at compose time, not user configuration, so neither may ever
+ * count as a diff against a saved configuration.
+ */
+function withoutInjectedHostPaths(
+  settings: Record<string, Record<string, unknown>>,
+): Record<string, Record<string, unknown>> {
+  return withoutInjectedPath(
+    withoutInjectedPath(settings, FEEDBACK_MODULE_ID, 'feedbackFilePath'),
+    REVIEWER_DOSSIER_MODULE_ID,
+    CAPTURE_PATH_FIELD,
+  );
 }
 
 export class SettingsPanel implements vscode.Disposable {
@@ -130,6 +165,15 @@ export class SettingsPanel implements vscode.Disposable {
      * `tool.feedback-log` manifest parameter) point at the same file.
      */
     private readonly feedbackFilePath: string,
+    /**
+     * Absolute path to the PR-comment capture file (JSON Lines). Computed in
+     * `extension.ts` from `context.globalStorageUri` and given to
+     * `BitbucketPrClient` as well, so the host code that APPENDS records and the
+     * agent that READS them (via the `tool.reviewer-dossier` manifest parameter)
+     * point at the same file. The panel itself does not read or write it — it
+     * only injects the path.
+     */
+    private readonly prCommentCapturePath: string,
     /**
      * Coordination surface for Atlassian credential queries and token-change
      * notifications. The token values never pass through the panel — only their
@@ -321,16 +365,14 @@ export class SettingsPanel implements vscode.Disposable {
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.js'),
     );
-    // Webview-safe URI for the Session page hero banner image. Computed
-    // unconditionally; if `media/cover.png` is absent the webview simply skips
-    // rendering the hero (see `renderGeneral`), so a missing file never throws.
-    const coverUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'media', 'cover.png'),
-    ).toString();
+    // Cover photo removed — the hero banner is no longer rendered.
+    const coverUri = '';
     // Webview-safe URI for the War Room tab hero banner image. Computed
-    // unconditionally like `coverUri`; if `media/warroom-banner.png` is absent
-    // the webview simply skips rendering the banner (see `renderWarRoom`), so a
-    // missing file never throws.
+    // unconditionally; if the file is absent the webview simply skips
+    // rendering the banner (see `renderWarRoom`), so a missing file never throws.
+    // The image lives in `media/` — `resources/` holds only `icon-source.png`,
+    // so pointing this at `resources/` silently blanks the banner instead of
+    // erroring, which is exactly why it must stay `media/`.
     const warRoomBannerUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'media', 'warroom-banner.png'),
     ).toString();
@@ -897,10 +939,18 @@ export class SettingsPanel implements vscode.Disposable {
       efficiencyCores: cfg.get<number>('swe.efficiencyCores', 1),
       performanceCoresModel: cfg.get<string>('swe.performanceCoresModel', 'opus'),
       efficiencyCoresModel: cfg.get<string>('swe.efficiencyCoresModel', 'sonnet'),
+      // Empty default is load-bearing: blank means "inherit" — the launcher keeps
+      // using the tier alias above and the CLI's own default reasoning effort.
+      performanceCoresModelVersion: cfg.get<string>('swe.performanceCoresModelVersion', ''),
+      efficiencyCoresModelVersion: cfg.get<string>('swe.efficiencyCoresModelVersion', ''),
+      performanceCoresEffort: cfg.get<string>('swe.performanceCoresEffort', ''),
+      efficiencyCoresEffort: cfg.get<string>('swe.efficiencyCoresEffort', ''),
     };
     const qa = {
       count: cfg.get<number>('qa.count', 1),
       model: cfg.get<string>('qa.model', 'sonnet'),
+      modelVersion: cfg.get<string>('qa.modelVersion', ''),
+      effort: cfg.get<string>('qa.effort', ''),
     };
     const aliases = cfg.get<CliAlias[]>('cliAliases', []);
     const selectedAlias = cfg.get<string>('selectedAlias', '');
@@ -1160,6 +1210,16 @@ export class SettingsPanel implements vscode.Disposable {
     if (this.loader.find(FEEDBACK_MODULE_ID)?.isEnabled) {
       if (!out[FEEDBACK_MODULE_ID]) out[FEEDBACK_MODULE_ID] = {};
       out[FEEDBACK_MODULE_ID]!['feedbackFilePath'] = this.feedbackFilePath;
+    }
+    // Host-injected parameter for `tool.reviewer-dossier`: the absolute path of
+    // the PR-comment capture file the host appends to, so the agent reads the
+    // dossier's raw material from the same place rather than resolving a
+    // relative string against its own cwd. Gated on the module being enabled,
+    // exactly as above — a module that is off contributes no manifest entry, so
+    // the injection would be dead weight.
+    if (this.loader.find(REVIEWER_DOSSIER_MODULE_ID)?.isEnabled) {
+      if (!out[REVIEWER_DOSSIER_MODULE_ID]) out[REVIEWER_DOSSIER_MODULE_ID] = {};
+      out[REVIEWER_DOSSIER_MODULE_ID]![CAPTURE_PATH_FIELD] = this.prCommentCapturePath;
     }
     return out;
   }
@@ -2168,13 +2228,15 @@ export class SettingsPanel implements vscode.Disposable {
     const currentEnabled = this.loader.getAll().filter((h) => h.isEnabled).map((h) => h.manifest.id);
     if (!sortedEquals(currentEnabled, active.enabledIds)) return true;
 
-    // Strip the host-injected `tool.feedback-log.feedbackFilePath` from BOTH
-    // sides: it is machine-specific runtime state, not user configuration, so
-    // it must never count as a diff. The strip is symmetric so a seeded preset
-    // (no stored path) and an older user config (path saved through the prior
-    // injection) both compare equal to the current runtime state when pristine.
-    const currentSettings = withoutInjectedFeedbackPath(this.getCurrentSettings());
-    const expected = withoutInjectedFeedbackPath(active.settings);
+    // Strip the host-injected runtime paths (`tool.feedback-log`'s
+    // `feedbackFilePath` and `tool.reviewer-dossier`'s `captureFilePath`) from
+    // BOTH sides: they are machine-specific runtime state, not user
+    // configuration, so they must never count as a diff. The strip is symmetric
+    // so a seeded preset (no stored path) and an older user config (path saved
+    // through the prior injection) both compare equal to the current runtime
+    // state when pristine.
+    const currentSettings = withoutInjectedHostPaths(this.getCurrentSettings());
+    const expected = withoutInjectedHostPaths(active.settings);
     // Settings are global and merge-on-apply, so `current` legitimately carries
     // extra field values the preset never declared — credentials/identity, plus
     // leftover settings from other presets. A config counts as MODIFIED only

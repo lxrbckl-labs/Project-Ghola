@@ -1,7 +1,7 @@
 {
   "id": "integration.bitbucket-pr-comments",
   "name": "PR Monitor",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Owns the Bitbucket PR review-comment workflow — addressing inbound comments via the address ordinal grammar, posting Review Mode findings outbound via the post ordinal grammar, resolving comment threads via the resolve ordinal grammar, optionally logging every comment to a persistent JSON file for downstream learning, and reusing Atlassian Suite credentials.",
   "proactive": false,
   "author": "aarbuckle",
@@ -101,7 +101,7 @@
         "type": "boolean",
         "label": "Require User Approval",
         "default": true,
-        "description": "When on, TPM presents the polished findings for user approval before posting (the user types ok, revise N: <change>, or cancel). When off, TPM posts immediately after polishing — faster but no safety gate. On is strongly recommended; the off path exists only for scripted bulk workflows."
+        "description": "When on, TPM presents the polished findings for user approval before posting (the user types ok, revise N: <change>, or cancel). When off, TPM posts immediately after polishing — faster but no safety gate. On is strongly recommended; the off path exists only for scripted bulk workflows. One narrow exception exists even when on: in a Ticket PR (mode.ticket-pr) session the preview is waived for a top-level comment whose body is exactly '@coderabbitai review' and nothing else, so the sentry can request a re-review without stopping. Any other text, including any other @coderabbitai command, still gates."
       },
       "logCommentsEnabled": {
         "type": "boolean",

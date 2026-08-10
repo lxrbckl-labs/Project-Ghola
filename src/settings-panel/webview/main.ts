@@ -172,9 +172,15 @@ interface UIState {
     efficiencyCores: number;
     performanceCoresModel: string;
     efficiencyCoresModel: string;
+    /** Pinned model id, or '' to inherit the tier alias above. Operator free text. */
+    performanceCoresModelVersion: string;
+    efficiencyCoresModelVersion: string;
+    /** Reasoning effort ('low' | 'medium' | 'high' | 'xhigh' | 'max'), or '' to inherit. */
+    performanceCoresEffort: string;
+    efficiencyCoresEffort: string;
   };
   /** Current QA agent count and model preference pulled from `ghola.qa.*` VS Code configuration. */
-  qaConfig: { count: number; model: string };
+  qaConfig: { count: number; model: string; modelVersion: string; effort: string };
   /** All named configurations known to the host. Updated by 'configurationsChanged'. */
   configurations: NamedConfiguration[];
   /** Currently active configuration id, or null when no preset is selected. */
@@ -388,8 +394,17 @@ const state: UIState = {
   cliCommand: 'claude',
   sessionCommand: 'initiate',
   permissionMode: 'bypassPermissions',
-  sweConfig: { performanceCores: 2, efficiencyCores: 1, performanceCoresModel: 'opus', efficiencyCoresModel: 'sonnet' },
-  qaConfig: { count: 1, model: 'sonnet' },
+  sweConfig: {
+    performanceCores: 2,
+    efficiencyCores: 1,
+    performanceCoresModel: 'opus',
+    efficiencyCoresModel: 'sonnet',
+    performanceCoresModelVersion: '',
+    efficiencyCoresModelVersion: '',
+    performanceCoresEffort: '',
+    efficiencyCoresEffort: '',
+  },
+  qaConfig: { count: 1, model: 'sonnet', modelVersion: '', effort: '' },
   configurations: [],
   activeConfigurationId: null,
   isConfigurationModified: false,
@@ -608,12 +623,20 @@ function handleMessage(msg: HostToWebviewMessage): void {
           efficiencyCores: msg.swe.efficiencyCores,
           performanceCoresModel: msg.swe.performanceCoresModel ?? 'opus',
           efficiencyCoresModel: msg.swe.efficiencyCoresModel ?? 'sonnet',
+          // '' is the meaningful default here, not a missing value: blank means
+          // "inherit the tier alias / the CLI's default effort".
+          performanceCoresModelVersion: msg.swe.performanceCoresModelVersion ?? '',
+          efficiencyCoresModelVersion: msg.swe.efficiencyCoresModelVersion ?? '',
+          performanceCoresEffort: msg.swe.performanceCoresEffort ?? '',
+          efficiencyCoresEffort: msg.swe.efficiencyCoresEffort ?? '',
         };
       }
       if (msg.qa) {
         state.qaConfig = {
           count: msg.qa.count,
           model: msg.qa.model ?? 'sonnet',
+          modelVersion: msg.qa.modelVersion ?? '',
+          effort: msg.qa.effort ?? '',
         };
       }
       state.aliases = msg.aliases ?? [];
@@ -3959,8 +3982,8 @@ function renderAgent(wrapper: HTMLElement, agentId: string): void {
 
 /**
  * SWE subpage config block: single row with two grouped pairs —
- * [Performance Agents (cores + model) | Efficiency Agents (cores + model)].
- * Saves on blur (numeric) or change (select) via `updateConfiguration`.
+ * [Performance Agents (cores + tier + version + effort) | Efficiency Agents (same)].
+ * Saves on blur (numeric / version text) or change (select) via `updateConfiguration`.
  */
 function renderSweConfigBlock(): HTMLElement {
   const block = el('div', { class: 'agent-config' });
@@ -3971,42 +3994,78 @@ function renderSweConfigBlock(): HTMLElement {
   const row = el('div', { class: 'agent-config-row' });
 
   row.appendChild(
-    renderAgentPairGroup(
-      'Performance Agents',
-      state.sweConfig.performanceCores,
-      state.sweConfig.performanceCoresModel,
-      (next) => {
+    renderAgentPairGroup({
+      label: 'Performance Agents',
+      idPrefix: 'swe-performance',
+      cores: state.sweConfig.performanceCores,
+      model: state.sweConfig.performanceCoresModel,
+      modelVersion: state.sweConfig.performanceCoresModelVersion,
+      effort: state.sweConfig.performanceCoresEffort,
+      onCoresCommit: (next) => {
         state.sweConfig.performanceCores = next;
         vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.performanceCores', value: next });
       },
-      (next) => {
+      onModelCommit: (next) => {
         state.sweConfig.performanceCoresModel = next;
         vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.performanceCoresModel', value: next });
+        // A version pinned under the old tier must not survive the switch — clear
+        // it AND persist the clear, or the panel keeps displaying (and the launcher
+        // keeps using) a model from the tier the operator just left.
+        if (versionBelongsToOtherTier(state.sweConfig.performanceCoresModelVersion, next)) {
+          state.sweConfig.performanceCoresModelVersion = '';
+          vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.performanceCoresModelVersion', value: '' });
+        }
+        // Re-render regardless: the version datalist re-filters to the new tier.
+        render();
       },
-    ),
+      onModelVersionCommit: (next) => {
+        state.sweConfig.performanceCoresModelVersion = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.performanceCoresModelVersion', value: next });
+      },
+      onEffortCommit: (next) => {
+        state.sweConfig.performanceCoresEffort = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.performanceCoresEffort', value: next });
+      },
+    }),
   );
 
   row.appendChild(
-    renderAgentPairGroup(
-      'Efficiency Agents',
-      state.sweConfig.efficiencyCores,
-      state.sweConfig.efficiencyCoresModel,
-      (next) => {
+    renderAgentPairGroup({
+      label: 'Efficiency Agents',
+      idPrefix: 'swe-efficiency',
+      cores: state.sweConfig.efficiencyCores,
+      model: state.sweConfig.efficiencyCoresModel,
+      modelVersion: state.sweConfig.efficiencyCoresModelVersion,
+      effort: state.sweConfig.efficiencyCoresEffort,
+      onCoresCommit: (next) => {
         state.sweConfig.efficiencyCores = next;
         vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.efficiencyCores', value: next });
       },
-      (next) => {
+      onModelCommit: (next) => {
         state.sweConfig.efficiencyCoresModel = next;
         vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.efficiencyCoresModel', value: next });
+        if (versionBelongsToOtherTier(state.sweConfig.efficiencyCoresModelVersion, next)) {
+          state.sweConfig.efficiencyCoresModelVersion = '';
+          vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.efficiencyCoresModelVersion', value: '' });
+        }
+        render();
       },
-    ),
+      onModelVersionCommit: (next) => {
+        state.sweConfig.efficiencyCoresModelVersion = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.efficiencyCoresModelVersion', value: next });
+      },
+      onEffortCommit: (next) => {
+        state.sweConfig.efficiencyCoresEffort = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'swe.efficiencyCoresEffort', value: next });
+      },
+    }),
   );
 
   block.appendChild(row);
   return block;
 }
 
-/** QA subpage config block: single "QA Agents" grouped pair (count + model). */
+/** QA subpage config block: single "QA Agents" group (count + tier + version + effort). */
 function renderQaConfigBlock(): HTMLElement {
   const block = el('div', { class: 'agent-config' });
   const header = el('div', { class: 'agent-config-header' });
@@ -4015,19 +4074,35 @@ function renderQaConfigBlock(): HTMLElement {
 
   const row = el('div', { class: 'agent-config-row' });
   row.appendChild(
-    renderAgentPairGroup(
-      'QA Agents',
-      state.qaConfig.count,
-      state.qaConfig.model,
-      (next) => {
+    renderAgentPairGroup({
+      label: 'QA Agents',
+      idPrefix: 'qa',
+      cores: state.qaConfig.count,
+      model: state.qaConfig.model,
+      modelVersion: state.qaConfig.modelVersion,
+      effort: state.qaConfig.effort,
+      onCoresCommit: (next) => {
         state.qaConfig.count = next;
         vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'qa.count', value: next });
       },
-      (next) => {
+      onModelCommit: (next) => {
         state.qaConfig.model = next;
         vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'qa.model', value: next });
+        if (versionBelongsToOtherTier(state.qaConfig.modelVersion, next)) {
+          state.qaConfig.modelVersion = '';
+          vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'qa.modelVersion', value: '' });
+        }
+        render();
       },
-    ),
+      onModelVersionCommit: (next) => {
+        state.qaConfig.modelVersion = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'qa.modelVersion', value: next });
+      },
+      onEffortCommit: (next) => {
+        state.qaConfig.effort = next;
+        vscode.postMessage({ type: 'updateConfiguration', section: 'ghola', key: 'qa.effort', value: next });
+      },
+    }),
   );
   block.appendChild(row);
   return block;
@@ -4746,58 +4821,179 @@ function formatTimeAgo(iso: string): string {
   }
 }
 
+/** Model tier aliases the tier picker offers, in display order. */
+const AGENT_MODEL_TIERS: ReadonlyArray<{ value: string; text: string }> = [
+  { value: 'opus', text: 'Opus' },
+  { value: 'sonnet', text: 'Sonnet' },
+  { value: 'haiku', text: 'Haiku' },
+];
+
 /**
- * Grouped [label : cores input + model select] pair used inside the agent-config row.
- * The number input persists on blur; the select fires immediately on change.
+ * Suggested model ids for the version datalist. Deliberately a *suggestion* list
+ * behind a free-text input rather than a closed dropdown: a hardcoded catalog goes
+ * stale on every model release, and the operator must stay able to pin an id that
+ * shipped after this build. Nothing here constrains what may be typed.
+ */
+const AGENT_MODEL_VERSIONS: readonly string[] = [
+  'claude-opus-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-opus-4-5',
+  'claude-sonnet-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-4-5',
+  'claude-haiku-4-5',
+  'claude-fable-5',
+];
+
+/**
+ * Reasoning-effort levels. '' is first and is the default: blank inherits the
+ * CLI's own default effort rather than pinning one. Option text carries the
+ * "Effort:" prefix so the control stays self-describing in a dense four-control
+ * row where there is no room for a per-control caption.
+ */
+const AGENT_EFFORT_OPTIONS: ReadonlyArray<{ value: string; text: string }> = [
+  { value: '', text: 'Effort: inherit' },
+  { value: 'low', text: 'Effort: low' },
+  { value: 'medium', text: 'Effort: medium' },
+  { value: 'high', text: 'Effort: high' },
+  { value: 'xhigh', text: 'Effort: xhigh (recommended for coding)' },
+  { value: 'max', text: 'Effort: max' },
+];
+
+/**
+ * Model ids to suggest for `tier`: that tier's own family first, then any id whose
+ * family the tier picker cannot select at all (e.g. `claude-fable-*`), so those
+ * stay reachable instead of being filtered into oblivion. Falls back to the whole
+ * catalog when the tier matches nothing, so an unrecognized tier never produces an
+ * empty suggestion list.
+ */
+function modelVersionsForTier(tier: string): string[] {
+  const own = AGENT_MODEL_VERSIONS.filter((id) => id.startsWith(`claude-${tier}-`));
+  const unreachable = AGENT_MODEL_VERSIONS.filter(
+    (id) => !AGENT_MODEL_TIERS.some((t) => id.startsWith(`claude-${t.value}-`)),
+  );
+  return own.length > 0 ? [...own, ...unreachable] : [...AGENT_MODEL_VERSIONS];
+}
+
+/**
+ * True when `version` provably belongs to a tier other than `tier`. Guards the
+ * tier-change cascade: an id pinned under the old tier would otherwise keep being
+ * displayed — and launched — under the new one. Operator free text that matches no
+ * known family is deliberately left alone; only a provably-wrong pin is cleared.
+ */
+function versionBelongsToOtherTier(version: string, tier: string): boolean {
+  if (!version) return false;
+  return AGENT_MODEL_TIERS.some(
+    (t) => t.value !== tier && version.startsWith(`claude-${t.value}-`),
+  );
+}
+
+/** Inputs for one pool's config group. See `renderAgentPairGroup`. */
+interface AgentPairGroupOptions {
+  label: string;
+  /** Stable and unique per group — namespaces this group's version datalist id. */
+  idPrefix: string;
+  cores: number;
+  model: string;
+  modelVersion: string;
+  effort: string;
+  onCoresCommit: (next: number) => void;
+  onModelCommit: (next: string) => void;
+  onModelVersionCommit: (next: string) => void;
+  onEffortCommit: (next: string) => void;
+}
+
+/**
+ * Grouped [label : cores input + tier select + version input + effort select] used
+ * inside the agent-config row. The number and text inputs persist on blur; the
+ * selects fire immediately on change. Version and effort are empty-means-inherit —
+ * a blank version falls back to the tier alias, a blank effort to the CLI's own
+ * default — which the placeholder and the "inherit" option say in the UI.
  * Reuses `agent-config-field` / `agent-config-label` / `agent-config-input` for
  * consistent styling across SWE and QA config blocks.
  */
-function renderAgentPairGroup(
-  label: string,
-  coresInitial: number,
-  modelInitial: string,
-  onCoresCommit: (next: number) => void,
-  onModelCommit: (next: string) => void,
-): HTMLElement {
+function renderAgentPairGroup(opts: AgentPairGroupOptions): HTMLElement {
   const field = el('div', { class: 'agent-config-field' });
   const lbl = el('label', { class: 'agent-config-label' });
-  lbl.textContent = label;
+  lbl.textContent = opts.label;
   field.appendChild(lbl);
 
-  const row = el('div') as HTMLDivElement;
-  row.style.display = 'flex';
-  row.style.gap = '6px';
+  const row = el('div', { class: 'agent-config-controls' });
 
-  const input = el('input', { class: 'agent-config-input' }) as HTMLInputElement;
+  const input = el('input', { class: 'agent-config-input agent-config-input-cores' }) as HTMLInputElement;
   input.type = 'number';
-  input.value = String(coresInitial);
-  input.style.width = '60px';
+  input.value = String(opts.cores);
+  input.title = 'How many agents in this pool';
   input.addEventListener('blur', () => {
     const parsed = Number(input.value);
     if (input.value === '' || Number.isNaN(parsed)) {
-      input.value = String(coresInitial);
+      input.value = String(opts.cores);
       return;
     }
-    if (parsed === coresInitial) return;
-    onCoresCommit(parsed);
+    if (parsed === opts.cores) return;
+    opts.onCoresCommit(parsed);
   });
   row.appendChild(input);
 
-  const select = el('select', { class: 'agent-config-input' }) as HTMLSelectElement;
-  const options = [
-    { value: 'opus', text: 'Opus' },
-    { value: 'sonnet', text: 'Sonnet' },
-    { value: 'haiku', text: 'Haiku' },
-  ];
-  for (const opt of options) {
+  const select = el('select', { class: 'agent-config-input agent-config-input-tier' }) as HTMLSelectElement;
+  select.title = 'Model tier alias';
+  for (const opt of AGENT_MODEL_TIERS) {
     const o = el('option') as HTMLOptionElement;
     o.value = opt.value;
     o.textContent = opt.text;
-    if (opt.value === modelInitial) o.selected = true;
+    if (opt.value === opts.model) o.selected = true;
     select.appendChild(o);
   }
-  select.addEventListener('change', () => onModelCommit(select.value));
+  select.addEventListener('change', () => opts.onModelCommit(select.value));
   row.appendChild(select);
+
+  // Free text + datalist, never a <select>: the suggestions are a convenience,
+  // and any id the CLI accepts — including one newer than this build — is valid.
+  const listId = `${opts.idPrefix}-model-versions`;
+  const version = el('input', {
+    class: 'agent-config-input agent-config-input-version',
+    list: listId,
+  }) as HTMLInputElement;
+  version.type = 'text';
+  version.value = opts.modelVersion;
+  version.placeholder = 'version (inherit)';
+  version.title =
+    'Pin an exact model id for this pool. Leave blank to inherit the tier alias. Free text — the list is only a suggestion, any id the CLI accepts works.';
+  version.addEventListener('blur', () => {
+    const next = version.value.trim();
+    version.value = next;
+    if (next === opts.modelVersion) return;
+    opts.onModelVersionCommit(next);
+  });
+  row.appendChild(version);
+
+  const datalist = el('datalist', { id: listId }) as HTMLDataListElement;
+  for (const id of modelVersionsForTier(opts.model)) {
+    const o = el('option') as HTMLOptionElement;
+    o.value = id;
+    datalist.appendChild(o);
+  }
+  row.appendChild(datalist);
+
+  const effort = el('select', { class: 'agent-config-input agent-config-input-effort' }) as HTMLSelectElement;
+  effort.title = 'Reasoning effort for this pool. Inherit leaves the CLI default in place; xhigh is the recommended level for coding and agentic work.';
+  // A hand-edited settings.json can hold a level this build does not know. Without
+  // this the browser would fall back to selecting the first option, silently showing
+  // "inherit" for a stored value that is nothing of the sort.
+  const effortOptions = AGENT_EFFORT_OPTIONS.some((o) => o.value === opts.effort)
+    ? AGENT_EFFORT_OPTIONS
+    : [...AGENT_EFFORT_OPTIONS, { value: opts.effort, text: `Effort: ${opts.effort}` }];
+  for (const opt of effortOptions) {
+    const o = el('option') as HTMLOptionElement;
+    o.value = opt.value;
+    o.textContent = opt.text;
+    if (opt.value === opts.effort) o.selected = true;
+    effort.appendChild(o);
+  }
+  effort.addEventListener('change', () => opts.onEffortCommit(effort.value));
+  row.appendChild(effort);
 
   field.appendChild(row);
   return field;

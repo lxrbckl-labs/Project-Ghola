@@ -322,6 +322,7 @@ Each section is written in exactly one of three disciplines, so notes neither bl
 | cd-project | Open Questions | mutable: append on raise, edit in place to resolve (never delete) |
 | cd-project | Contents | append-only (subfile wikilinks; directory homes only) |
 | cd-subfile | body | rewrite-in-place (curated topical content) |
+| cd-subfile (`dossier: reviewers`) | Reviewer Dossier sections (owned by tool.reviewer-dossier) | append-only (dated evidence lines) — overrides the generic cd-subfile body row above |
 | support-app | Overview / Architecture and Dependencies | rewrite-in-place |
 | support-app | Known issues and resolutions | append-only (dated) |
 | support-app | Gotchas and Quirks / Investigation Patterns / Related Apps | append-only |

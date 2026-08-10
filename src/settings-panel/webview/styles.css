@@ -1577,12 +1577,22 @@ button.module-row-chevron:focus-visible {
   gap: 10px;
 }
 
-/* Single field: label sits above a compact 28px number input. */
+/* Single field: label sits above a row of compact 28px controls. */
 .agent-config-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 140px;
+}
+
+/* The controls under one field's label: count, tier, model version, effort.
+   Wraps rather than overflowing — four controls do not fit one line in a narrow
+   panel, and the SWE row carries two of these groups side by side. */
+.agent-config-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .agent-config-label {
@@ -1605,6 +1615,27 @@ button.module-row-chevron:focus-visible {
 .agent-config-input:focus {
   outline: 1px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: -1px;
+}
+
+/* Per-control widths inside `.agent-config-controls`. All of them keep the shared
+   `.agent-config-input` chrome (28px, input background, 3px radius, font: inherit)
+   and only override width — the count needs less than 80px, the model version and
+   effort labels need more. */
+.agent-config-input-cores {
+  width: 60px;
+}
+
+.agent-config-input-tier {
+  width: 92px;
+}
+
+.agent-config-input-version {
+  width: 168px;
+}
+
+.agent-config-input-effort {
+  width: auto;
+  max-width: 100%;
 }
 
 /* Inline mismatch hint shown when Performance + Efficiency != Total SWE Count.

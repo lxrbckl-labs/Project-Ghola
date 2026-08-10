@@ -8,7 +8,7 @@ This module is **not proactive**. It does not fire at session start. The rule ap
 
 Cross-ticket discussions stay in session memory only. They are NEVER written to the active ticket's notes file.
 
-The session is bound to a single ticket (by `mode.ticket-work`'s `parameters.ticketId`). Every conversational pivot to another ticket — "speaking of CMMS-1234, that reminds me…", "this is similar to the bug we hit in CMMS-9999", "by the way, how is PROJ-42 going?" — is in-session context only. TPM may discuss the other ticket, reference its content, even reason about it for the duration of the message. But none of that discussion is persisted into the active ticket's notes file. The active ticket's notes are for the active ticket's work, and the boundary is total.
+The session is bound to a single ticket at a time — whichever ticket the active ticket-scoped mode (`mode.ticket-work` or `mode.ticket-pr`) currently binds, derived from the branch rather than a manual ticket pin (there is no `parameters.ticketId` — no ticket-scoped mode defines one). Rebinding that active ticket — an operator-requested move to a different ticket, such as a queued multi-ticket run advancing to its next ticket — changes which ticket is active; it is not itself a cross-write, and it is governed by the active mode's own rebind rules, not by this module. Every conversational pivot to another ticket — "speaking of CMMS-1234, that reminds me…", "this is similar to the bug we hit in CMMS-9999", "by the way, how is PROJ-42 going?" — is in-session context only. TPM may discuss the other ticket, reference its content, even reason about it for the duration of the message. But none of that discussion is persisted into the active ticket's notes file. The active ticket's notes are for the active ticket's work, and the boundary is total.
 
 This applies regardless of how the cross-ticket content arrived — SWE returns that mention other tickets, user messages that pivot conversationally, QA verdicts that spot a related issue elsewhere. The same isolation rule covers all three sources.
 
@@ -34,7 +34,7 @@ The choice between the three is the user's call. `refuse` is the safest default;
 
 ## Relationship to existing module sections
 
-Both `mode.ticket-work` (Cross-ticket discipline section) and `tool.obsidian-notes` / `tool.session-handoff` (the cross-ticket discussion mentions) have inlined this rule. With this module loaded:
+Both ticket-scoped modes (`mode.ticket-work` and `mode.ticket-pr`, each in a Cross-ticket discipline section) and `tool.obsidian-notes` / `tool.session-handoff` (the cross-ticket discussion mentions) have inlined this rule. With this module loaded:
 
 - Those modules' inline sections become AUTHORITATIVE-RECEIVER for the policy this module defines — they cite this module rather than restating the rule. TPM uses this module's exact settings (`parameters.enforceIsolation`, `parameters.allowCrossTicketNoteWrite`, `parameters.promptBeforeCrossWrite`, `parameters.onIsolationViolation`) in preference to anything the consuming modules say inline.
 - When this module is DISABLED, the inline sections in the consuming modules act as the fallback — they restate the rule independently so the discipline isn't lost when this module is missing.

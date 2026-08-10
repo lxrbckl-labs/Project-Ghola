@@ -27,7 +27,8 @@
           "Null checks in place where needed": { "value": "Identify nullable inputs to new code (function params, API responses, optional fields) and confirm they are checked before access.", "enabled": true },
           "No unused imports or dead code introduced": { "value": "Scan for imports that aren't referenced and functions or variables that aren't used. Build warnings are usually a hint; do not rely on them alone.", "enabled": true },
           "Code follows existing naming conventions": { "value": "Compare new identifiers (variables, functions, classes) against the project's existing naming patterns. Flag inconsistencies.", "enabled": true },
-          "Edge cases addressed or documented": { "value": "Recall the edge cases discussed during the session (or surfaced in QA findings). Each one should be either fixed in the diff or explicitly documented as out-of-scope.", "enabled": true }
+          "Edge cases addressed or documented": { "value": "Recall the edge cases discussed during the session (or surfaced in QA findings). Each one should be either fixed in the diff or explicitly documented as out-of-scope.", "enabled": true },
+          "Known reviewer patterns pre-empted": { "value": "When tool.reviewer-dossier is loaded, check the diff against the project's reviewer dossier (patterns specific reviewers reliably flag) and confirm each pattern that applies here is addressed or deliberately left as-is. Treat this check as trivially passed when the dossier module is not loaded.", "enabled": true }
         },
         "keyLabel": "Check",
         "valueLabel": "Description",
@@ -51,7 +52,7 @@
         "type": "string",
         "label": "PR Description Template",
         "description": "Template for the PR description. TPM generates a draft here based on the session's work, then the operator edits it directly before submission. Supports markdown. The template is pre-filled when TPM drafts a description; edit it freely -- what you see is what gets submitted.",
-        "default": "Change Summary:\n[ONE TO TWO SENTENCE SUMMARY]\n\nVerification: [LINK TO TESTING PROCS]\n\nHas the UI been signed off by PO or manager? [ANSWER]",
+        "default": "Change Summary:\n[CHANGE SUMMARY - THREE SENTENCES MAXIMUM]\n\nVerification: [LINK TO TESTING PROCS]\n\nHas the UI been signed off by PO or manager? [ANSWER]",
         "multiline": true
       },
       "bannedTokens": {

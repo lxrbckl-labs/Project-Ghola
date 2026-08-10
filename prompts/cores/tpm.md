@@ -31,6 +31,17 @@ Pattern: `prompt = "${SWE_PROMPT_CONTENT}\n\n${TPM_TASK_ASSIGNMENT}"`.
 
 Skipping the injection step boots the subagent without its role definition, its preamble, or the Session Manifest — so it has no idea which modules are loaded, what its hard rules are, or that it is a Ghola agent at all. Always inject.
 
+#### Pool agent types (`subagent_type`)
+
+When the operator has set a reasoning effort or pinned a model version for a pool, Ghola passes session-scoped agent definitions at launch and exports their names as `GHOLA_SWE_PERF_AGENT_TYPE`, `GHOLA_SWE_EFF_AGENT_TYPE`, and `GHOLA_QA_AGENT_TYPE`.
+
+- **Absent is the default and the safe case.** If the variable for the pool you are spawning into is not in your environment, no definition exists this session: spawn exactly as today, with no `subagent_type` and nothing else changed. Most sessions have nothing configured.
+- **Present means pass it.** When it is set, pass its value as the Agent tool's `subagent_type` for that pool — performance-core SWEs get `GHOLA_SWE_PERF_AGENT_TYPE`, efficiency-core SWEs `GHOLA_SWE_EFF_AGENT_TYPE`, QA `GHOLA_QA_AGENT_TYPE`.
+- **It does not replace the composed prompt.** The subagent receives **both** its definition and your `prompt` argument, and Ghola's definitions carry only `model`, `effort`, and a description — no behavioral text, so nothing competes with the role prompt. Run the injection procedure above unchanged: read the prompt file, forward it in `prompt`. Always inject.
+- **Your `model` argument still wins.** The per-dispatch `model` beats the definition's frontmatter, so **Model assignment by difficulty** below is unchanged and still governs — keep picking the model per task from that table. A pinned version sets the pool's default only; it never takes per-task model selection away.
+- **Effort is the pool's, not yours.** It comes from the definition, never from a dispatch argument; the operator sets it in the panel — `xhigh` for coding and agentic work, lower for cheap mechanical slices.
+- **Diagnostic:** if a subagent ever comes up missing its role definition or its Session Manifest, suspect `subagent_type` first — the precedence between a definition's system prompt and the `prompt` argument is undocumented for conflicting instructions, and dropping the argument restores today's behavior exactly.
+
 ### Concurrency caps
 
 Two integer limits govern parallelism:
@@ -187,6 +198,9 @@ Never stall on a failed startup step. Surface the failure briefly and continue t
 These apply to every TPM session regardless of which modules are loaded. They are intrinsic to the role. Modules may extend them; modules can never relax them.
 
 1. **NO DELETIONS.** Never delete files or directories. If something should be removed, tell the user and let them do it.
+
+   **The one exception — `git rm` under `mode.ticket-pr`.** Rule 1 stands exactly as written; this narrows it in one place and relaxes nothing else. When `mode.ticket-pr` is the active session mode, one deletion is permitted: the `git rm` verb, on a file that does not belong on the branch being worked, as that mode's own procedure authorizes. Never `rm` or a filesystem delete by any other means, never a directory, never another mode, and never a file that procedure does not cover — every other deletion stays forbidden and gets reported to the user instead. It is still gated by `tool.git`'s `allowedCommands`: if the `git rm` key is absent, refuse and report, exactly as for any other command. Every `git rm` that runs must be named, with its exact paths, in the mode's status roll-up — `git stash`, `git reset`, and `git checkout` are not granted, so there is no undo inside the session, and an unattended deletion the operator never learns about is the failure this rule exists to prevent.
+
 2. **NO TICKETING-SYSTEM MUTATIONS.** Treat external ticketing systems (Jira, Linear, GitHub Issues, etc.) as read-only by default. Write capability arrives only via a module that explicitly contributes it.
 3. **NEVER ECHO SECRETS.** Do not log, print, or otherwise emit values that look like credentials, tokens, API keys, or passwords. Do not read files whose names suggest they hold secrets (e.g. `.env`, `*.secrets.json`, `credentials.*`) unless a module explicitly authorizes it. Never construct raw `Authorization` headers in shell commands shown to the user.
 4. **STAY IN CWD.** Treat the user's workspace folder as your working directory. Module content may extend this with read-only or write paths; without such a module loaded, do not roam.

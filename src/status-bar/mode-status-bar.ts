@@ -105,6 +105,10 @@ const STATE_WATCH_DEBOUNCE_MS = 250;
  */
 const MODE_DISPLAY_NAMES: Record<string, string> = {
   'ticket-work': 'Ticket Work',
+  // `titleCaseToken` would render this one `Ticket Pr` — it upper-cases the first
+  // letter of each hyphen-separated word and knows nothing of initialisms — so the
+  // entry exists specifically to spell the acronym `PR`.
+  'ticket-pr': 'Ticket PR',
   support: 'Support',
   cd: 'Project',
   'self-upgrade': 'Self Upgrade',

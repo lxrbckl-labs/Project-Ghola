@@ -214,6 +214,82 @@ export interface PostCommentResult {
   error?: string;
 }
 
+/** ONE workflow transition Jira currently offers on an issue, as returned by
+ *  `getIssueTransitions`.
+ *
+ *  The three required fields are the whole contract a caller needs to CHOOSE:
+ *  `id` is what `transitionIssue` executes, `name` is the transition's own label
+ *  (the verb on the button — e.g. `"Start Review"`), and `toStatus` is the
+ *  status the issue lands in (e.g. `"In Review"`). They are kept separate on
+ *  purpose: a transition's name and its destination are frequently different
+ *  words, and a caller matching a target STATUS against a transition NAME is how
+ *  the wrong button gets pressed.
+ *
+ *  NOTHING IN THIS CLIENT PICKS A TRANSITION. This shape exists so the caller can
+ *  see every option and name one by `id`; there is deliberately no fuzzy match,
+ *  no closest-match fallback, and no "first available" default anywhere below. */
+export interface IssueTransition {
+  /** Jira's transition id — the value `transitionIssue` takes. A STRING: Jira
+   *  reports these as numeric strings and they must not be coerced to numbers. */
+  id: string;
+  /** The transition's own name, verbatim from Jira; `''` when absent. */
+  name: string;
+  /** `to.name` — the status the issue would end up in; `''` when absent. */
+  toStatus: string;
+  /** Jira's `hasScreen`: the transition pops a transition SCREEN in the UI.
+   *  Undefined when Jira did not report it — never guessed. A screen alone does
+   *  not mean the transition will fail from the API; `requiredFields` is the
+   *  field that actually predicts that. */
+  hasScreen?: boolean;
+  /** Names (falling back to field ids) of fields the transition screen marks
+   *  REQUIRED, read from the `expand=transitions.fields` metadata. Populated only
+   *  when at least one such field exists, so its presence is the signal: a
+   *  transition listed here cannot be executed by a bare id POST and needs a
+   *  human in Jira. Detected BEFORE the operator is asked to approve anything, so
+   *  the ask can say "this one needs fields filled in" rather than discovering it
+   *  as a 400 halfway through. */
+  requiredFields?: string[];
+}
+
+/** Per-call return shape for `getIssueTransitions`. A found issue with ZERO
+ *  available transitions is `{ exists: true, transitions: [] }` — that is
+ *  SUCCESS (the issue is in a terminal status, or this account may not move it),
+ *  never "not found". `error` is set ONLY on a real failure (unconfigured Jira,
+ *  auth, ratelimit, network, or a non-404 non-2xx); a genuine 404 is the plain
+ *  `{ exists: false, transitions: [] }`. Same three-way distinction
+ *  `getIssueComments` draws, for the same reason. */
+export interface IssueTransitionsResult {
+  exists: boolean;
+  transitions: IssueTransition[];
+  error?: string;
+}
+
+/** Result shape for `transitionIssue` — the SECOND (and only other) Jira write
+ *  in the extension, reachable only when the operator has turned on
+ *  `integration.atlassian-suite`'s `enableJiraTransition` setting.
+ *
+ *  READ `transitioned` NARROWLY: it means JIRA ACCEPTED THE REQUEST (a 2xx —
+ *  Jira answers a successful transition with 204 No Content and no body). It is
+ *  NOT a re-read of the issue and NOT a claim about the issue's current status.
+ *  A workflow post-function can move the issue on again the instant the
+ *  transition lands, so the only honest thing this shape reports is WHAT WAS
+ *  REQUESTED — hence `transitionId` echoing the id that was executed, and
+ *  deliberately no `status` / `newStatus` field. A caller that needs the
+ *  resulting status must go and read it.
+ *
+ *  Any other outcome sets `error`, and `transitioned` is then FALSE-but-uncertain
+ *  in exactly one case worth calling out: a network drop or timeout after the
+ *  request left the host. The transition may or may not have been applied. That
+ *  ambiguity is why `transitionIssue` never retries — see the method doc. */
+export interface TransitionIssueResult {
+  transitioned: boolean;
+  /** The transition id that was REQUESTED, echoed back so a caller (or a log
+   *  line) records which button was pressed. Present whenever a request was
+   *  actually made, including on a failure. */
+  transitionId?: string;
+  error?: string;
+}
+
 /** Bitbucket pull-request lifecycle states. `findOpenPrForBranch` queries OPEN
  *  first and falls back to the closed states so a MERGED / DECLINED / SUPERSEDED
  *  PR (and its CodeRabbit comments) is still reachable instead of being reported
@@ -234,6 +310,19 @@ export interface PrLookupResult {
    *  on a request failure. Lets a caller say "found a MERGED PR #123" distinctly
    *  from "no PR at all". */
   prState?: BitbucketPrState;
+  /** Whether the found PR is a DRAFT (`true`) or ready for review (`false`).
+   *  Read verbatim from the `draft` boolean on the PR row Bitbucket returned for
+   *  the branch query — the same field `bitbucket-pr-client.ts` sets via
+   *  `markPrReady` / `markPrDraft` and echoes back on every PUT.
+   *
+   *  ABSENT IS NOT `false`. Bitbucket's pull-request LIST endpoint returns a
+   *  partial serialization of each PR, so `draft` can simply not be in the
+   *  response; it is also absent on the genuine no-PR case and on a request
+   *  failure. `undefined` therefore means "we did not learn whether this PR is a
+   *  draft", and a caller must not read it as "it is ready" — that would let a
+   *  draft PR be reported as ready-for-review on nothing more than a missing
+   *  field. Same never-guessed rule as `prState` and `totalAvailable`. */
+  draft?: boolean;
   /** The PR author's Bitbucket `nickname` — the username-like handle best for
    *  case-insensitive matching against a configured Bitbucket username. Chosen
    *  over `account_id` / `uuid` (opaque, not user-recognizable) and over
@@ -290,6 +379,25 @@ interface JiraCommentsPageResponse {
   total?: number;
 }
 
+/** Minimal slice of Jira `/issue/<key>/transitions?expand=transitions.fields`.
+ *  `fields` is the per-transition screen metadata the expand adds: a map of
+ *  field id -> metadata, of which we read only `required` and the human `name`.
+ *  It is absent entirely when the transition has no screen. */
+interface JiraTransitionFieldMeta {
+  required?: boolean;
+  name?: string;
+}
+interface JiraTransitionResponse {
+  id?: string;
+  name?: string;
+  to?: { name?: string };
+  hasScreen?: boolean;
+  fields?: Record<string, JiraTransitionFieldMeta>;
+}
+interface JiraTransitionsResponse {
+  transitions?: JiraTransitionResponse[];
+}
+
 /** Minimal slice of the Bitbucket pull-request search response. `state` and
  *  `updated_on` back the state fallback and the deterministic multi-PR pick;
  *  `author` backs the author-vs-reviewer determination a boot-time step makes.
@@ -301,6 +409,9 @@ interface BitbucketPullRequest {
   title?: string;
   state?: string;
   updated_on?: string;
+  /** Bitbucket's own draft flag. OPTIONAL because the list endpoint returns a
+   *  partial serialization and may omit it — see `PrLookupResult.draft`. */
+  draft?: boolean;
   author?: { nickname?: string; display_name?: string };
   links?: { html?: { href?: string } };
 }
@@ -643,6 +754,140 @@ export class AtlassianClient {
   }
 
   /**
+   * `GET ${jiraBase}/rest/api/3/issue/${key}/transitions?expand=transitions.fields`
+   * — the transitions Jira will currently accept on this issue FOR THIS ACCOUNT.
+   * A READ: it changes nothing, so it goes through `request` and keeps the same
+   * transient-retry budget every other read here has.
+   *
+   * Three outcomes callers MUST keep distinct, exactly as `getIssueComments`
+   * does:
+   *   - `{ exists: true, transitions: [] }` — the issue exists and offers no
+   *     transitions (terminal status, or this account may not move it). SUCCESS.
+   *   - `{ exists: false, transitions: [] }` with no `error` — genuine 404.
+   *   - any `error` — a real failure, with `'Jira not configured'` for the
+   *     no-credentials case so it never masquerades as "no ticket".
+   *
+   * WHY `expand=transitions.fields`: without it the response says nothing about
+   * whether a transition's screen demands mandatory fields, and the only way to
+   * find out is to attempt the transition and read the 400. That is the worst
+   * possible moment to discover it — the operator has already been asked to
+   * approve a move that was never going to work. With the expand, `requiredFields`
+   * is populated here and the caller can say so BEFORE asking.
+   *
+   * THIS METHOD DOES NOT CHOOSE. It reports what Jira offers, in Jira's own
+   * order, and stops. Matching a target status name, handling ambiguity when two
+   * transitions land in the same status, and deciding what to do when none match
+   * are all the CALLER's job. There is no fuzzy matching and no default pick here
+   * — a client that guesses which button to press turns an operator-approved
+   * "move it to In Review" into an unreviewable action at a distance.
+   *
+   * Never throws; same security and timeout contract as the other reads.
+   */
+  async getIssueTransitions(key: string): Promise<IssueTransitionsResult> {
+    if (!key || !key.trim()) return { exists: false, transitions: [], error: 'issue key is required' };
+    if (!this.email || !this.jiraToken || !this.jiraBase) {
+      return { exists: false, transitions: [], error: 'Jira not configured' };
+    }
+
+    const url =
+      `${this.jiraBase}/rest/api/3/issue/${encodeURIComponent(key.trim())}` +
+      '/transitions?expand=transitions.fields';
+    const res = await this.request(url, 'jira');
+    if (!res.ok) {
+      // Same discriminant the other reads use — the HTTP status, never a message
+      // prefix sniff. A 404 is a missing issue; everything else is a failure.
+      if (res.failure.httpStatus === 404) return { exists: false, transitions: [] };
+      return { exists: false, transitions: [], error: res.failure.message || 'request failed' };
+    }
+
+    const body = res.body as JiraTransitionsResponse | undefined;
+    const raw = Array.isArray(body?.transitions) ? body!.transitions! : [];
+    const transitions: IssueTransition[] = [];
+    for (const t of raw) {
+      // A transition with no id is unusable — it is precisely the thing
+      // `transitionIssue` needs — so it is dropped rather than surfaced as an
+      // option the caller cannot act on.
+      const id = typeof t?.id === 'string' ? t.id : undefined;
+      if (!id) continue;
+      const entry: IssueTransition = {
+        id,
+        name: typeof t.name === 'string' ? t.name : '',
+        toStatus: typeof t.to?.name === 'string' ? t.to.name : '',
+      };
+      if (typeof t.hasScreen === 'boolean') entry.hasScreen = t.hasScreen;
+      const fields = t.fields;
+      if (fields && typeof fields === 'object') {
+        const required: string[] = [];
+        for (const [fieldId, meta] of Object.entries(fields)) {
+          if (meta?.required !== true) continue;
+          // Prefer the human name; fall back to the raw field id so a required
+          // field is never reported as an empty string.
+          required.push(typeof meta.name === 'string' && meta.name !== '' ? meta.name : fieldId);
+        }
+        // Set only when non-empty: presence IS the signal (see the field's doc),
+        // so an empty array here would read as "checked, and there are some".
+        if (required.length > 0) entry.requiredFields = required;
+      }
+      transitions.push(entry);
+    }
+    return { exists: true, transitions };
+  }
+
+  /**
+   * `POST ${jiraBase}/rest/api/3/issue/${key}/transitions` with
+   * `{ transition: { id } }` — move an issue along its workflow. This is the
+   * extension's SECOND Jira mutation (the first is `postIssueComment`) and it
+   * exists solely to serve `integration.atlassian-suite`'s transition flow; with
+   * that module's `enableJiraTransition` gate off nothing reaches this method.
+   *
+   * `transitionId` MUST come from `getIssueTransitions`. This method executes the
+   * id it is handed and never derives one: no name matching, no closest match, no
+   * falling back to the first available transition. An id Jira does not currently
+   * offer comes back as its own 400 rather than being quietly adjusted into
+   * something that works.
+   *
+   * **Deliberately NEVER retried.** Like `postIssueComment` it calls `requestOnce`
+   * directly, bypassing the transient-retry wrapper the reads use, for the same
+   * reason: a POST that times out or drops mid-flight is AMBIGUOUS — Jira may
+   * have applied the transition before the connection died. A blind replay can
+   * move the issue a second time (workflows with a loop, or an id that is valid
+   * again from the new status), and status changes are what notify a whole team.
+   * One attempt, then an honest error a human checks. Do not add a retry.
+   *
+   * A SUCCESSFUL RESPONSE IS 204 NO CONTENT AND PROVES ONLY THAT JIRA ACCEPTED
+   * THE REQUEST. It is not a status read — post-functions and automation rules
+   * can move the issue again immediately — so the result describes what was
+   * REQUESTED (`transitionId`) and never asserts what the issue's status now is.
+   *
+   * Never throws; same timeout and token-leak contract as the read paths.
+   */
+  async transitionIssue(key: string, transitionId: string): Promise<TransitionIssueResult> {
+    if (!key || !key.trim()) return { transitioned: false, error: 'issue key is required' };
+    if (typeof transitionId !== 'string' || transitionId.trim() === '') {
+      return { transitioned: false, error: 'transition id is required' };
+    }
+    if (!this.email || !this.jiraToken || !this.jiraBase) {
+      return { transitioned: false, error: 'Jira not configured' };
+    }
+
+    const id = transitionId.trim();
+    const url = `${this.jiraBase}/rest/api/3/issue/${encodeURIComponent(key.trim())}/transitions`;
+    const payload = { transition: { id } };
+
+    // Single attempt, no retry wrapper — see the method doc.
+    const res = await this.requestOnce(url, this.jiraToken, payload, 'transition');
+    if (!res.ok) {
+      // No `exists` channel on this shape, so a 404 (missing issue) and a 400
+      // (id not currently offered / mandatory fields on the screen) both surface
+      // as a plain error carrying Jira's own status text.
+      return { transitioned: false, transitionId: id, error: res.failure.message || 'request failed' };
+    }
+    // 204 No Content — there is no body to read, and deliberately nothing here
+    // claims what the issue's status became.
+    return { transitioned: true, transitionId: id };
+  }
+
+  /**
    * Find the PR for a branch. Queries the exact-branch BBQL match
    * (`source.branch.name="${branch}"`) against `state=OPEN` FIRST; if that
    * returns no match it falls back to the closed states
@@ -773,6 +1018,10 @@ export class AtlassianClient {
       prTitle: typeof pr.title === 'string' ? pr.title : undefined,
       prId: typeof pr.id === 'number' ? pr.id : undefined,
       prState: state,
+      // Draft flag straight off the PR row. Guarded on `typeof === 'boolean'`
+      // like every other field here, so a response that omits `draft` yields
+      // `undefined` ("unknown") rather than a fabricated `false` ("ready").
+      draft: typeof pr.draft === 'boolean' ? pr.draft : undefined,
       // Author handle for the author-vs-reviewer boot check. `nickname` is the
       // matchable username-like handle; `display_name` is the human label.
       prAuthor: typeof pr.author?.nickname === 'string' ? pr.author.nickname : undefined,
@@ -866,15 +1115,23 @@ export class AtlassianClient {
    *
    * `jsonBody`, when supplied, switches the verb to POST and sends the value as
    * a JSON request body. Omitting it keeps the historical GET behavior byte for
-   * byte, so every existing read path is unaffected. Note that the ONLY caller
-   * that passes a body (`postIssueComment`) deliberately calls this method
-   * directly rather than going through `request`, because `request` layers on
-   * transient retries — safe for a GET, a double-post hazard for a POST.
+   * byte, so every existing read path is unaffected. Note that BOTH callers that
+   * pass a body (`postIssueComment`, `transitionIssue`) deliberately call this
+   * method directly rather than going through `request`, because `request` layers
+   * on transient retries — safe for a GET, a double-write hazard for a POST.
+   *
+   * `mutation` names WHICH write is in flight, and exists only so the
+   * ambiguous-outcome message in the catch below can describe the right thing.
+   * It defaults to `'comment'` so the historical call site and its exact wording
+   * are unchanged. A generic "the request may or may not have been applied" was
+   * the alternative and it is worse: the whole value of that message is telling
+   * the reader precisely what to go and look at.
    */
   private async requestOnce(
     url: string,
     token: string,
     jsonBody?: unknown,
+    mutation: 'comment' | 'transition' = 'comment',
   ): Promise<
     | { ok: true; body: unknown }
     | { ok: false; failure: RequestFailure }
@@ -961,35 +1218,50 @@ export class AtlassianClient {
         (err instanceof Error && err.name === 'AbortError') ||
         controller.signal.aborted;
 
-      // A body means this was the POST (see the `jsonBody` note on this method):
-      // the ONE Jira mutation, `postIssueComment`. Its outcome after a timeout
-      // or a mid-flight drop is INDETERMINATE — Jira may have created the
-      // comment before we stopped listening.
+      // A body means this was a POST (see the `jsonBody` note on this method):
+      // one of the two Jira mutations, `postIssueComment` or `transitionIssue`.
+      // Its outcome after a timeout or a mid-flight drop is INDETERMINATE — Jira
+      // may have applied it before we stopped listening.
       //
-      // No machine will replay it: `postIssueComment` calls this method directly
-      // to stay out of `withTransientRetry`, and Jira's single token never
-      // touches `withBitbucketFailover`. The remaining risk is the HUMAN, and it
-      // was this message: "try again" is the one instruction guaranteed to
-      // produce the duplicate that all that care was taken to prevent. It is
-      // worse here than anywhere else, because the Jira Comment Write flow in
-      // `integration.atlassian-suite` has the operator approve the exact text
-      // first — so re-running feels pre-authorized and the second comment is
-      // indistinguishable from the first.
+      // No machine will replay it: both callers call this method directly to stay
+      // out of `withTransientRetry`, and Jira's single token never touches
+      // `withBitbucketFailover`. The remaining risk is the HUMAN, and it was this
+      // message: "try again" is the one instruction guaranteed to produce the
+      // duplicate that all that care was taken to prevent. It is worse here than
+      // anywhere else, because `integration.atlassian-suite` has the operator
+      // approve the exact action first — so re-running feels pre-authorized and
+      // the second write is indistinguishable from the first.
+      //
+      // The two writes name DIFFERENT things to go and check, because "check the
+      // issue" is useless advice if the reader does not know what they are
+      // looking for: a comment that may be there twice, or a status that may
+      // already have moved.
       //
       // Reads are untouched and keep their "try again" wording byte for byte: a
       // GET that timed out changed nothing and is genuinely safe to repeat.
       if (jsonBody !== undefined) {
+        const outcome = mutation === 'transition'
+          ? {
+            lower: 'the transition may or may not have been applied.',
+            upper: 'The transition may or may not have been applied.',
+            advice: 'CHECK THE ISSUE\'S STATUS before retrying — retrying blindly can move it twice.',
+          }
+          : {
+            lower: 'the comment may or may not have been posted.',
+            upper: 'The comment may or may not have been posted.',
+            advice: 'CHECK THE ISSUE before retrying — retrying blindly can post it twice.',
+          };
         return {
           ok: false,
           failure: {
             kind: 'network',
             message: aborted
               ? `No response from Jira within ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s. `
-                + 'The request WAS sent, so the comment may or may not have been posted. '
-                + 'CHECK THE ISSUE before retrying — retrying blindly can post it twice.'
+                + `The request WAS sent, so ${outcome.lower} `
+                + outcome.advice
               : 'The connection to Jira failed after the request was sent. '
-                + 'The comment may or may not have been posted. '
-                + 'CHECK THE ISSUE before retrying — retrying blindly can post it twice.',
+                + `${outcome.upper} `
+                + outcome.advice,
           },
         };
       }

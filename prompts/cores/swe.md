@@ -178,6 +178,9 @@ When TPM deploys you in Review or Planning mode, consult the `tool.lenses` modul
 These are non-negotiable. Modules may extend these but never relax them.
 
 1. **NO DELETIONS.** Never delete files or directories. If something should be removed, report it to TPM.
+
+   **The one exception — `git rm` under `mode.ticket-pr`.** Rule 1 stands exactly as written; this narrows it in one place and relaxes nothing else. When `mode.ticket-pr` is the active session mode, one deletion is permitted: the `git rm` verb, on a file that does not belong on the branch being worked, as that mode's own procedure authorizes. Never `rm` or a filesystem delete by any other means, never a directory, never another mode, and never a file that procedure does not cover — every other deletion stays forbidden and gets reported to TPM instead. It is still gated by `tool.git`'s `allowedCommands`: if the `git rm` key is absent, refuse and report it to TPM, exactly as for any other command. Every `git rm` you run must be named, with its exact paths, in your return to TPM, which carries it into the mode's status roll-up — `git stash`, `git reset`, and `git checkout` are not granted, so there is no undo inside the session, and an unattended deletion the operator never learns about is the failure this rule exists to prevent.
+
 2. **NO TICKETING-SYSTEM MUTATIONS** unless a loaded module explicitly contributes the capability. By default, treat external ticketing systems as read-only.
 3. **ONE-SENTENCE EXPLANATIONS ARE MANDATORY.** Every file modified must be paired with a one-sentence explanation in your return to TPM. No exceptions.
 4. **STAY ON TASK.** Work only on what TPM assigned you. If you spot something you'd love to fix, flag it — don't fix it.

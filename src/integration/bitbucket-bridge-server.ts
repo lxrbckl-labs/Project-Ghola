@@ -2,26 +2,37 @@
  * Loopback HTTP bridge that lets a CLI agent (running inside the Ghola session
  * terminal) invoke host-side Atlassian operations. It serves both Bitbucket PR
  * ops (via `BitbucketPrClient`) and Jira operations — ticket details via the
- * injected `getTicket` fetcher and issue comments via `getComments`, both
- * READ-ONLY, plus exactly ONE Jira write: posting a comment via `postComment`.
+ * injected `getTicket` fetcher, issue comments via `getComments`, and an issue's
+ * available workflow transitions via `getTransitions`, all three READ-ONLY, plus
+ * exactly TWO Jira writes: posting a comment via `postComment` and moving an
+ * issue along its workflow via `transitionIssue`.
  *
- * That single write is narrow on purpose. The bridge can add a comment to an
- * issue and nothing else — no issue creation, no transitions, no field edits,
- * and no editing or deleting of any existing comment. It is the plumbing for
- * the Jira Comment Write flow in `integration.atlassian-suite`, which is where
- * the actual authorization lives; agents are forbidden from Jira mutations by
- * their core hard rules unless that flow's `enableJiraCommentWrite` gate is on.
+ * Those two writes are narrow on purpose, and they are the ONLY ones. The bridge
+ * can add a comment to an issue and execute a transition id the caller supplies —
+ * nothing else. No issue creation, no field edits, no assignment, and no editing
+ * or deleting of any existing comment. Each write is the plumbing for a flow in
+ * `integration.atlassian-suite`, which is where the actual authorization lives;
+ * agents are forbidden from Jira mutations by their core hard rules unless the
+ * matching flow's gate — `enableJiraCommentWrite` or `enableJiraTransition` — is
+ * on.
  *
- * THAT GATE IS ENFORCED HERE, NOT ONLY IN PROSE. The write is injected as a
- * RESOLVER (`PostCommentResolver`) rather than a bare function, and the resolver
- * is called on EVERY `/post-comment` request. When the gate is off it hands back
- * `undefined` and this file refuses the route outright — there is no function to
- * call, so an agent that ignores the module markdown still cannot post. Resolving
- * per request (rather than capturing a function once at activation) is what makes
- * flipping the setting off take effect immediately instead of at the next window
- * reload. The refusal is a 403 `capability-disabled` naming the setting, never a
- * bare 404 and never a silent success. Nothing about comment READING
- * (`/get-comments`) consults the gate.
+ * NOTHING HERE CHOOSES A TRANSITION. `/transition` executes the `transitionId`
+ * it is given and never derives one: no name matching, no closest-match
+ * fallback, no defaulting to the first available. Reading the options
+ * (`/get-transitions`) and picking one are separate steps on purpose, so the
+ * choice is made where a human can see it.
+ *
+ * THOSE GATES ARE ENFORCED HERE, NOT ONLY IN PROSE. Each write is injected as a
+ * RESOLVER (`PostCommentResolver` / `TransitionResolver`) rather than a bare
+ * function, and the resolver is called on EVERY request to its route. When the
+ * gate is off it hands back `undefined` and this file refuses the route outright
+ * — there is no function to call, so an agent that ignores the module markdown
+ * still cannot write. Resolving per request (rather than capturing a function
+ * once at activation) is what makes flipping the setting off take effect
+ * immediately instead of at the next window reload. The refusal is a 403
+ * `capability-disabled` naming the setting, never a bare 404 and never a silent
+ * success. The two gates are INDEPENDENT: neither route consults the other's
+ * setting, and no read (`/get-comments`, `/get-transitions`) consults either.
  *
  * Neither product's API token ever leaves the extension host: the agent only
  * ever holds a per-session bearer token that authenticates it to THIS server,
@@ -57,8 +68,8 @@
  *     is the 0600 coordinates file described above.
  *   - The Bitbucket API token is owned entirely by `BitbucketPrClient`, and the
  *     Jira API token is owned entirely by the `getTicket` / `getComments` /
- *     `postComment` fetchers; this file never reads, receives, or forwards
- *     either token.
+ *     `getTransitions` / `postComment` / `transitionIssue` fetchers; this file
+ *     never reads, receives, or forwards either token.
  *   - Raw upstream (Bitbucket / Jira) response bodies are never echoed here —
  *     only the client's / fetcher's own sanitized typed result shapes are
  *     serialized back.
@@ -77,6 +88,7 @@ import type { BitbucketPrClient } from './bitbucket-pr-client';
 import type { RequestFailure } from './atlassian-client';
 import type { TerminalManager } from '../terminal/terminal-manager';
 import { JIRA_COMMENT_WRITE_DISABLED_MESSAGE } from './jira-comment-write-gate';
+import { JIRA_TRANSITION_DISABLED_MESSAGE } from './jira-transition-gate';
 
 /** Hard cap on inbound request bodies. The agent's payloads are tiny JSON
  *  objects; anything larger is treated as abuse and rejected with 413. */
@@ -150,8 +162,8 @@ export interface PostCommentResult {
   error?: string;
 }
 
-/** Host-side Jira comment POSTer injected by the extension. This is the only
- *  WRITE the Jira side of this bridge exposes, and it exists to serve the Jira
+/** Host-side Jira comment POSTer injected by the extension. One of the two
+ *  WRITES the Jira side of this bridge exposes, and it exists to serve the Jira
  *  Comment Write flow in `integration.atlassian-suite` — that module carries
  *  the authorization, this type is only the plumbing. Same containment contract as
  *  the read fetchers: the Jira token never leaves the extension host. */
@@ -173,11 +185,90 @@ export type PostCommentFn = (key: string, body: string) => Promise<PostCommentRe
  */
 export type PostCommentResolver = () => PostCommentFn | undefined;
 
+/** ONE transition Jira currently offers on an issue, on the wire. Mirrors
+ *  `IssueTransition` in `atlassian-client.ts` field for field — `id` is what
+ *  `/transition` takes, `name` is the transition's own label, and `toStatus` is
+ *  the status it lands in. They stay separate here for the same reason they do
+ *  there: a caller matching a target STATUS against a transition NAME presses the
+ *  wrong button. */
+export interface BridgeIssueTransition {
+  id: string;
+  name: string;
+  toStatus: string;
+  /** Jira's `hasScreen`, when it reported one. Never guessed. */
+  hasScreen?: boolean;
+  /** Names of fields the transition screen marks REQUIRED. Present only when
+   *  there is at least one, so its presence means "this transition cannot be
+   *  executed by a bare id POST" — which is the fact a caller needs BEFORE
+   *  asking an operator to approve the move, not after a 400. */
+  requiredFields?: string[];
+}
+
+/** Host-side Jira transition LIST result. `exists: false` means the issue was
+ *  not found; `exists: true` with an EMPTY `transitions` array means the issue
+ *  exists and currently offers no transitions to this account — a success, never
+ *  to be reported as "not found". `error` is set only on a real failure
+ *  (including a distinct `'Jira not configured'`). Same three-way contract as
+ *  `GetCommentsResult`. */
+export interface GetTransitionsResult {
+  exists: boolean;
+  transitions: BridgeIssueTransition[];
+  error?: string;
+}
+
+/** Host-side Jira transition-list fetcher injected by the extension. A READ:
+ *  same containment contract as `GetTicketFn` — the Jira token never leaves the
+ *  extension host and only the sanitized shape above is serialized back. */
+export type GetTransitionsFn = (key: string) => Promise<GetTransitionsResult>;
+
+/** Host-side Jira transition result. `transitioned: true` means JIRA ACCEPTED
+ *  THE REQUEST (it answers a successful transition with 204 and no body) — it is
+ *  NOT a re-read of the issue and NOT a claim about the issue's current status,
+ *  which a workflow post-function can change again the instant the transition
+ *  lands. The shape therefore reports what was REQUESTED (`transitionId`) and
+ *  carries no status field at all.
+ *
+ *  Note the deliberately ambiguous case, identical to `PostCommentResult`: a
+ *  timeout mid-flight reports `transitioned: false` with an error even though the
+ *  transition MAY have been applied, which is why nothing in this stack retries
+ *  it — the caller surfaces the error and the operator checks the issue. */
+export interface TransitionResult {
+  transitioned: boolean;
+  transitionId?: string;
+  error?: string;
+}
+
+/** Host-side Jira transition executor injected by the extension. The SECOND and
+ *  last write the Jira side of this bridge exposes, serving the transition flow
+ *  in `integration.atlassian-suite` — that module carries the authorization, this
+ *  type is only the plumbing. It EXECUTES the `transitionId` it is handed and
+ *  never derives one. Same containment contract as the read fetchers. */
+export type TransitionIssueFn = (key: string, transitionId: string) => Promise<TransitionResult>;
+
 /**
- * Refusal body sent when `/post-comment` is hit with the capability withheld.
- * `status` is its own value (not `unknown-error`) so the wrapper can print a
- * tailored, actionable refusal instead of a generic transport failure; the
- * caller supplies the operator-facing `message`.
+ * Per-request supplier of the Jira transition executor, and the mechanism that
+ * makes `integration.atlassian-suite`'s `enableJiraTransition` gate REAL rather
+ * than advisory. Exactly the `PostCommentResolver` contract, applied to the
+ * other capability — and deliberately a SEPARATE resolver reading a SEPARATE
+ * setting, so neither gate can be opened by the other.
+ *
+ * The extension returns the executor only while the gate is open (module enabled
+ * AND the setting affirmatively `true`) and `undefined` otherwise; see
+ * `jira-transition-gate.ts` for the decision. This file treats `undefined` as
+ * "capability withheld" and refuses `/transition` without touching Jira.
+ *
+ * Called on every request on purpose: a guardrail you must reload the window to
+ * apply is a guardrail people forget to apply. A resolver that THROWS is also
+ * treated as withheld — unknown is never permission.
+ */
+export type TransitionResolver = () => TransitionIssueFn | undefined;
+
+/**
+ * Refusal body sent when a gated write route (`/post-comment`, `/transition`) is
+ * hit with the capability withheld. `status` is its own value (not
+ * `unknown-error`) so the wrapper can print a tailored, actionable refusal
+ * instead of a generic transport failure; each route supplies its own
+ * operator-facing `message` naming the setting that is off.
  */
 const CAPABILITY_DISABLED_STATUS = 'capability-disabled';
 
@@ -226,6 +317,8 @@ export function startBitbucketBridge(
   getTicket: GetTicketFn,
   getComments: GetCommentsFn,
   resolvePostComment: PostCommentResolver,
+  getTransitions: GetTransitionsFn,
+  resolveTransition: TransitionResolver,
   coordinatesPath?: string,
   logger?: vscode.OutputChannel,
   terminalManager?: TerminalManager,
@@ -235,7 +328,18 @@ export function startBitbucketBridge(
     const expectedAuth = Buffer.from(`Bearer ${token}`);
 
     const server = http.createServer((req, res) => {
-      handleRequest(req, res, client, getTicket, getComments, resolvePostComment, expectedAuth, terminalManager).catch(() => {
+      handleRequest(
+        req,
+        res,
+        client,
+        getTicket,
+        getComments,
+        resolvePostComment,
+        getTransitions,
+        resolveTransition,
+        expectedAuth,
+        terminalManager,
+      ).catch(() => {
         // Defensive: handleRequest already wraps its own body in try/catch, but a
         // failure before/around that (or in the catch itself) must never leak.
         sendJson(res, 500, { status: 'unknown-error', message: 'bridge error' });
@@ -368,6 +472,8 @@ async function handleRequest(
   getTicket: GetTicketFn,
   getComments: GetCommentsFn,
   resolvePostComment: PostCommentResolver,
+  getTransitions: GetTransitionsFn,
+  resolveTransition: TransitionResolver,
   expectedAuth: Buffer,
   terminalManager?: TerminalManager,
 ): Promise<void> {
@@ -446,7 +552,95 @@ async function handleRequest(
       return;
     }
 
-    // Jira comment POST — the single Jira WRITE this bridge serves, and the
+    // Jira TRANSITION LIST read. Handled here for the same reason as
+    // `/get-ticket`: a missing / non-string / empty `key` is a caller error
+    // (400), distinct from a valid key whose issue does not exist (200
+    // `{ exists: false }`) and distinct again from an issue that exists and
+    // currently offers zero transitions (200 `{ exists: true, transitions: [] }`)
+    // — which is a SUCCESS, not an absence.
+    //
+    // This is a READ and it consults NO gate. Seeing which transitions exist
+    // changes nothing in Jira, and gating it would only mean an operator with the
+    // write gate off cannot even find out what the write would do.
+    if (route === '/get-transitions') {
+      const key = typeof args.key === 'string' ? args.key.trim() : '';
+      if (!key) {
+        sendJson(res, 400, { status: 'unknown-error', message: 'key must be a non-empty string' });
+        return;
+      }
+      // The fetcher owns the Jira token and returns only a sanitized shape; we
+      // never log the key's upstream response body or any token here.
+      const transitions = await getTransitions(key);
+      sendJson(res, 200, transitions);
+      return;
+    }
+
+    // Jira TRANSITION — the second and last Jira WRITE this bridge serves, and
+    // the plumbing behind the transition flow in `integration.atlassian-suite`.
+    // Reaching this route is not by itself authorization: that flow is what
+    // authorizes an agent to invoke it, and an operator who has not turned on its
+    // `enableJiraTransition` setting does not merely lack a workflow that calls
+    // the wrapper verb — the capability is WITHHELD below, so the verb cannot
+    // work at all.
+    //
+    // THE GATE IS CHECKED FIRST, ahead of argument validation, so a withheld
+    // capability refuses identically for a well-formed and a malformed call and
+    // no work happens before the refusal. `resolveTransition` runs per request:
+    // toggling the setting off takes effect on the very next call, no reload.
+    // Both `undefined` and a THROWING resolver mean withheld — the enabled path
+    // requires a resolver that affirmatively hands back a function. It reads its
+    // OWN setting: `enableJiraCommentWrite` does not open this door.
+    //
+    // Two distinct caller errors, both 400 because both mean "you sent me
+    // something unusable" rather than "Jira said no":
+    //   - missing / non-string / empty `key`
+    //   - missing / non-string / empty `transitionId`. The id is REQUIRED and is
+    //     never derived here: this route does not match on a target status name,
+    //     does not fall back to a closest match, and does not default to the
+    //     first available transition. The caller reads `/get-transitions` and
+    //     names one, so the choice is visible where it is made.
+    // A well-formed request that Jira rejects (an id it does not currently offer,
+    // a screen with mandatory fields, a missing issue) is a 200 with
+    // `transitioned: false` plus an `error`, keeping "bad call" and "call failed"
+    // separable.
+    if (route === '/transition') {
+      let transitionIssue: TransitionIssueFn | undefined;
+      try {
+        transitionIssue = resolveTransition();
+      } catch {
+        // A resolver that blew up tells us nothing about the operator's intent,
+        // and "we could not tell" must never read as "go ahead".
+        transitionIssue = undefined;
+      }
+      if (typeof transitionIssue !== 'function') {
+        sendJson(res, 403, {
+          status: CAPABILITY_DISABLED_STATUS,
+          message: JIRA_TRANSITION_DISABLED_MESSAGE,
+        });
+        return;
+      }
+      const key = typeof args.key === 'string' ? args.key.trim() : '';
+      if (!key) {
+        sendJson(res, 400, { status: 'unknown-error', message: 'key must be a non-empty string' });
+        return;
+      }
+      const transitionId = typeof args.transitionId === 'string' ? args.transitionId.trim() : '';
+      if (!transitionId) {
+        sendJson(res, 400, {
+          status: 'unknown-error',
+          message: 'transitionId must be a non-empty string (read it from get-transitions)',
+        });
+        return;
+      }
+      // The executor owns the Jira token and returns only a sanitized shape. The
+      // result describes what was REQUESTED, never what the issue's status now
+      // is — a 204 from Jira is acceptance, not a status read.
+      const moved = await transitionIssue(key, transitionId);
+      sendJson(res, 200, moved);
+      return;
+    }
+
+    // Jira comment POST — one of the two Jira WRITES this bridge serves, and the
     // plumbing behind the Jira Comment Write flow in
     // `integration.atlassian-suite`. Reaching this route is not by itself
     // authorization: that flow is what authorizes an agent to invoke it, and an
@@ -638,7 +832,8 @@ async function dispatch(
       return { status: 'ok' };
     case '/find-pr': {
       // `findOpenPrForBranch` returns `PrLookupResult` (`{ prUrl, prTitle?,
-      // prId?, prState?, failure? }`) with NO `status` field — a successful
+      // prId?, prState?, draft?, prAuthor?, prAuthorDisplay?, failure? }`) with
+      // NO `status` field — a successful
       // lookup and a "no PR" both come back shapeless from the wrapper's
       // perspective. The bb-bridge.mjs client judges success by
       // `status === 'ok'`, so we tag the response here to fit that taxonomy
@@ -648,7 +843,9 @@ async function dispatch(
       // depend on. The `...lookup` spread carries `prState` through verbatim, so
       // a caller sees "found a MERGED PR #123" (prState: 'MERGED') distinctly
       // from "no PR at all" (the not-found below) — a found-but-closed PR is
-      // NEVER collapsed into not-found.
+      // NEVER collapsed into not-found. The same spread carries `draft` through:
+      // `true` / `false` when Bitbucket reported it, and ABSENT when it did not,
+      // which means "unknown" and must not be read as "ready for review".
       const branch = str(args.branch);
       const lookup = await client.findOpenPrForBranch(str(args.repoSlug), branch);
       if (typeof lookup.prId === 'number' && Number.isFinite(lookup.prId)) {
@@ -663,8 +860,54 @@ async function dispatch(
       }
       return { status: 'not-found', message: `No open PR for branch ${branch}` };
     }
+    case '/whoami':
+      // READ-ONLY: `GET /2.0/user`, the Bitbucket identity of the API TOKEN the
+      // host calls with. Takes no arguments — deliberately: there is nothing for
+      // a caller to point this at, because the only account it can ever report
+      // is the one behind the host's own credential.
+      //
+      // The result is `{ status, user?: { accountId, nickname, displayName,
+      // uuid } }`. NO TOKEN IS EXPOSED BY THIS: an account id is a public
+      // identifier that already appears on every comment `/list-comments`
+      // returns; what crosses the bridge is who the token IS, never the token.
+      //
+      // It answers ownership and NOTHING ELSE. `comment.author.accountId ===
+      // whoami.user.accountId` is a real equality test (same key space), but
+      // establishing that a comment is ours is not authorization to touch it —
+      // `/delete-comment` keeps its own gate and this route does not relax it.
+      //
+      // The host caches the answer for the process lifetime, so repeat calls are
+      // free; a FAILED call is not cached and the next call retries.
+      return client.getCurrentUser();
     case '/list-comments':
+      // The returned `PrComment`s may each carry `outdated` — Bitbucket's
+      // `inline.outdated` marker, carried through verbatim. It is ABSENT when we
+      // did not learn it (a general comment has no anchor to be outdated, and
+      // the list serialization may simply omit the key), and absent means
+      // UNKNOWN. Only `outdated === true` is a positive fact; a missing key must
+      // never be read as "this comment is still current".
       return client.listPullRequestComments(str(args.repoSlug), num(args.prId));
+    case '/capture-comments':
+      // Reads the SAME comments `/list-comments` does (it calls straight through
+      // to `listPullRequestComments`) and appends one JSONL record per comment to
+      // the host-resolved capture file for the per-project reviewer dossier.
+      //
+      // It touches NOTHING in Bitbucket — the only write is local — but it is
+      // still a MUTATION for classification purposes and is deliberately absent
+      // from `RETRYABLE_ROUTES` in `scripts/bb-bridge.mjs`, so no transport blip
+      // replays it. The capture file path is NOT accepted from the caller and
+      // never appears in the request: the client holds the host-resolved absolute
+      // path, which is the whole point of injecting it at compose time.
+      //
+      // Each JSONL record may now carry an OPTIONAL `outdated` boolean (the same
+      // `inline.outdated` marker `/list-comments` surfaces). It is written only
+      // when Bitbucket sent one, so an older record and a record for a comment
+      // whose state we could not establish look identical — both simply lack the
+      // key, and both mean "unknown".
+      return client.capturePullRequestComments({
+        repoSlug: str(args.repoSlug),
+        prId: num(args.prId),
+      });
     case '/reply':
       return client.replyToComment({
         repoSlug: str(args.repoSlug),
@@ -712,6 +955,15 @@ async function dispatch(
         targetBranch: str(args.targetBranch),
         description: str(args.description),
         draft: bool(args.draft),
+        reviewers: parseReviewers(args.reviewers),
+      });
+    case '/update-pr':
+      return client.updatePullRequest({
+        repoSlug: str(args.repoSlug),
+        prId: num(args.prId),
+        title: args.title !== undefined ? str(args.title) : undefined,
+        description: args.description !== undefined ? str(args.description) : undefined,
+        reviewers: parseReviewers(args.reviewers),
       });
     default:
       return undefined;
@@ -752,6 +1004,21 @@ function num(v: unknown): number {
  *  or non-boolean `draft` flag lands as a non-draft create. */
 function bool(v: unknown): boolean {
   return v === true;
+}
+
+/** Parse the optional reviewers array from the request body. Returns undefined
+ *  unless a well-formed array of `{ account_id: string }` objects is present.
+ *  Silently drops entries that are missing `account_id` rather than failing the
+ *  whole call, so a partly-valid list still attaches the usable reviewers. */
+function parseReviewers(v: unknown): Array<{ account_id: string }> | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const reviewers: Array<{ account_id: string }> = [];
+  for (const entry of v) {
+    if (entry && typeof entry === 'object' && typeof (entry as Record<string, unknown>).account_id === 'string') {
+      reviewers.push({ account_id: (entry as Record<string, unknown>).account_id as string });
+    }
+  }
+  return reviewers.length > 0 ? reviewers : undefined;
 }
 
 /** Parse the optional inline anchor for a reply. Returns undefined unless a

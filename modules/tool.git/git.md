@@ -8,7 +8,7 @@ When this module is loaded, the session has a per-command git allowlist. The age
 
 `parameters.allowedCommands` is a JSON object whose KEYS are git command strings (e.g. `git status`, `git push`, `git reset --hard`) and whose VALUES are the Category letter for that command (`"r"`, `"w"`, or `"d"`). The composer projects the user's settings into this flat shape at compose time — only commands the user has marked enabled appear; disabled commands are omitted entirely. Parsing rules:
 
-- The key is the command form the user enabled — match on string equality, byte-for-byte, with the same trailing argument shape shown in the key. `git push` and `git push --force` are DIFFERENT entries; if a user enabled `git push` but not `git push --force`, then `git push --force` is refused even though the prefix matches an enabled key.
+- The key is the command form the user enabled — match on string equality, byte-for-byte, with the same trailing argument shape shown in the key. `git push` and `git push --force` are DIFFERENT entries; if a user enabled `git push` but not `git push --force`, then `git push --force` is refused even though the prefix matches an enabled key. (This is the "a specific key exists" half of "Flag matching" below — read that section before deciding what any flagged invocation resolves to.)
 - A key containing an angle-bracket placeholder (e.g. `git branch <name>`) denotes an ARGUMENT SHAPE, not a literal string — `<...>` stands for the argument the user would supply, so such a key never equals a real invocation byte-for-byte. An invocation matches the key whose argument shape it fits: `git branch feature-x` matches `git branch <name>` (create, `w`) and NOT the bare `git branch` (list, `r`), which covers only the no-argument listing form. This does not loosen matching anywhere else — keys without a placeholder still match byte-for-byte (`git push` and `git push --force` remain DIFFERENT entries), and an invocation that fits no enabled key is still refused.
 - The value is the Category letter — `r`, `w`, or `d`. It is for messaging only. A key's presence is the grant; its absence is the refusal.
 - Absent keys are refused. There is no `enabled` field to check — commands disabled by the user are absent from the object entirely.
@@ -18,6 +18,17 @@ When this module is loaded, the session has a per-command git allowlist. The age
 - All commands are run from the project root (the current working directory). Do not `cd` into a subfolder to run an allowed command unless the user explicitly asks.
 
 If the manifest entry shows `(defaults)` rather than a live object, the user has not yet made changes — the default grant is all `r`-category commands enabled, plus the two branch commands `git branch <name>` and `git switch`; all other `w` and all `d` commands are disabled. Treat that as the operative allowlist. If `allowedCommands` is absent from the Session Manifest entirely (because the user saved only `protectedBranches` and never touched the command list), the default applies: all `r`-category commands enabled, plus `git branch <name>` and `git switch`; all other `w` and all `d` disabled.
+
+## Flag matching — when a flag folds into the base key, and when it does not
+
+This file uses flags two different ways, and they are one rule, not two: **a flag folds into its base command's key UNLESS the catalog carries a more specific key for that flag, in which case the specific key is the only one that governs.**
+
+- **No specific key exists — the flag folds.** `git diff --cached`, `git diff --name-only`, and `git log -p <file>` resolve to the `git diff` and `git log` keys, because no `git diff --cached` or `git log -p` key exists to claim them.
+- **A specific key exists — the invocation resolves to it and to nothing else.** `git push --force` is refused when only `git push` is enabled, precisely because `git push --force` is its own catalog key. The narrowing works because the specific key exists; it is not a property of the `--force` spelling.
+- **Resolve to the most specific matching key, then look up that key alone.** Never fall back to the base key when a more specific key matched and turned out to be absent — a matched-but-absent key is a refusal, not a miss.
+- **Aliases of one flag are one key.** `git switch -f`, `git switch --force`, and `git switch --discard-changes` are three spellings of the same flag and all resolve to the `git switch --discard-changes` key; `git switch -m` resolves to `git switch --merge`; `git rm -f` and `git rm --force` both resolve to `git rm -f`. Match on the flag, never on the spelling — refusing `--force` while permitting `--discard-changes` is the same command run twice.
+
+**A flag that changes its command's category must be declared as its own key.** A read verb that a flag makes destructive, or a `w` verb that a flag turns into work loss, must never be left to fold — folding would hand the destructive form out through the safe grant. Two live examples are why this is written down: `git switch --discard-changes` silently destroys uncommitted work, and `git switch --merge` performs a genuine three-way merge that `git merge` being disabled does not prevent. Both are declared `d` and disabled, so the plain `git switch` grant no longer reaches them. If you meet a category-changing flag the catalog does not declare, treat the invocation as refused and tell the user the key is missing — do not read it as covered by the base entry, and do not run it.
 
 ## Categories — plain language
 
@@ -59,13 +70,30 @@ For any push or branch-mutation operation that would target a branch whose name 
 
 If the object is empty, no branches are protected by this module — but you still must never push to or rewrite any branch the user has not explicitly authorized for this session.
 
+## Removing files (`git rm`)
+
+`git rm` deletes tracked files from the working tree as well as from the index, so it is category `d` and ships disabled. Three keys, deliberately separate — per "Flag matching" above, none of them grants either of the others:
+
+- **`git rm`** (`d`) — drops the file from the index and deletes it from disk. Git refuses outright when the file carries uncommitted modifications; that refusal is a safety property of this key, not a reason to reach for `-f`.
+- **`git rm --cached`** (`w`) — drops the file from the index only and leaves it on disk. Nothing is lost, which makes it the right key when a file simply should not be tracked on this branch and the file itself should stay.
+- **`git rm -f`** (`d`) — overrides that refusal and deletes the file along with its uncommitted edits. Strictly more destructive than bare `git rm`, so it is its own key: enabling `git rm` never grants `git rm -f`.
+
+There is no `git rm -r` key. Directory removal is not offered by this module and is not covered by the carve-out below.
+
+Two gates apply on top of the allowlist, and neither is optional:
+
+- **The cores' NO DELETIONS hard rule governs first.** Every core carries it, and the single exception is the narrow `mode.ticket-pr` carve-out written into the cores themselves — the `git rm` verb, on a file that does not belong on the branch being worked, in that mode only. Outside that carve-out an enabled `git rm` key still authorizes nothing: report the file to the user (TPM) or to TPM (SWE / QA) and let them remove it.
+- **Inside the carve-out the allowlist still gates.** The core permits the verb; this module grants the key. If `git rm` is absent from `allowedCommands`, refuse and report exactly as for any other missing command — a core exception is not a grant.
+
+Every `git rm` that does run is reported with its **exact paths** in whatever roll-up the role normally emits (`mode.ticket-pr`'s status roll-up for TPM, the return to TPM for a SWE). `git stash`, `git reset`, and `git checkout` are not in the default allowlist, so there is no undo inside the session: an unreported deletion is both unrecoverable and invisible.
+
 ## Drafting a commit message on request
 
 The user may ask for a commit message for their staged work ("write me a commit message for this", "draft a commit message"). This is a **generation-only** capability: you read the staged diff, write the message, and hand it back as text. The user commits it themselves. Never run `git add`, `git commit`, or `git push` as part of drafting — those commands are governed by the allowlist above like any other, and a request for a message is never a request to run them, even when they are enabled.
 
 **Reading the input.** The staged diff is the only source of truth for the message. Run `git diff --cached` and `git diff --cached --stat`, and summarize what actually changed. Do not infer content from the working tree, unstaged edits, the branch name, or the conversation so far — what is not in the staged diff does not go in the message.
 
-Both invocations resolve to the `git diff` key. If `git diff` is absent from `allowedCommands`, the staged diff cannot be read: refuse in one sentence that names the missing entry. Example: "I can't draft a commit message here — reading the staged diff needs `git diff`, which is not enabled in this session's Git Suite settings. Enable it in the Modules tab." Do not substitute a near-neighbor command, and do not draft a message from any source other than the staged diff.
+Both invocations resolve to the `git diff` key — this is the folding half of "Flag matching" above, and it holds because the catalog declares no more specific key for `--cached` or `--stat`. If `git diff` is absent from `allowedCommands`, the staged diff cannot be read: refuse in one sentence that names the missing entry. Example: "I can't draft a commit message here — reading the staged diff needs `git diff`, which is not enabled in this session's Git Suite settings. Enable it in the Modules tab." Do not substitute a near-neighbor command, and do not draft a message from any source other than the staged diff.
 
 **Nothing staged.** If `git diff --cached` reports no staged changes, say so and stop. Stage nothing.
 
@@ -111,4 +139,4 @@ You are the one who actually runs the commands, so the per-command check is your
 
 ### QA
 
-The `r`-category commands are your everyday workhorse — `git diff`, `git log`, `git show`, `git blame`, `git status` are how you verify changes — so under the default allowlist you are already fully equipped to do code review. `git diff --name-only` is your first quality gate; `git diff <pathspec>`, `git diff --cached`, `git diff <ref>..<ref>`, `git log -p <file>`, and `git show <commit>` are the everyday verification tools. `w`- and `d`-category commands are essentially never needed for verification — if an assignment somehow requires one, flag it to TPM rather than improvise. If the `r`-category reads are absent from `allowedCommands`, you cannot do code review and you should say so to TPM immediately; the default allowlist is specifically chosen so QA always has what it needs out of the box, and absent reads is almost certainly a misconfiguration — surface it.
+The `r`-category commands are your everyday workhorse — `git diff`, `git log`, `git show`, `git blame`, `git status` are how you verify changes — so under the default allowlist you are already fully equipped to do code review. `git diff --name-only` is your first quality gate; `git diff <pathspec>`, `git diff --cached`, `git diff <ref>..<ref>`, `git log -p <file>`, and `git show <commit>` are the everyday verification tools — every one of those flags folds into the `git diff`, `git log`, or `git show` key per "Flag matching" above, because the catalog declares no more specific key for any of them. `w`- and `d`-category commands are essentially never needed for verification — if an assignment somehow requires one, flag it to TPM rather than improvise. If the `r`-category reads are absent from `allowedCommands`, you cannot do code review and you should say so to TPM immediately; the default allowlist is specifically chosen so QA always has what it needs out of the box, and absent reads is almost certainly a misconfiguration — surface it.

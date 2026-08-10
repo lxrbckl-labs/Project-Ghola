@@ -23,7 +23,7 @@
       "logSourcePath": {
         "type": "string",
         "label": "Log Source Path",
-        "description": "Path to the PR-comment log QA reads from. Empty defers to the log path configured in integration.bitbucket-pr-comments (the canonical source). Set explicitly only when QA should learn from a log other than the one the comments module writes (e.g. a curated team-wide log, an exported training set).",
+        "description": "Path to the PR-comment log QA reads from. Empty defers to the log path configured in integration.bitbucket-pr-comments (the canonical source). Set explicitly only when QA should learn from a log other than the one the comments module writes (e.g. a curated team-wide log, an exported training set, or the tool.reviewer-dossier dossier when that module is loaded).",
         "default": ""
       },
       "patternExtractionMode": {

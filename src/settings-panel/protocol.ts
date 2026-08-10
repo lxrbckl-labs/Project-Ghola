@@ -575,8 +575,21 @@ export type HostToWebviewMessage =
       // No Remote Control field: Remote Control is MANDATORY and its session name
       // is DERIVED by the launcher at launch time from the working directory's git
       // branch, so there is nothing about it left for the panel to display or set.
-      swe: { performanceCores: number; efficiencyCores: number; performanceCoresModel: string; efficiencyCoresModel: string };
-      qa: { count: number; model: string };
+      // `*ModelVersion` / `*Effort` are empty-string-means-inherit: blank tells the
+      // launcher to fall back to the tier alias (`*Model`) and the CLI's own default
+      // reasoning effort. They are free-form on the wire — the version is operator
+      // free text so a model released after this build is still selectable.
+      swe: {
+        performanceCores: number;
+        efficiencyCores: number;
+        performanceCoresModel: string;
+        efficiencyCoresModel: string;
+        performanceCoresModelVersion: string;
+        efficiencyCoresModelVersion: string;
+        performanceCoresEffort: string;
+        efficiencyCoresEffort: string;
+      };
+      qa: { count: number; model: string; modelVersion: string; effort: string };
       aliases: CliAlias[];
       selectedAlias: string;
       aliasFile: string;

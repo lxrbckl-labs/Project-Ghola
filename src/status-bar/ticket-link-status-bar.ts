@@ -1,5 +1,5 @@
 // Two TEXT-LABEL status-bar buttons that sit immediately to the right of the
-// Ghola pill and open, in the operator's browser, the two things a ticket-work
+// Ghola pill and open, in the operator's browser, the two things a ticket-scoped
 // session is always about: the Jira ticket (shown as its key, e.g. CMMS-2791),
 // and the branch's Bitbucket pull request (shown as its number, e.g. #1539).
 //
@@ -55,10 +55,19 @@ import { findRepoRoot } from '../session/team-identity';
 import { MODE_STATUS_BAR_CONFIG_SECTION } from './mode-status-bar';
 
 /**
- * The one modality these buttons appear in. Tested as an EXACT enabled-module id
- * rather than by string-matching `formatMode`'s output, because that output is a
- * comma-joined list (`ticket-work, support`) and a substring test on it would also
- * fire for a hypothetical future `mode.ticket-work-lite`.
+ * The modalities these buttons appear in — the TICKET-SCOPED modes, the ones whose
+ * session is about a specific ticket and the branch's PR. Membership is tested as
+ * an EXACT enabled-module id rather than by string-matching `formatMode`'s output,
+ * because that output is a comma-joined list (`ticket-work, support`) and a
+ * substring test on it would also fire for a hypothetical future
+ * `mode.ticket-work-lite`. A SET rather than a single id, and still exact ids: a
+ * `mode.ticket-` PREFIX test would be the same substring trap one level up, so a
+ * new ticket-scoped mode is added HERE, deliberately, one line at a time.
+ *
+ * There are two members and they want the buttons for the same reason. Both take
+ * the ticket and the branch's PR as their subject — `mode.ticket-pr` more sharply
+ * than `mode.ticket-work`, since the PR is what that mode is FOR, so the PR button
+ * matters more there than anywhere else.
  *
  * War Mode is not a `mode.*` module the loader toggles — it layers on top of the
  * modality from its own setting — so a `ticket-work + war` session still has
@@ -66,11 +75,14 @@ import { MODE_STATUS_BAR_CONFIG_SECTION } from './mode-status-bar';
  * War Mode forbids git WRITES, not reading a ticket.
  *
  * `mode.sardaukar` deliberately does NOT qualify. The operator's instruction is
- * "ticket-work only"; the boot probe's own gate is looser (it excludes only
+ * "ticket-scoped only"; the boot probe's own gate is looser (it excludes only
  * `support`/`cd`/`self-upgrade`), and the narrower rule is the one that was asked
  * for.
  */
-const TICKET_WORK_MODULE_ID = 'mode.ticket-work';
+const TICKET_SCOPED_MODULE_IDS: ReadonlySet<string> = new Set([
+  'mode.ticket-work',
+  'mode.ticket-pr',
+]);
 
 /**
  * Project Steersman exposes VS Code's integrated browser via an HTTP API on
@@ -160,7 +172,7 @@ const PR_ITEM_PRIORITY = 98;
  * contribution point, so these work exactly as an entry-backed command would; the
  * only thing a contribution would add is Command Palette visibility, which is
  * actively unwanted for two commands whose meaning depends on the current branch
- * and whose target is meaningless outside a ticket-work session.
+ * and whose target is meaningless outside a ticket-scoped session.
  */
 const OPEN_TICKET_COMMAND = 'ghola.openTicketInJira';
 const OPEN_PR_COMMAND = 'ghola.openPullRequest';
@@ -477,7 +489,7 @@ function readOriginUrl(repoRoot: string): string {
 }
 
 /**
- * Two text-label status-bar buttons for a ticket-work session: the Jira ticket key
+ * Two text-label status-bar buttons for a ticket-scoped session: the Jira ticket key
  * (e.g. `CMMS-2791`) opening `<jiraBase>/browse/<KEY>`, and the PR number
  * (e.g. `#1539`) opening the branch's Bitbucket pull request.
  *
@@ -623,10 +635,10 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
     if (this.disposed) return;
 
     const enabled = vscode.workspace.getConfiguration().get<boolean>(STATUS_BAR_ENABLED_KEY, true);
-    const ticketWork = this.loader
+    const ticketScoped = this.loader
       .getEnabled()
-      .some((handle) => handle.manifest.id === TICKET_WORK_MODULE_ID);
-    if (!enabled || !ticketWork) {
+      .some((handle) => TICKET_SCOPED_MODULE_IDS.has(handle.manifest.id));
+    if (!enabled || !ticketScoped) {
       // Nothing to keep current, so the branch clock stops with the buttons — the
       // same rule `ModeStatusBarItem.refresh()` applies to its own timer, and for
       // the same reason: an interval ticking against an invisible item is a leak
@@ -744,7 +756,7 @@ export class TicketLinkStatusBarItems implements vscode.Disposable {
    * `refresh()` runs every 15 seconds and on every module/settings/config event; a
    * lookup runs only when the branch changed, or when the cached answer's own
    * per-kind lifetime expired. A `found` answer never expires — a PR's URL does not
-   * change, in any state — so the steady state of a healthy ticket-work session is
+   * change, in any state — so the steady state of a healthy ticket-scoped session is
    * exactly ONE Bitbucket call per branch.
    *
    * The in-flight guard is WALL-CLOCK BOUNDED rather than absolute: see

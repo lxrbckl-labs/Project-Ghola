@@ -25,6 +25,6 @@ These are templates. Adapt field and status names to the project's actual workfl
 5. Reference `parameters.boardUrl` in the answer if it is set, so the user can open the board.
 
 ## Guardrails
-- READ ONLY: never create, transition, comment on, or otherwise modify a ticket. Jira stays read only, per the base rules.
+- READ ONLY: **this module** never creates, transitions, comments on, or otherwise modifies a ticket — answering a sprint or board question is a query and nothing else. Any Jira write that exists this session belongs to `integration.atlassian-suite` and its own separately-gated, operator-approved flows; none of them is ever reached from here, and seeing a ticket sitting in a stale column is context to report, not authorization to move it.
 - If the board or sprint cannot be resolved (no `boardId`, no open sprint, or the MCP is unavailable), say so plainly and offer to run a plain project JQL instead.
 - Sprint and board discussion is session context. Do not persist it to ticket notes.

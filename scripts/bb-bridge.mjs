@@ -34,13 +34,20 @@
 // Usage:
 //   node scripts/bb-bridge.mjs find-pr       --repo <slug> --branch <name>
 //   node scripts/bb-bridge.mjs list-comments --repo <slug> --pr <id>
+//   node scripts/bb-bridge.mjs capture-comments --repo <slug> --pr <id>
+//       (reads the same comments as list-comments and APPENDS one JSONL record
+//        per comment to the host-resolved reviewer-dossier capture file; the
+//        path is never a flag and never guessed CLI-side)
 //   node scripts/bb-bridge.mjs resolve       --repo <slug> --pr <id> --comment <id>
 //   node scripts/bb-bridge.mjs delete-comment --repo <slug> --pr <n> --comment <id>
 //   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
 //   node scripts/bb-bridge.mjs to-draft      --repo <slug> --pr <id>
 //   node scripts/bb-bridge.mjs create-comment --repo <slug> --pr <id> --body "<text>"
 //   node scripts/bb-bridge.mjs create-pr     --repo <slug> --source <branch> --target <branch> \
-//       --title <title> [--draft]   (description piped via stdin)
+//       --title <title> [--draft] [--reviewers '["id1","id2"]']
+//       (description piped via stdin)
+//   node scripts/bb-bridge.mjs update-pr     --repo <slug> --pr <id> \
+//       [--reviewers '["id1","id2"]'] [--title "..."] [--description "..."]
 //   node scripts/bb-bridge.mjs reply         --repo <slug> --pr <id> --parent <id> \
 //       [--inline-path <p> --inline-to <n> [--inline-from <n>]]   (body piped via stdin)
 //   node scripts/bb-bridge.mjs get-ticket    --key <KEY>
@@ -50,7 +57,24 @@
 //        enableJiraCommentWrite gate, which the extension HOST enforces — with
 //        it off the capability is withheld and this verb exits 1 with a
 //        `capability-disabled` refusal, having sent nothing to Jira)
+//   node scripts/bb-bridge.mjs get-transitions --key <ISSUE-KEY>
+//       (READ-ONLY: the transitions Jira currently offers on the issue, each
+//        with its id, its own name, and the status it moves to. Ungated —
+//        it changes nothing. Read this to obtain a --transition-id; never
+//        guess one)
+//   node scripts/bb-bridge.mjs transition    --key <ISSUE-KEY> --transition-id <id>
+//       (Jira WRITE: moves the issue along its workflow. Requires the
+//        atlassian-suite enableJiraTransition gate, which the extension HOST
+//        enforces — with it off the capability is withheld and this verb exits 1
+//        with a `capability-disabled` refusal, having sent nothing to Jira and
+//        leaving the issue's status untouched. The id must come from
+//        get-transitions; this verb never matches on a status name)
 //   node scripts/bb-bridge.mjs workspace-members [--workspace <slug>] [--query <search>] [--json]
+//   node scripts/bb-bridge.mjs whoami
+//       (READ-ONLY: the Bitbucket identity of the API TOKEN the extension host
+//        calls with — accountId / nickname / displayName / uuid. Takes no flags.
+//        Prints no credential: an account id is the same public identifier that
+//        already appears on every comment list-comments returns)
 //   node scripts/bb-bridge.mjs health
 //       (liveness only — authenticated, but calls neither Jira nor Bitbucket)
 //
@@ -137,6 +161,38 @@ function optionalNumberFlag(flags, name, usage) {
   return num;
 }
 
+// Parse an optional --reviewers flag whose value is a JSON array of account ID
+// strings, e.g. '["id1","id2"]'. Maps each string to `{ account_id: id }` for
+// the Bitbucket API. Returns undefined when absent, empty, or the JSON is a
+// zero-length array — never included in the payload in those cases so the call
+// stays backwards compatible. A parse failure or a non-array JSON value is a
+// usage error (exit 2) — it means the caller got the quoting wrong and should
+// know immediately rather than silently dropping reviewers.
+function parseReviewersFlag(flags, usage) {
+  const raw = flags['reviewers'];
+  if (raw === undefined) return undefined;
+  if (raw === true) {
+    usageFail(`--reviewers requires a JSON array value. Usage: ${usage}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    usageFail(`--reviewers must be valid JSON (got '${raw}'). Usage: ${usage}`);
+  }
+  if (!Array.isArray(parsed)) {
+    usageFail(`--reviewers must be a JSON array (got ${typeof parsed}). Usage: ${usage}`);
+  }
+  const reviewers = [];
+  for (const entry of parsed) {
+    if (typeof entry !== 'string' || entry.trim() === '') {
+      usageFail(`--reviewers array entries must be non-empty strings (got ${JSON.stringify(entry)}). Usage: ${usage}`);
+    }
+    reviewers.push({ account_id: entry });
+  }
+  return reviewers.length > 0 ? reviewers : undefined;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // stdin (reply's comment body — never a flag, to dodge shell-escaping pain
 // on long/multi-line text; the agent pipes it via heredoc)
@@ -167,21 +223,47 @@ function readStdin() {
 // until someone consciously adds it here, so forgetting to classify a new verb
 // fails safe.
 //
-// DO NOT ADD A MUTATION TO THIS SET. /post-comment, /reply, /create-comment,
-// /create-pr, /delete-comment, /resolve, /mark-ready and /to-draft all WRITE to
+// DO NOT ADD A MUTATION TO THIS SET. /post-comment, /transition, /reply,
+// /create-comment, /create-pr, /update-pr, /delete-comment, /resolve, /mark-ready
+// and /to-draft all WRITE to
 // the operator's live Jira / Bitbucket. A transport timeout on a write is
 // AMBIGUOUS — the server may have applied it before the connection dropped — so
 // retrying one risks a duplicate comment or a duplicate PR on a ticket other
 // people are reading. Every route below is a pure read whose worst case on
 // replay is a wasted API call.
+//
+// /transition IS THE NEWEST ONE AND THE EASIEST TO MISCLASSIFY, because its
+// sibling /get-transitions IS in this set and the two read as a pair. They are
+// not a pair: listing the transitions changes nothing, and EXECUTING one changes
+// the issue's workflow status — which notifies watchers, trips automation rules,
+// and can move the issue somewhere a second POST cannot undo. A replayed
+// transition is not a harmless duplicate; it can move the ticket AGAIN.
+//
+// /capture-comments IS ABSENT ON PURPOSE and is the one route where that needs
+// saying out loud, because it LOOKS like a read: it calls the same Bitbucket
+// comments walk /list-comments does and changes nothing in Bitbucket. It is a
+// mutation anyway — it APPENDS records to the reviewer-dossier capture file on
+// disk — and a blind replay of an append is exactly the duplicate-record problem
+// this allowlist exists to prevent. (The host-side append de-duplicates on
+// project+PR+comment+updatedAt, so a DELIBERATE operator re-run is safe; that is
+// a deliberate act with a human looking at the result, not an automatic replay,
+// and it is not a reason to move this route into the allowlist.)
 const RETRYABLE_ROUTES = new Set([
   '/health',
   '/get-ticket',
   '/get-comments',
+  '/get-transitions',
   '/find-pr',
   '/list-comments',
   '/terminal/list',
   '/workspace-members',
+  // /whoami is a single Bitbucket GET (/2.0/user) that changes nothing. A
+  // replay costs one wasted API call and cannot duplicate anything, which is
+  // the bar this allowlist sets. The host caches a SUCCESSFUL answer for its
+  // process lifetime, so in practice a replay usually never reaches Bitbucket
+  // at all — but that caching is a host-side optimization and is emphatically
+  // NOT the reason this route is here: it is here because it is a pure read.
+  '/whoami',
 ]);
 
 // Per-attempt request timeouts, in THREE READ TIERS plus the mutation bound.
@@ -290,6 +372,21 @@ const SLOW_READ_TIMEOUT_MS = 120000;
 // fail the same way at the same scale and should be reasoned about as one class.
 const SLOW_READ_ROUTES = new Set(['/list-comments', '/get-comments']);
 
+// THE MUTATION THAT PAGINATES. /capture-comments is not in RETRYABLE_ROUTES (it
+// writes the dossier capture file), so without a case of its own it would be
+// judged at MUTATION_TIMEOUT_MS — 30s — while its host-side work is the ENTIRE
+// /list-comments walk that needed 120s, plus one `pullrequests/{id}` GET for the
+// PR author, plus the local append. That is the same "a bound below the host's
+// worst case aborts work the host is doing correctly" defect the three read tiers
+// above were built to end, and it would arrive pre-broken on a brand-new route.
+//
+// Derived, not guessed: the walk's own bound (SLOW_READ_TIMEOUT_MS) plus one
+// further full-retry-budget request for the author GET. 120000 + 41000 = 161s.
+//
+// NOT overridable from GHOLA_BRIDGE_TIMEOUT_MS — it is a write, and the env knob
+// is reads-only for the reasons documented at TIMEOUT_ENV_VAR.
+const CAPTURE_TIMEOUT_MS = SLOW_READ_TIMEOUT_MS + HOST_REQUEST_CEILING_MS;
+
 // TIER 3 — RETRY-BUDGET READS: ONE logical host-side call, with NO pagination,
 // but a call that carries the FULL transient-retry budget — so its ceiling is
 // tens of seconds, not the ~300ms a nominal round trip costs.
@@ -343,7 +440,34 @@ const RETRY_BUDGET_READ_TIMEOUT_MS = 2 * HOST_REQUEST_CEILING_MS + TRANSPORT_SLA
 // ALSO paginates it belongs in SLOW_READ_ROUTES instead, whose bound already
 // includes one final page running its full retry budget. Only a route that
 // touches neither Atlassian product belongs in the fast tier.
-const RETRY_BUDGET_READ_ROUTES = new Set(['/find-pr', '/get-ticket', '/workspace-members']);
+//
+// `/get-transitions` is classified by that rule, not by how it looks: it is one
+// Jira GET, wrapped in `withTransientRetry` (the host calls it through
+// `request`, exactly as `/get-ticket` does) and it does NOT paginate — Jira
+// returns every available transition in one response. Same arithmetic as
+// `/get-ticket`, single Jira token, no rotation. It is emphatically NOT a fast-
+// tier route: "it's just a list of buttons, it'll be instant" is the same
+// reasoning that put `/find-pr` and `/get-ticket` on the 3s bound and got a
+// healthy, deliberately-backing-off host reported as a dead bridge.
+//
+// `/whoami` is classified by that same rule and it is worth spelling out,
+// because it is the route most likely to look like a fast-tier one: it is a
+// single `GET /2.0/user`, it returns four short strings, and the host caches the
+// answer — so the overwhelmingly common case is microseconds. None of that is
+// the question. The FIRST call of a session is a real Bitbucket request wrapped
+// in `withTransientRetry` and `withBitbucketFailover`, with no pagination, which
+// is exactly the definition of this tier: 41s per request, times the configured
+// token count. Judging it at 3s would abort a host that is correctly honoring a
+// 429 — the same mistake, on a brand-new route, that this tier was created to
+// end. The cache makes the SECOND call fast; a timeout tier has to survive the
+// first.
+const RETRY_BUDGET_READ_ROUTES = new Set([
+  '/find-pr',
+  '/get-ticket',
+  '/get-transitions',
+  '/workspace-members',
+  '/whoami',
+]);
 
 // Escape hatch for a pathologically large PR or a slow link. Clamped to a sane
 // range so a typo like `5` (ms) cannot make every call fail instantly. Not a
@@ -372,6 +496,11 @@ function timeoutForRoute(routePath) {
   // human-intervention (up to 900s), far exceeding the standard mutation
   // deadline. Handle it before the retryable check.
   if (routePath === '/terminal/exec') return TERMINAL_EXEC_TIMEOUT_MS;
+
+  // /capture-comments is likewise handled before the retryable check: it is a
+  // write, so the check below would pin it at MUTATION_TIMEOUT_MS, which is far
+  // under the paginated walk it performs. See CAPTURE_TIMEOUT_MS.
+  if (routePath === '/capture-comments') return CAPTURE_TIMEOUT_MS;
 
   const isRead = RETRYABLE_ROUTES.has(routePath);
   if (!isRead) {
@@ -590,6 +719,32 @@ function describeTransport(url, routePath, err, timeoutMs) {
   // This is the client-side mirror of the host-side `'indeterminate'` status,
   // and it exists because the client can give up BEFORE the host ever produces
   // that status. Both must say the same thing: check first, then decide.
+  // /capture-comments is a write, so it must NOT get the generic
+  // `bridge-unreachable` treatment — but it must not get the generic MUTATION
+  // message either, and this is the one place that distinction is worth its own
+  // branch. That message says the write "was forwarded to Atlassian" and tells
+  // the reader to go look at the pull request. Both halves are false here:
+  // nothing was written to Bitbucket, the write is a local append to the capture
+  // file, and the PR will look identical either way. Worse, its central advice —
+  // "DO NOT re-run this command" — is wrong for this one route, because the
+  // host-side append de-duplicates. Handled before the generic mutation branch
+  // below so it cannot fall through into that advice.
+  if (routePath === '/capture-comments' && isTimeoutTransport(err)) {
+    const secs = Math.round(timeoutMs / 1000);
+    return `${MARKER_TIMEOUT}: ${routePath} did not finish within ${secs}s (${code}).\n`
+      + 'This is NOT a dead bridge, and NOTHING was written to Bitbucket — this verb only READS\n'
+      + 'the PR comments (walking the Bitbucket comments API page by page, exactly as\n'
+      + 'list-comments does) and appends them to a LOCAL capture file. A PR with a large number\n'
+      + 'of comments can legitimately outrun the deadline, and the host very likely finished the\n'
+      + 'capture after this client stopped waiting.\n'
+      + 'Fix: RE-RUNNING THIS COMMAND IS SAFE. The append de-duplicates on\n'
+      + 'project + PR + comment + updatedAt, so a comment already captured is skipped rather\n'
+      + 'than written twice. (This is the one write verb that says so — every other one is\n'
+      + 'ambiguous on a timeout and must not be replayed.)\n'
+      + 'Confirm the bridge is healthy first with `bb-bridge health`; if that succeeds, the\n'
+      + 'bridge is fine and relaunching the session will NOT help.';
+  }
+
   if (!RETRYABLE_ROUTES.has(routePath) && isTimeoutTransport(err)) {
     const secs = Math.round(timeoutMs / 1000);
     return `${MARKER_TIMEOUT}: ${routePath} did not answer within ${secs}s (${code}).\n`
@@ -639,21 +794,53 @@ function describeTransport(url, routePath, err, timeoutMs) {
     // Name the right product and the right shape of work, for the same reason the
     // slow-read branch does: a message that confidently describes the wrong
     // upstream sends the reader to check the wrong place.
-    const src = routePath === '/get-ticket'
+    //
+    // `/get-transitions` is grouped with `/get-ticket` and NOT allowed to fall
+    // into the Bitbucket branch by default: it is a Jira read, and the default
+    // branch would confidently tell the reader to go and check Bitbucket's rate
+    // limiting for a call that never touched Bitbucket. Its `absence` line is the
+    // one that matters most here — a silent `/get-transitions` has NOT
+    // established that the issue offers no transitions, and reading it that way
+    // would let a caller conclude a move is impossible when it simply was never
+    // answered.
+    const src = (routePath === '/get-ticket' || routePath === '/get-transitions')
       ? {
         api: 'Jira',
-        work: 'a single issue read',
+        work: routePath === '/get-transitions'
+          ? 'a single available-transitions read'
+          : 'a single issue read',
         // Jira authenticates with ONE token and never rotates, so the ceiling
         // here is exactly one request's retry budget — no token multiplier.
         scale: 'Jira uses a single token and never rotates, so one request\'s retry\nbudget is the whole ceiling',
-        absence: 'that the ticket does not exist',
+        absence: routePath === '/get-transitions'
+          ? 'that the issue has no available transitions'
+          : 'that the ticket does not exist',
       }
-      : {
-        api: 'Bitbucket',
-        work: 'up to two pull-request queries',
-        scale: 'a multi-token Bitbucket setup multiplies the worst case by the\nnumber of configured tokens, so it can legitimately need considerably more',
-        absence: 'that there is no PR for this branch',
-      };
+      // `/whoami` needs its own entry for the reason the Jira routes do, in the
+      // opposite direction: it IS a Bitbucket route, so the product name below
+      // is already right, but the default branch's `work` and `absence` text is
+      // written for `/find-pr` and would describe this call as "up to two
+      // pull-request queries" and then warn the reader not to conclude "there is
+      // no PR for this branch" — for a call that never mentioned a PR. Naming
+      // the right product is only half of not misleading someone.
+      : routePath === '/whoami'
+        ? {
+          api: 'Bitbucket',
+          work: 'a single current-user read',
+          scale: 'a multi-token Bitbucket setup multiplies the worst case by the\nnumber of configured tokens, so it can legitimately need considerably more',
+          // The absence to refuse is an IDENTITY one. A silent /whoami has not
+          // established that the token is anonymous or that ownership cannot be
+          // determined — and a caller that read it that way would conclude no
+          // comment is ours, which is the safe direction here but is still a
+          // conclusion drawn from nothing.
+          absence: 'that the token has no Bitbucket identity',
+        }
+        : {
+          api: 'Bitbucket',
+          work: 'up to two pull-request queries',
+          scale: 'a multi-token Bitbucket setup multiplies the worst case by the\nnumber of configured tokens, so it can legitimately need considerably more',
+          absence: 'that there is no PR for this branch',
+        };
     return `${MARKER_TIMEOUT}: ${routePath} did not answer within ${secs}s (${code}).\n`
       + 'This is NOT a dead or wedged bridge and NOT a reason to relaunch the session — the\n'
       + `connection was accepted. ${routePath} is ${src.work} against ${src.api}, and the host\n`
@@ -830,10 +1017,13 @@ async function callBridge(routePath, body) {
     const message = (parsed && typeof parsed.message === 'string')
       ? parsed.message
       : (text ? text.slice(0, 200) : res.statusText || 'bridge error');
-    // A host-side CAPABILITY GATE refusal, not a failure. Only `/post-comment`
-    // can produce this today (the extension withholds the Jira comment-write
-    // function unless integration.atlassian-suite's enableJiraCommentWrite
-    // setting is on), and it must not be reported through the generic
+    // A host-side CAPABILITY GATE refusal, not a failure. Two routes can produce
+    // it — `/post-comment` and `/transition` — because the extension withholds
+    // each Jira write function unless its OWN integration.atlassian-suite setting
+    // (enableJiraCommentWrite / enableJiraTransition) is on. This branch is
+    // deliberately route-agnostic: it prints the server's message, which names the
+    // specific setting, rather than hardcoding which capability was refused. It
+    // must not be reported through the generic
     // `bridge-error` line below: that line reads like a dead bridge or a bad
     // token and sends the reader off checking transport, when the real answer is
     // "the operator has not enabled this and no request was ever made". The
@@ -960,14 +1150,84 @@ async function cmdFindPr(flags) {
   // matching against the configured Bitbucket username) and `prAuthorDisplay`
   // (their display name), so a boot-time step can tell author mode from review
   // mode; both flow through untouched via the bridge's `...lookup` spread.
+  //
+  // A found PR may also carry `draft` (true = still a draft, false = ready for
+  // review). It is ABSENT when Bitbucket's list response omitted it, and absent
+  // means UNKNOWN — never read a missing `draft` as "ready", or a draft PR gets
+  // reported as review-ready on nothing but a missing field.
   await postToBridge('/find-pr', { repoSlug, branch });
 }
 
+// Each comment in the printed JSON may carry an OPTIONAL `outdated` boolean —
+// Bitbucket's `inline.outdated` marker, meaning the code the comment was
+// anchored to has since changed.
+//
+// ABSENT MEANS UNKNOWN, NOT `false`. The key is omitted entirely for a general
+// (non-inline) comment, which has no anchor and can never be outdated, and also
+// whenever Bitbucket's list response simply did not include it. Only
+// `outdated: true` is a positive fact; reading a missing key as "this comment is
+// still current" turns "we did not ask" into "we checked", and that inversion is
+// how a live review comment would get deleted.
 async function cmdListComments(flags) {
   const usage = 'bb-bridge list-comments --repo <slug> --pr <id>';
   const repoSlug = requireFlag(flags, 'repo', usage);
   const prId = requireNumberFlag(flags, 'pr', usage);
   await postToBridge('/list-comments', { repoSlug, prId });
+}
+
+// Print the Bitbucket identity of the API TOKEN the extension host calls with.
+// Pure read — retryable. Takes NO flags: there is nothing to point it at, since
+// the only account it can report is the one behind the host's own credential.
+//
+// This is the answer to "did WE write this comment?", and it is the only place
+// that answer can come from. `list-comments` gives each comment an
+// `author.accountId`; this gives ours. Compare those two — they are the same key
+// space, so it is an equality test, not a heuristic. Do NOT compare against the
+// configured Bitbucket USERNAME instead: that setting is a nickname, it lives in
+// a different key space from `accountId`, and it describes the OPERATOR rather
+// than the token (a service-account token makes those two different people).
+//
+// KNOWING A COMMENT IS OURS IS NOT PERMISSION TO DELETE IT. This verb reports an
+// identity and authorizes nothing; `delete-comment` keeps its own gate, and this
+// route does not touch it.
+//
+// PRINTS NO CREDENTIAL. `accountId` / `nickname` / `displayName` / `uuid` are
+// the same public identifiers that already appear on every comment
+// `list-comments` returns. The token itself never crosses the bridge in either
+// direction.
+//
+// The host caches a SUCCESSFUL answer for its process lifetime, so repeat calls
+// cost nothing; a failed call is not cached, so re-running after fixing a token
+// really does retry.
+async function cmdWhoami() {
+  await postToBridge('/whoami', {});
+}
+
+// CAPTURE a PR's comments into the reviewer-dossier capture file. Same two
+// arguments as `list-comments` because it reads exactly the same thing — the
+// difference is entirely in what the HOST does with the result.
+//
+// Notice what is NOT a flag: the capture file's path. It is resolved host-side
+// and injected into the agent's Session Manifest at compose time, so there is
+// nothing here for a caller to point at a different file — and nothing for an
+// agent to guess, which is what went wrong with the prose-only comment log this
+// replaces (a RELATIVE default path that resolved against whatever cwd the agent
+// happened to have, i.e. into the work repo).
+//
+// The result carries `filePath`, `project`, `captured`, `skipped`, `total` and
+// `truncated`. `skipped` is not a failure: it counts comments already on file
+// from an earlier capture, so a re-run of a PR that has not changed correctly
+// reports `captured: 0`.
+//
+// This is a WRITE (to disk) and so is NOT in RETRYABLE_ROUTES — see the note
+// there. It still exits 0 / 1 through postToBridge like every other verb, and a
+// partial capture arrives as status 'ok' with truncated: true plus the standard
+// PARTIAL RESULT warning on stderr.
+async function cmdCaptureComments(flags) {
+  const usage = 'bb-bridge capture-comments --repo <slug> --pr <id>';
+  const repoSlug = requireFlag(flags, 'repo', usage);
+  const prId = requireNumberFlag(flags, 'pr', usage);
+  await postToBridge('/capture-comments', { repoSlug, prId });
 }
 
 async function cmdResolve(flags) {
@@ -1043,7 +1303,7 @@ async function cmdCreateComment(flags) {
 
 async function cmdCreatePr(flags) {
   const usage = 'bb-bridge create-pr --repo <slug> --source <branch> --target <branch> '
-    + '--title <title> [--draft]  (description piped via stdin)';
+    + '--title <title> [--draft] [--reviewers \'["id1","id2"]\']  (description piped via stdin)';
   const repoSlug = requireFlag(flags, 'repo', usage);
   const sourceBranch = requireFlag(flags, 'source', usage);
   const targetBranch = requireFlag(flags, 'target', usage);
@@ -1052,17 +1312,51 @@ async function cmdCreatePr(flags) {
   // literal `true` when no value follows), absent -> false.
   const draft = flags['draft'] === true;
 
+  // --reviewers is an optional JSON array of account ID strings. Each is mapped
+  // to `{ account_id: id }` for the Bitbucket API. Absent or empty -> omitted
+  // from the payload (backwards compatible).
+  const reviewers = parseReviewersFlag(flags, usage);
+
   // The description is multi-line, so it is piped via stdin (mirrors cmdReply)
   // rather than passed as a flag to dodge shell-escaping pain.
   const description = await readStdin();
-  await postToBridge('/create-pr', {
+  const payload = {
     repoSlug,
     title,
     sourceBranch,
     targetBranch,
     description,
     draft,
-  });
+  };
+  if (reviewers) payload.reviewers = reviewers;
+  await postToBridge('/create-pr', payload);
+}
+
+// Update an existing PR. Accepts any combination of --title, --description, and
+// --reviewers; at least one must be supplied. Note the contrast with create-pr,
+// which reads its description from stdin: here --description is a plain string
+// flag and there is no stdin path. This is a PUT (mutation), so it is NOT added
+// to RETRYABLE_ROUTES and `indeterminate` is handled the same way as other writes.
+async function cmdUpdatePr(flags) {
+  const usage = 'bb-bridge update-pr --repo <slug> --pr <id> '
+    + '[--reviewers \'["id1","id2"]\'] [--title "..."] [--description "..."]';
+  const repoSlug = requireFlag(flags, 'repo', usage);
+  const prId = requireNumberFlag(flags, 'pr', usage);
+
+  const reviewers = parseReviewersFlag(flags, usage);
+  const title = typeof flags['title'] === 'string' ? flags['title'] : undefined;
+  const description = typeof flags['description'] === 'string' ? flags['description'] : undefined;
+
+  if (reviewers === undefined && title === undefined && description === undefined) {
+    usageFail('At least one of --reviewers, --title, or --description must be provided. '
+      + `Usage: ${usage}`);
+  }
+
+  const payload = { repoSlug, prId };
+  if (reviewers) payload.reviewers = reviewers;
+  if (title !== undefined) payload.title = title;
+  if (description !== undefined) payload.description = description;
+  await postToBridge('/update-pr', payload);
 }
 
 async function cmdGetTicket(flags) {
@@ -1145,6 +1439,97 @@ async function cmdPostComment(flags) {
     `bb-bridge: /post-comment failed: ${reason}\n`
     + 'bb-bridge: DO NOT blindly retry — if this was a timeout the comment may '
     + 'already exist. Check the issue first.',
+  );
+  process.exit(1);
+}
+
+// Read the transitions Jira currently offers on an issue. READ-ONLY and
+// UNGATED: it tells you what a move WOULD be, it does not make one, and the
+// `enableJiraTransition` gate has no bearing on it. The printed JSON carries
+// `transitions: [{ id, name, toStatus, hasScreen?, requiredFields? }]`.
+//
+// THIS IS WHERE A --transition-id COMES FROM. The `transition` verb executes an
+// id and never derives one — no status-name matching, no closest match, no
+// "first available" default — so an id that was not read from here was guessed,
+// and a guessed transition moves someone's ticket to the wrong place.
+//
+// Read `name` and `toStatus` as DIFFERENT things: the transition's own label
+// ("Start Review") and the status it lands in ("In Review") are frequently
+// different words, and matching a target status against a transition name is how
+// the wrong button gets pressed. `requiredFields`, when present, means the
+// transition's screen demands values this bridge cannot supply — that one needs
+// a human in Jira, and knowing so BEFORE asking an operator to approve the move
+// is the reason the host requests the field metadata at all.
+//
+// An issue with zero available transitions prints `{ exists: true,
+// transitions: [] }` and exits 0; treat that as "this issue cannot be moved from
+// here (by this account)", never as "ticket not found".
+async function cmdGetTransitions(flags) {
+  const usage = 'bb-bridge get-transitions --key <ISSUE-KEY>';
+  const key = requireFlag(flags, 'key', usage);
+  if (key.trim() === '') {
+    usageFail(`--key must not be empty. Usage: ${usage}`);
+  }
+  await postToBridgeList('/get-transitions', { key }, 'transitions');
+}
+
+// Move a Jira issue along its workflow. This is a Jira WRITE — the second and
+// last ticketing-system mutation in this wrapper.
+//
+// Authorization is NOT this script's job and must not be inferred from the
+// verb's mere existence. Agents are forbidden from mutating ticketing systems by
+// their core hard rules; the transition flow in `integration.atlassian-suite` is
+// what contributes the capability, and only when the operator has turned on its
+// `enableJiraTransition` setting (which defaults to off). With that gate off,
+// this verb is not to be invoked — and it also CANNOT work: the extension
+// withholds the transition function from the bridge, so the route answers 403
+// `capability-disabled` and this verb exits 1 without Jira ever being contacted
+// and without the issue's status changing (see the `capability-disabled` branch
+// in callBridge).
+//
+// --transition-id IS MANDATORY AND MUST COME FROM get-transitions. Nothing in
+// this script, the bridge, or the host client picks a transition: there is no
+// name matching, no closest-match fallback, and no defaulting to the first
+// available option anywhere in the path. Choosing is the caller's job precisely
+// so the choice is visible.
+//
+// Success is judged on `transitioned`, not `status` — the bridge returns
+// `{ transitioned, transitionId?, error? }` here, so neither postToBridge (wants
+// `status`) nor postToBridgeExists (wants `exists`) fits.
+//
+// AND `transitioned: true` MEANS JIRA ACCEPTED THE REQUEST, not that the issue's
+// status is now what was asked for. Jira answers a successful transition with
+// 204 and no body, and a workflow post-function or automation rule can move the
+// issue on again immediately. Nothing here re-reads the issue, so nothing here
+// claims what its status became.
+//
+// NEVER auto-retry a failure from this verb. A timeout is ambiguous: Jira may
+// have applied the transition before the connection dropped, and a blind retry
+// can move the ticket a second time. Surface the error, let a human look at the
+// issue, and only then decide.
+async function cmdTransition(flags) {
+  const usage = 'bb-bridge transition --key <ISSUE-KEY> --transition-id <id>';
+  const key = requireFlag(flags, 'key', usage);
+  if (key.trim() === '') {
+    usageFail(`--key must not be empty. Usage: ${usage}`);
+  }
+  const transitionId = requireFlag(flags, 'transition-id', usage);
+  if (String(transitionId).trim() === '') {
+    usageFail(`--transition-id must not be empty. Usage: ${usage}`);
+  }
+
+  const parsed = await callBridge('/transition', { key, transitionId: String(transitionId) });
+  printJson(parsed);
+  if (parsed && parsed.transitioned === true) {
+    process.exit(0);
+  }
+  const reason = (parsed && typeof parsed.error === 'string' && parsed.error)
+    ? parsed.error
+    : 'the transition was not applied (transitioned !== true)';
+  console.error(
+    `bb-bridge: /transition failed: ${reason}\n`
+    + 'bb-bridge: DO NOT blindly retry — if this was a timeout the issue may '
+    + 'already have moved. Check the issue\'s status first.',
   );
   process.exit(1);
 }
@@ -1267,6 +1652,20 @@ back to the legacy GHOLA_BRIDGE_URL / GHOLA_BRIDGE_TOKEN env pair.
 Usage:
   node scripts/bb-bridge.mjs find-pr       --repo <slug> --branch <name>
   node scripts/bb-bridge.mjs list-comments --repo <slug> --pr <id>
+  node scripts/bb-bridge.mjs capture-comments --repo <slug> --pr <id>
+                                            (reads the same comments as
+                                             list-comments and APPENDS one JSONL
+                                             record per comment — every comment,
+                                             agreed or disagreed, bot or human —
+                                             to the reviewer-dossier capture
+                                             file. The path is resolved by the
+                                             extension host and injected into the
+                                             Session Manifest; it is never a flag
+                                             and must never be guessed. Writes to
+                                             DISK only — nothing is sent to
+                                             Bitbucket. Re-running is safe: the
+                                             append de-duplicates on
+                                             project+PR+comment+updatedAt.)
   node scripts/bb-bridge.mjs resolve       --repo <slug> --pr <id> --comment <id>
   node scripts/bb-bridge.mjs delete-comment --repo <slug> --pr <n> --comment <id>
   node scripts/bb-bridge.mjs mark-ready    --repo <slug> --pr <id>
@@ -1274,7 +1673,17 @@ Usage:
   node scripts/bb-bridge.mjs create-comment --repo <slug> --pr <id> --body "<text>"
                                             (standalone top-level comment; no --parent)
   node scripts/bb-bridge.mjs create-pr     --repo <slug> --source <branch> --target <branch> \\
-      --title <title> [--draft]         (description is read from stdin)
+      --title <title> [--draft] [--reviewers '["id1","id2"]']
+                                            (description is read from stdin;
+                                             --reviewers is a JSON array of
+                                             Bitbucket account ID strings)
+  node scripts/bb-bridge.mjs update-pr     --repo <slug> --pr <id> \\
+      [--reviewers '["id1","id2"]'] [--title "..."] [--description "..."]
+                                            (update an existing PR; at least one
+                                             of --reviewers, --title, or
+                                             --description must be provided;
+                                             this is a PUT/mutation — never
+                                             auto-retried)
   node scripts/bb-bridge.mjs reply         --repo <slug> --pr <id> --parent <id> \\
       [--inline-path <p> --inline-to <n> [--inline-from <n>]]
                                             (reply body is read from stdin)
@@ -1288,10 +1697,46 @@ Usage:
                                              Write" setting to be on, plus
                                              operator approval of the exact
                                              text; never auto-retry)
+  node scripts/bb-bridge.mjs get-transitions --key <ISSUE-KEY>
+                                            (read-only and ungated; prints
+                                             transitions: [{ id, name, toStatus,
+                                             hasScreen?, requiredFields? }].
+                                             THE ONLY SOURCE OF A VALID
+                                             --transition-id. name and toStatus
+                                             are different things — match on the
+                                             one you mean. requiredFields means
+                                             the move needs a human in Jira.
+                                             Zero transitions still exits 0)
+  node scripts/bb-bridge.mjs transition    --key <ISSUE-KEY> --transition-id <id>
+                                            (Jira WRITE — requires the Atlassian
+                                             Suite module's "Enable Jira
+                                             Transition" setting to be on. The id
+                                             MUST come from get-transitions;
+                                             nothing in this path matches on a
+                                             status name or picks a default.
+                                             transitioned: true means Jira
+                                             ACCEPTED the request (204), not that
+                                             the status is now what you asked
+                                             for; never auto-retry)
   node scripts/bb-bridge.mjs workspace-members [--workspace <slug>] [--query <search>] [--json]
                                             (list workspace members; defaults to
                                              configured bitbucketWorkspace;
                                              --json prints raw bridge response)
+  node scripts/bb-bridge.mjs whoami
+                                            (read-only; no flags. Prints the
+                                             Bitbucket identity of the API TOKEN
+                                             the host calls with:
+                                             { accountId, nickname, displayName,
+                                             uuid }. accountId is the SAME key
+                                             space as each comment's
+                                             author.accountId from list-comments,
+                                             so comparing the two is how you tell
+                                             whether a comment is ours — the
+                                             configured Bitbucket username is a
+                                             nickname and will not join. Knowing
+                                             a comment is ours authorizes
+                                             nothing; delete keeps its own gate.
+                                             No credential is printed)
   node scripts/bb-bridge.mjs health
                                             (liveness only: authenticated, but
                                              calls neither Jira nor Bitbucket —
@@ -1313,33 +1758,46 @@ Usage:
 
 Exit codes: 0 ok, 1 bridge-level failure, 2 usage error (env/args).
 
-Read verbs (health, get-ticket, get-comments, find-pr, list-comments) get one
-automatic retry on a transient transport error. Write verbs NEVER retry: a
-timeout on a write is ambiguous and a replay could double-post.
+Read verbs (health, get-ticket, get-comments, get-transitions, find-pr,
+list-comments, workspace-members, whoami) get one automatic retry on a transient
+transport error. Write
+verbs NEVER retry: a timeout on a write is ambiguous and a replay could
+double-post — or, for transition, move the ticket a second time.
 
 Timeouts come in three read tiers, each set above the HOST's worst case for that
 route (a bound below it would abort work the host is still doing correctly):
   3s    health — answers without calling Atlassian at all, so anything slower
         means a wedged bridge.
-  87s   find-pr, get-ticket — one logical upstream call, but the host retries a
-        429/5xx up to 4 times honoring Retry-After (41s per request; find-pr may
-        run two queries, and a multi-token Bitbucket setup multiplies that by the
-        token count).
+  87s   find-pr, get-ticket, get-transitions, workspace-members, whoami — one
+        logical upstream call, but the
+        host retries a 429/5xx up to 4 times honoring Retry-After (41s per
+        request; find-pr may run two queries, and a multi-token Bitbucket setup
+        multiplies that by the token count).
   120s  list-comments (Bitbucket), get-comments (Jira) — each walks its API page
         by page, so a long thread legitimately needs longer.
-Writes are pinned at 30s and cannot be widened. Override the read budgets with
+capture-comments is a WRITE (to a local file) but performs the list-comments walk
+plus one PR read, so it gets its own 161s bound rather than the 30s write bound.
+Other writes are pinned at 30s and cannot be widened. Override the read budgets with
 GHOLA_BRIDGE_TIMEOUT_MS (1000-600000 ms); prefer prefixing it to one command over
 exporting it. These are CEILINGS, not waits — a healthy call still returns in
 well under a second.
 
-A deadline on any of those four non-health reads is reported as 'bridge-timeout',
+A deadline on any of those non-health reads is reported as 'bridge-timeout',
 NOT 'bridge-unreachable' — the bridge is alive and the fix is more time (or
 waiting out a rate limit), never a session relaunch. Treat a 'bridge-timeout' on
-find-pr / get-ticket as UNKNOWN, never as an absence: nothing answered, so
-"no PR" / "no ticket" was not established. A large PR may also come back as a
+find-pr / get-ticket / get-transitions as UNKNOWN, never as an absence: nothing
+answered, so "no PR" / "no ticket" / "no available transitions" was not
+established. A large PR may also come back as a
 successful PARTIAL result: status 'ok' with truncated: true and a message saying
 how many of how many comments were fetched. Treat that as real data, not as a
 failure.
+
+list-comments (and each capture-comments record) may carry an OPTIONAL
+'outdated' boolean per comment — Bitbucket's inline.outdated marker, meaning the
+code the comment was anchored to has since changed. The key is ABSENT when it
+was not established: a general comment has no anchor and can never be outdated,
+and the list response may simply omit it. Absent means UNKNOWN, never false —
+only outdated: true is a positive fact.
 `;
 
 async function main() {
@@ -1353,17 +1811,22 @@ async function main() {
   const routes = {
     'find-pr': cmdFindPr,
     'list-comments': cmdListComments,
+    'capture-comments': cmdCaptureComments,
     resolve: cmdResolve,
     'delete-comment': cmdDeleteComment,
     'mark-ready': cmdMarkReady,
     'to-draft': cmdToDraft,
     'create-comment': cmdCreateComment,
     'create-pr': cmdCreatePr,
+    'update-pr': cmdUpdatePr,
     reply: cmdReply,
     'get-ticket': cmdGetTicket,
     'get-comments': cmdGetComments,
     'post-comment': cmdPostComment,
+    'get-transitions': cmdGetTransitions,
+    transition: cmdTransition,
     'workspace-members': cmdWorkspaceMembers,
+    whoami: cmdWhoami,
     health: cmdHealth,
     'terminal-create': cmdTerminalCreate,
     'terminal-exec': cmdTerminalExec,

@@ -1,8 +1,8 @@
 {
   "id": "integration.atlassian-suite",
   "name": "Atlassian Suite",
-  "version": "0.7.0",
-  "description": "Manages Atlassian credentials and identity handles (email, Jira base URL, Bitbucket workspace, Bitbucket username, Jira account id, a single Jira token plus an ordered list of Bitbucket API tokens with round-robin failover, all in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, and per-token validation. Answers natural language sprint and board questions by forming JQL and querying Jira read only via the Atlassian MCP, and creates Bitbucket pull requests behind a confirmation gate. Also contributes the one Jira write Ghola permits — POSTing a comment to an existing issue, off by default behind the Enable Jira Comment Write setting, and once enabled still TPM-only, never autonomous, and gated on the operator approving the exact comment text. Post only: no editing, deleting, transitioning, or issue creation.",
+  "version": "0.8.0",
+  "description": "Manages Atlassian credentials and identity handles (email, Jira base URL, Bitbucket workspace, Bitbucket username, Jira account id, a single Jira token plus an ordered list of Bitbucket API tokens with round-robin failover, all in SecretStorage) and exposes live Jira/Bitbucket REST probes that power ticket-existence checks, open-PR lookups, and per-token validation. Answers natural language sprint and board questions by forming JQL and querying Jira read only via the Atlassian MCP, and creates Bitbucket pull requests behind a confirmation gate. Also contributes the only two Jira writes Ghola permits, each behind its own independent gate that is off by default: POSTing a comment to an existing issue (Enable Jira Comment Write) and executing a workflow transition on an existing issue (Enable Jira Transition). Neither gate implies the other; once enabled each stays TPM-only, never autonomous, and gated on the operator approving the exact comment text or the exact resolved transition. Nothing else: no issue creation, no deletion, no assignment, no field edits, and no editing or deleting comments.",
   "proactive": false,
   "category": "integration",
   "kind": "capability",
@@ -85,7 +85,7 @@
         "type": "boolean",
         "label": "Enable Jira Comment Write",
         "default": false,
-        "description": "The outer gate on this suite's one Jira write. While this is off — and off is the default — every request to post a Jira comment is refused outright, however it is phrased and whatever Require Operator Approval is set to. Turning it on grants exactly one capability: posting a new comment to an existing issue. Every other Jira mutation stays refused — creating, cloning, or transitioning an issue, assigning it, changing any field, and editing or deleting any comment including one the agent posted itself. This gate decides whether comment posting exists at all; Require Operator Approval below decides whether each individual post is previewed and confirmed first."
+        "description": "The outer gate on this suite's comment write. While this is off — and off is the default — every request to post a Jira comment is refused outright, however it is phrased and whatever Require Operator Approval is set to. Turning it on grants exactly one capability: posting a new comment to an existing issue. Every other Jira mutation stays refused by this gate — creating or cloning an issue, assigning it, changing any field, and editing or deleting any comment including one the agent posted itself. Transitioning an issue is not covered by this gate at all: it is a separate capability behind the separate Enable Jira Transition setting below, and stays refused unless that one is on. This gate decides whether comment posting exists at all; Require Operator Approval below decides whether each individual post is previewed and confirmed first."
       },
       "attributionSuffix": {
         "type": "string",
@@ -106,6 +106,12 @@
         "multiline": true,
         "default": "Write a concise, professional Jira comment stating the update plainly. No hedging, no double-dashes, no severity ratings.",
         "description": "The instruction TPM applies when drafting a Jira comment body from raw session material (a SWE report, a QA verdict, a status update). Governs tone and shape only — it never changes the approval gate, and the operator always sees and approves the final text the prompt produced."
+      },
+      "enableJiraTransition": {
+        "type": "boolean",
+        "label": "Enable Jira Transition",
+        "default": false,
+        "description": "The outer gate on this suite's second Jira write, and the only one that can move a ticket. While this is off — and off is the default — every request to transition a Jira issue is refused outright, however it is phrased. Turning it on grants exactly one capability: executing a workflow transition on an existing issue, by transition id, chosen from the list Jira reports as legal from that issue's current status. Every other Jira mutation stays refused — creating, cloning, or deleting an issue, assigning it, changing any field, and posting, editing, or deleting any comment (comment posting has its own separate Enable Jira Comment Write gate above; neither gate implies the other). Enforced host-side and re-read on every request: with this off, the transition route answers 403 and nothing reaches Jira. Turning it on does not remove the requirement that the agent resolve the target by destination status name and show the operator the resolved transition and its id before executing."
       }
     }
   }

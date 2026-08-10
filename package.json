@@ -2,7 +2,7 @@
   "name": "ghola",
   "displayName": "Ghola",
   "description": "Modular multi-agent dev team for VS Code.",
-  "version": "0.44.4",
+  "version": "0.45.0",
   "icon": "resources/icon-source.png",
   "publisher": "local",
   "engines": {
@@ -156,6 +156,32 @@
           "default": "opus",
           "description": "Claude model used by default when SWE-class subagents are deployed onto performance cores. Performance cores handle the critical-path task; defaulting to Opus matches the highest-difficulty work this tier typically takes on. TPM may still deviate per task — this is the default, not a hard lock."
         },
+        "ghola.swe.performanceCoresModelVersion": {
+          "type": "string",
+          "default": "",
+          "description": "Exact model VERSION pinned for SWE performance-core subagents, e.g. claude-opus-5, claude-opus-4-8, claude-sonnet-5, claude-haiku-4-5 or claude-fable-5. Deliberately free text rather than a dropdown: a hardcoded catalog goes stale the day a new model ships and would stop you from pinning one released yesterday. Leave EMPTY (the default) to inherit — Ghola then declares no version for this pool and the tier alias in ghola.swe.performanceCoresModel keeps deciding, exactly as before this setting existed. When set, the version is carried on the launch-time agent definition Ghola hands the CLI; a per-task model chosen by TPM still overrides it, because a per-invocation model argument outranks an agent definition. A value the CLI does not recognize is not rejected at launch — the session starts normally and the failure surfaces only when a subagent of that pool is deployed, so check the spelling here rather than expecting a startup error."
+        },
+        "ghola.swe.performanceCoresEffort": {
+          "type": "string",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "enumDescriptions": [
+            "Inherit — Ghola declares no effort for this pool and the CLI's own default applies. Packaged default; nothing is added to the launch command.",
+            "Least reasoning before answering. Fastest and cheapest, and the weakest on multi-step work.",
+            "Moderate reasoning. A middle setting for routine, well-specified changes.",
+            "Extended reasoning. Suits genuinely difficult single-file work.",
+            "Recommended for coding and agentic work — the setting to pick for this pool unless you have a reason not to.",
+            "Maximum reasoning. Slowest and most expensive; reserve it for work xhigh has already failed at."
+          ],
+          "default": "",
+          "description": "Reasoning effort declared for SWE performance-core subagents. Leave EMPTY (the default) to inherit, which is exactly today's behavior: no effort is declared and the CLI decides. Set a level and Ghola carries it on the launch-time agent definition for this pool, so every performance-core subagent boots at that effort without TPM having to ask. Note that xhigh is the recommended setting for coding and agentic work. Effort is independent of the model: pinning one does not require pinning the other."
+        },
         "ghola.swe.efficiencyCoresModel": {
           "type": "string",
           "enum": [
@@ -166,9 +192,35 @@
           "default": "sonnet",
           "description": "Claude model used by default when SWE-class subagents are deployed onto efficiency cores. Efficiency cores handle lower-priority side work; defaulting to Sonnet keeps cost and latency low for routine tasks. TPM may still deviate per task."
         },
+        "ghola.swe.efficiencyCoresModelVersion": {
+          "type": "string",
+          "default": "",
+          "description": "Exact model VERSION pinned for SWE efficiency-core subagents, e.g. claude-sonnet-5, claude-sonnet-4-6, claude-haiku-4-5, claude-fable-5 or claude-opus-4-8. Deliberately free text rather than a dropdown: a hardcoded catalog goes stale the day a new model ships and would stop you from pinning one released yesterday. Leave EMPTY (the default) to inherit — Ghola then declares no version for this pool and the tier alias in ghola.swe.efficiencyCoresModel keeps deciding, exactly as before this setting existed. When set, the version is carried on the launch-time agent definition Ghola hands the CLI; a per-task model chosen by TPM still overrides it, because a per-invocation model argument outranks an agent definition. A value the CLI does not recognize is not rejected at launch — the session starts normally and the failure surfaces only when a subagent of that pool is deployed, so check the spelling here rather than expecting a startup error."
+        },
+        "ghola.swe.efficiencyCoresEffort": {
+          "type": "string",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "enumDescriptions": [
+            "Inherit — Ghola declares no effort for this pool and the CLI's own default applies. Packaged default; nothing is added to the launch command.",
+            "Least reasoning before answering. Fastest and cheapest, and the weakest on multi-step work.",
+            "Moderate reasoning. A middle setting for routine, well-specified changes.",
+            "Extended reasoning. Suits genuinely difficult single-file work.",
+            "Recommended for coding and agentic work — pick it here when efficiency-core tasks stop being routine.",
+            "Maximum reasoning. Slowest and most expensive; reserve it for work xhigh has already failed at."
+          ],
+          "default": "",
+          "description": "Reasoning effort declared for SWE efficiency-core subagents. Leave EMPTY (the default) to inherit, which is exactly today's behavior: no effort is declared and the CLI decides. Set a level and Ghola carries it on the launch-time agent definition for this pool, so every efficiency-core subagent boots at that effort without TPM having to ask. Note that xhigh is the recommended setting for coding and agentic work, so raising this is the lever to pull when side work turns out to be harder than it looked — at the cost of the latency and spend this tier exists to keep down. Effort is independent of the model: pinning one does not require pinning the other."
+        },
         "ghola.qa.count": {
           "type": "number",
-          "default": 1,
+          "default": 3,
           "minimum": 1,
           "maximum": 5,
           "description": "Maximum concurrent QA subagents."
@@ -182,6 +234,32 @@
           ],
           "default": "sonnet",
           "description": "Claude model used by default when QA subagents are deployed. QA verifies code changes through targeted reviews; defaulting to Sonnet matches medium-difficulty correctness work. TPM may still deviate per task — this is the default, not a hard lock."
+        },
+        "ghola.qa.modelVersion": {
+          "type": "string",
+          "default": "",
+          "description": "Exact model VERSION pinned for QA subagents, e.g. claude-sonnet-5, claude-sonnet-4-6, claude-opus-5, claude-haiku-4-5 or claude-fable-5. Deliberately free text rather than a dropdown: a hardcoded catalog goes stale the day a new model ships and would stop you from pinning one released yesterday. Leave EMPTY (the default) to inherit — Ghola then declares no version for this pool and the tier alias in ghola.qa.model keeps deciding, exactly as before this setting existed. When set, the version is carried on the launch-time agent definition Ghola hands the CLI; a per-task model chosen by TPM still overrides it, because a per-invocation model argument outranks an agent definition. A value the CLI does not recognize is not rejected at launch — the session starts normally and the failure surfaces only when a QA subagent is deployed, so check the spelling here rather than expecting a startup error."
+        },
+        "ghola.qa.effort": {
+          "type": "string",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "enumDescriptions": [
+            "Inherit — Ghola declares no effort for this pool and the CLI's own default applies. Packaged default; nothing is added to the launch command.",
+            "Least reasoning before answering. Fastest and cheapest, and the weakest at spotting a subtle defect.",
+            "Moderate reasoning. A middle setting for verifying small, well-scoped diffs.",
+            "Extended reasoning. Suits reviews where the defect is expected to be non-obvious.",
+            "Recommended for coding and agentic work — the setting to pick when a missed defect costs more than the review does.",
+            "Maximum reasoning. Slowest and most expensive; reserve it for work xhigh has already failed at."
+          ],
+          "default": "",
+          "description": "Reasoning effort declared for QA subagents. Leave EMPTY (the default) to inherit, which is exactly today's behavior: no effort is declared and the CLI decides. Set a level and Ghola carries it on the launch-time agent definition for the QA pool, so every QA subagent boots at that effort without TPM having to ask. Note that xhigh is the recommended setting for coding and agentic work. Effort is independent of the model: pinning one does not require pinning the other."
         },
         "ghola.newModulePrompt": {
           "type": "string",

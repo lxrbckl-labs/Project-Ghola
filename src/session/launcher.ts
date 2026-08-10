@@ -74,6 +74,63 @@ const REMOTE_CONTROL_BLOCKING_ENV_VARS = [
 ];
 
 /**
+ * Agent-type names Ghola declares through Claude Code's `--agents` flag, one per
+ * agent pool. They are ALSO exported into the session environment (as
+ * `GHOLA_SWE_PERF_AGENT_TYPE`, `GHOLA_SWE_EFF_AGENT_TYPE`, `GHOLA_QA_AGENT_TYPE`)
+ * whenever the flag is emitted, which is how TPM learns both that the definitions
+ * exist for this session and what to pass as the Agent tool's `subagent_type`.
+ * The env vars are absent when the flag is not emitted, so "no variable" means
+ * "no definition" rather than "look it up somewhere else".
+ */
+const SWE_PERF_AGENT_TYPE = 'ghola-swe-perf';
+const SWE_EFF_AGENT_TYPE = 'ghola-swe-eff';
+const QA_AGENT_TYPE = 'ghola-qa';
+
+/**
+ * The `prompt` an agent definition carries. `prompt` is REQUIRED by the CLI —
+ * verified against the installed Claude Code (2.1.226) by passing `--agents` with
+ * and without it and asking the session to enumerate its agent types: the
+ * definition WITHOUT a `prompt` is dropped SILENTLY (no error, no non-zero exit),
+ * the one with it registers. So it cannot be omitted, and a silent drop is exactly
+ * the failure a missing field would produce.
+ *
+ * It is therefore deliberately INERT. A subagent receives BOTH its definition's
+ * system prompt AND the Agent tool's `prompt` argument, and Ghola's whole
+ * contract is that TPM injects the composed role prompt through the latter — two
+ * competing system prompts would be a real defect, so this text states what the
+ * definition is for and issues no instruction of its own.
+ */
+const AGENT_DEFINITION_PROMPT =
+  'This definition exists only to carry a model version and a reasoning effort for a Ghola agent pool. It contributes no instructions of its own: the composed Ghola role prompt and the task assignment both arrive in the prompt passed to the Agent tool.';
+
+/** Effort levels Claude Code's `--effort` accepts; mirrors the enum in package.json. */
+const AGENT_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/**
+ * Character set a configured model VERSION must fall inside before it is allowed
+ * onto the command line. The setting is free text by design (a closed enum would
+ * go stale on every model release), and free text reaching a shell needs a floor:
+ * every real model id is `[A-Za-z0-9._-]+`, while a stray quote or backslash would
+ * break out of the JSON payload's quoting on one shell or the other. A value that
+ * fails this is dropped with a log line rather than emitted.
+ */
+const MODEL_VERSION_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * One entry of the `--agents` JSON object. The CLI keys the object by agent NAME
+ * (`{"reviewer": {...}}`) rather than taking a list with a `name` field — read off
+ * `claude --help`'s own example for `--agents <json>` and confirmed by
+ * registration probes. `model` and `effort` are OMITTED entirely when the operator
+ * has not set them: an empty string is not the same as inherit.
+ */
+interface AgentPoolDefinition {
+  description: string;
+  prompt: string;
+  model?: string;
+  effort?: string;
+}
+
+/**
  * Optional per-launch overrides. EVERY launch now behaves as the default
  * Sessions-tab play button does: it creates the `Ghola Session` terminal, writes
  * the GHOLA_{TPM,SWE,QA}_PROMPT_FILE scaffolding, and sends the trigger word as
@@ -394,6 +451,43 @@ export class SessionLauncher {
     const qaCount = cfg.get<number>('qa.count', 1);
     const qaModel = cfg.get<string>('qa.model', 'sonnet');
 
+    // Per-pool model VERSION and reasoning EFFORT, the layer the three tier
+    // aliases above cannot express: the Agent tool's `model` argument is a closed
+    // alias enum with no effort field, so a version and an effort can only reach a
+    // subagent through an agent DEFINITION. Ghola declares those definitions at
+    // launch with `--agents <json>` — session-scoped, writing nothing to disk, so
+    // it cannot leak into the operator's other concurrent sessions the way a file
+    // under `.claude/agents/` would.
+    //
+    // ZERO-CHANGE DEFAULT. `buildAgentPoolDefinitions` returns `undefined` when all
+    // six settings are empty, and every consumer below is gated on that: no flag,
+    // no env vars, no log line. An install that has configured none of this gets a
+    // byte-identical command line to the one it got before these settings existed.
+    //
+    // The `claudeCli` gate is the same one `permFlag` and `remoteFlag` pass — this
+    // is a third CLAUDE-SPECIFIC flag and the note on the permission block requires
+    // every one of them to reuse that identity rather than re-deriving a guess.
+    // The outcome split follows Remote Control's, for Remote Control's reasons:
+    // POSITIVELY-not-Claude (a registered alias resolved to some other binary) is
+    // real evidence, so skip; merely UNKNOWABLE is not, so append best-effort with
+    // a log line, because a rejected flag is loud and a dropped one is invisible.
+    const agentDefinitions = this.buildAgentPoolDefinitions(cfg);
+    let agentTypes: Record<string, AgentPoolDefinition> | undefined;
+    if (agentDefinitions !== undefined && cliCommand !== '') {
+      if (!claudeCli.known && claudeCli.resolvedNonClaudeBinary !== undefined) {
+        this.logger?.appendLine(
+          `[session] agent definitions SKIPPED: --agents was not appended because ${claudeCli.reason}. The per-pool model-version and effort settings cannot take effect for a command that is not Claude Code; point the alias at the "claude" binary to use them.`,
+        );
+      } else {
+        agentTypes = agentDefinitions;
+        if (!claudeCli.known) {
+          this.logger?.appendLine(
+            `[session] agent definitions appended on a BEST-EFFORT basis because ${claudeCli.reason}. --agents went on the command line anyway because you set a per-pool model version or effort explicitly, and a silently dropped flag looks exactly like Ghola working. If the command rejects it, clear those settings or register the command in Ghola's CLI Aliases so Ghola can resolve its binary.`,
+          );
+        }
+      }
+    }
+
     // Base env for every launch. The GHOLA_{TPM,SWE,QA}_PROMPT_FILE scaffolding
     // is added further down, UNCONDITIONALLY: every launch is a full TPM session
     // that may spawn subagents.
@@ -428,6 +522,18 @@ export class SessionLauncher {
       QA_AGENT_COUNT: String(qaCount),
       QA_MODEL: qaModel,
     };
+    // Agent-type names, exported ONLY when `--agents` is actually emitted. TPM has
+    // to be able to tell whether the definitions exist for this session, and the
+    // presence of the variable is that signal — an unconfigured install exports
+    // nothing here and TPM keeps spawning subagents exactly as it does today.
+    // SWE_PERFORMANCE_MODEL / SWE_EFFICIENCY_MODEL / QA_MODEL above are untouched
+    // and still drive TPM's per-task model choice (the boot probe parses them by
+    // name for the banner); these three name the pools, they do not replace those.
+    if (agentTypes !== undefined) {
+      env.GHOLA_SWE_PERF_AGENT_TYPE = SWE_PERF_AGENT_TYPE;
+      env.GHOLA_SWE_EFF_AGENT_TYPE = SWE_EFF_AGENT_TYPE;
+      env.GHOLA_QA_AGENT_TYPE = QA_AGENT_TYPE;
+    }
     // Per-session statusline state key. The statusline renderers write their usage
     // snapshot to `~/.ghola/statusline/state/<GHOLA_STATE_KEY>.json`, and the
     // status bar in THIS window reads that same file — so the segment can only ever
@@ -620,6 +726,24 @@ export class SessionLauncher {
       remoteControlName === ''
         ? ''
         : ` --remote-control ${isPwshShell ? this.pwshQuote(remoteControlName) : this.shellQuote(remoteControlName)}`;
+    // `--agents` carries its OWN leading space too, so the three Claude-specific
+    // flags compose by plain concatenation after `${cliCommand}` (empty string = no
+    // flag). It sits AFTER `--remote-control` and BEFORE the positional prompt:
+    // `--agents <json>` takes a REQUIRED value, so it cannot swallow the trigger
+    // word the way `--remote-control [name]`'s optional value could.
+    //
+    // Empty whenever `agentTypes` is undefined — no settings configured, no CLI
+    // command, or a command positively resolved to a non-Claude binary. That is the
+    // zero-change default: the emitted line is character-for-character what it was.
+    const agentsFlag =
+      agentTypes === undefined ? '' : ` --agents ${this.encodeAgentsPayload(agentTypes, isPwshShell)}`;
+    if (agentTypes !== undefined) {
+      this.logger?.appendLine(
+        `[session] agent definitions: --agents declaring ${Object.entries(agentTypes)
+          .map(([name, def]) => `${name}(model=${def.model ?? 'inherit'}, effort=${def.effort ?? 'inherit'})`)
+          .join(', ')}`,
+      );
+    }
     // Session transcript: inject the transcript capture command BEFORE the CLI
     // command so the entire session is logged. PowerShell gets
     // `Start-Transcript` as a separate command; bash wraps the CLI command
@@ -641,25 +765,25 @@ export class SessionLauncher {
         // Wrap the entire CLI invocation inside `script` so the transcript
         // captures everything. The `-q` flag suppresses the "Script started"
         // banner, `-a` appends, and `-c` runs the command non-interactively.
-        const innerCmd = `${cliCommand}${permFlag}${remoteFlag} ${quoted}`;
+        const innerCmd = `${cliCommand}${permFlag}${remoteFlag}${agentsFlag} ${quoted}`;
         terminal.sendText(
           `script -q -a ${this.shellQuote(sessionLogPath)} -c ${this.shellQuote(innerCmd)}`,
           true,
         );
         this.logger?.appendLine(`[session] transcript: script -q -a -> ${sessionLogPath}`);
       } else {
-        terminal.sendText(`${cliCommand}${permFlag}${remoteFlag} ${quoted}`, true);
+        terminal.sendText(`${cliCommand}${permFlag}${remoteFlag}${agentsFlag} ${quoted}`, true);
       }
     } else if (cliCommand) {
       if (sessionLogPath && isBashShell) {
-        const innerCmd = `${cliCommand}${permFlag}${remoteFlag}`;
+        const innerCmd = `${cliCommand}${permFlag}${remoteFlag}${agentsFlag}`;
         terminal.sendText(
           `script -q -a ${this.shellQuote(sessionLogPath)} -c ${this.shellQuote(innerCmd)}`,
           true,
         );
         this.logger?.appendLine(`[session] transcript: script -q -a -> ${sessionLogPath}`);
       } else {
-        terminal.sendText(`${cliCommand}${permFlag}${remoteFlag}`, true);
+        terminal.sendText(`${cliCommand}${permFlag}${remoteFlag}${agentsFlag}`, true);
       }
       // RETAINED AS A FALLBACK, not because it is reachable today. Reaching the
       // two branches below needs `useArgPrompt` false with a non-empty
@@ -1054,6 +1178,166 @@ export class SessionLauncher {
    */
   private pwshQuote(s: string): string {
     return `'${s.replace(/'/g, "''")}'`;
+  }
+
+  /**
+   * Build the `--agents` definition map from the six per-pool settings, or
+   * `undefined` when the operator has set NONE of them.
+   *
+   * `undefined` is the zero-change contract, and it is why this returns an option
+   * rather than an always-populated map: every consumer is gated on it, so an
+   * install that has configured nothing emits no flag, exports no agent-type env
+   * vars, and logs nothing.
+   *
+   * When ANY one of the six is set, ALL THREE pools are declared — including a
+   * pool with neither field, which registers carrying only its description and
+   * inherits both model and effort. That is deliberate: the three
+   * `GHOLA_*_AGENT_TYPE` env vars are exported as a set, so every name TPM is told
+   * about has to resolve to a real agent type. Declaring only the configured pools
+   * would leave TPM holding a name the CLI never registered.
+   *
+   * `model` and `effort` are OMITTED, never emitted as `""`. An empty value is not
+   * the same as inherit and may be rejected outright.
+   */
+  private buildAgentPoolDefinitions(
+    cfg: vscode.WorkspaceConfiguration,
+  ): Record<string, AgentPoolDefinition> | undefined {
+    const pools = [
+      {
+        name: SWE_PERF_AGENT_TYPE,
+        description:
+          'Ghola SWE pool for performance-core work. Supplies this session\'s configured model version and reasoning effort for critical-path tasks.',
+        versionKey: 'swe.performanceCoresModelVersion',
+        effortKey: 'swe.performanceCoresEffort',
+      },
+      {
+        name: SWE_EFF_AGENT_TYPE,
+        description:
+          'Ghola SWE pool for efficiency-core work. Supplies this session\'s configured model version and reasoning effort for lower-priority side tasks.',
+        versionKey: 'swe.efficiencyCoresModelVersion',
+        effortKey: 'swe.efficiencyCoresEffort',
+      },
+      {
+        name: QA_AGENT_TYPE,
+        description:
+          'Ghola QA pool. Supplies this session\'s configured model version and reasoning effort for verification tasks.',
+        versionKey: 'qa.modelVersion',
+        effortKey: 'qa.effort',
+      },
+    ];
+
+    const definitions: Record<string, AgentPoolDefinition> = {};
+    let anyConfigured = false;
+    for (const pool of pools) {
+      const definition: AgentPoolDefinition = {
+        description: pool.description,
+        prompt: AGENT_DEFINITION_PROMPT,
+      };
+      const version = this.readAgentModelVersion(cfg, pool.versionKey);
+      if (version !== undefined) {
+        definition.model = version;
+        anyConfigured = true;
+      }
+      const effort = this.readAgentEffort(cfg, pool.effortKey);
+      if (effort !== undefined) {
+        definition.effort = effort;
+        anyConfigured = true;
+      }
+      definitions[pool.name] = definition;
+    }
+    return anyConfigured ? definitions : undefined;
+  }
+
+  /**
+   * Read one per-pool model VERSION setting, or `undefined` for "inherit".
+   *
+   * Empty (the packaged default, and whitespace-only, which the operator cannot
+   * distinguish from empty in the settings UI) means inherit. A non-empty value
+   * that falls outside `MODEL_VERSION_PATTERN` is DROPPED with a log line rather
+   * than emitted: the setting is free text on purpose, and free text heading for a
+   * JSON payload on a shell command line needs a floor. Dropping degrades to
+   * inherit, which is the same session the operator had before they typed it.
+   */
+  private readAgentModelVersion(
+    cfg: vscode.WorkspaceConfiguration,
+    key: string,
+  ): string | undefined {
+    const raw = cfg.get<string>(key, '').trim();
+    if (raw === '') return undefined;
+    if (!MODEL_VERSION_PATTERN.test(raw)) {
+      this.logger?.appendLine(
+        `[session] ghola.${key} is set to a value with characters a model id never contains, so it was ignored and that pool inherits its model instead. Model ids look like "claude-opus-5" — letters, digits, dot, underscore and hyphen only.`,
+      );
+      return undefined;
+    }
+    return raw;
+  }
+
+  /**
+   * Read one per-pool EFFORT setting, or `undefined` for "inherit". The enum in
+   * package.json already constrains the settings UI, so the membership test here
+   * is for a hand-edited settings.json — the one path that can hold anything.
+   */
+  private readAgentEffort(cfg: vscode.WorkspaceConfiguration, key: string): string | undefined {
+    const raw = cfg.get<string>(key, '').trim().toLowerCase();
+    if (raw === '') return undefined;
+    if (!AGENT_EFFORT_LEVELS.includes(raw)) {
+      this.logger?.appendLine(
+        `[session] ghola.${key} is set to "${raw}", which is not one of ${AGENT_EFFORT_LEVELS.join(', ')}, so it was ignored and that pool inherits its effort instead.`,
+      );
+      return undefined;
+    }
+    return raw;
+  }
+
+  /**
+   * Serialize the definition map into ONE shell token holding valid JSON.
+   *
+   * THE SPACE ESCAPING IS NOT COSMETIC — it is what makes the payload survive
+   * Windows PowerShell, and it was arrived at by measuring rather than reasoning.
+   * PowerShell 5.1 (which `pickShell()` selects whenever `pwsh.exe` is absent, as
+   * it is on the operator's native-Windows host) builds a native command's line in
+   * LEGACY mode: an argument's embedded double quotes are dropped outright, so
+   * plain `'{"a":1}'` reaches the CLI as `{a:1}` — malformed, and `--agents`
+   * IGNORES a payload it cannot parse SILENTLY, with a zero exit code. Escaping
+   * each quote as `\"` survives that hop (the target's own CRT parses `\"` back to
+   * a quote) but re-introduces a second problem: PowerShell then declines to wrap
+   * the argument, so any LITERAL SPACE splits it into several arguments and the
+   * fragments are parsed as separate options. Re-encoding every space as its JSON
+   * unicode escape (backslash-u-0-0-2-0) removes the split without changing what
+   * the CLI parses, because a backslash is only special to the CRT when it
+   * immediately precedes a quote — a lone one is a literal. Verified
+   * end to end on PowerShell 5.1, through the npm `claude.ps1` shim's second
+   * native hop as well as directly, by asking the launched session to enumerate its
+   * agent types and seeing the declared names come back.
+   *
+   * Bash needs none of that — `shellQuote`'s single-quoted token already carries
+   * quotes and spaces verbatim — but it is given the SAME payload string anyway.
+   * The escape is ordinary JSON either way, and one payload built by one encoder
+   * means the two shells cannot drift into producing different definitions.
+   *
+   * KNOWN LIMIT, WRITTEN DOWN BECAUSE THE FAILURE IS SILENT. The `\"` half of this
+   * is correct for LEGACY argument passing — Windows PowerShell 5.1 always, and
+   * pwsh 7.0-7.2, whose `$PSNativeCommandArgumentPassing` defaults to `Windows`.
+   * pwsh 7.3+ defaults to `Standard`, where PowerShell quotes the argument properly
+   * on its own and would escape the backslash too, so the CLI would receive a
+   * literal `\"` and — per the paragraph above — IGNORE the payload without saying
+   * so. The session still launches and every other flag is unaffected; what is lost
+   * is the definitions, and with them the per-pool version and effort. This was NOT
+   * reproducible here (pwsh.exe is not installed on the host this was built on, so
+   * `pickShell()` returns powershell.exe and only the legacy path was exercisable).
+   * A file path is not the escape hatch it looks like: `--agents` was probed with
+   * one and takes inline JSON only. If pwsh 7.3+ ever becomes the selected shell,
+   * the fix is to stop escaping and pass the raw-quoted JSON for that shell alone —
+   * NOT to change this branch, which powershell.exe still needs exactly as it is.
+   */
+  private encodeAgentsPayload(
+    definitions: Record<string, AgentPoolDefinition>,
+    isPwsh: boolean,
+  ): string {
+    const json = JSON.stringify(definitions).replace(/ /g, '\\u0020');
+    if (!isPwsh) return this.shellQuote(json);
+    return `'${json.replace(/'/g, "''").replace(/"/g, '\\"')}'`;
   }
 
   /**

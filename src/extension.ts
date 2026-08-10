@@ -9,10 +9,18 @@ import { adfToPlainText } from './integration/adf-to-text';
 import { BitbucketPrClient } from './integration/bitbucket-pr-client';
 import { discoverObsidianVault } from './integration/vault-discovery';
 import { startBitbucketBridge } from './integration/bitbucket-bridge-server';
-import type { GetCommentsResult, PostCommentFn, PostCommentResult } from './integration/bitbucket-bridge-server';
+import type {
+  GetCommentsResult,
+  GetTransitionsResult,
+  PostCommentFn,
+  PostCommentResult,
+  TransitionIssueFn,
+  TransitionResult,
+} from './integration/bitbucket-bridge-server';
 import { TerminalManager } from './terminal/terminal-manager';
 import type { TerminalManagerConfig } from './terminal/terminal-manager';
 import { isJiraCommentWriteEnabled } from './integration/jira-comment-write-gate';
+import { isJiraTransitionEnabled } from './integration/jira-transition-gate';
 import { ModuleLoader } from './modules/loader';
 import { ModuleState } from './modules/state';
 import { PromptComposer } from './prompts/composer';
@@ -39,6 +47,7 @@ import {
   writeModuleSettings,
   migrateModuleSettingsToGlobal,
   migrateGitBranchCommandsEnabled,
+  reconcileStoredKeyValueTables,
 } from './state/module-settings';
 import { ModeStatusBarItem, MODE_STATUS_BAR_CONFIG_SECTION } from './status-bar/mode-status-bar';
 import { SessionRecordStatusBarItem } from './status-bar/session-record-status-bar';
@@ -682,7 +691,17 @@ export function activate(context: vscode.ExtensionContext): void {
   // let the legacy fold's stale snapshot clobber the flip. The branch-command
   // migration never throws, and the `.catch` keeps a failed legacy fold from
   // both skipping it and surfacing an unhandled rejection.
-  void migrateModuleSettingsToGlobal(context.globalState, context.workspaceState)
+  //
+  // Held in a named promise rather than voided because a THIRD pass —
+  // `reconcileStoredKeyValueTables` — writes the same key and has to extend this
+  // same chain. It cannot join it here: it needs the discovered module handles,
+  // so it is awaited onto the tail of this promise inside the `loader.discover()`
+  // block below. Nothing else may await this; it is fire-and-forget for every
+  // other purpose, exactly as before.
+  const settingsMigrations: Promise<void> = migrateModuleSettingsToGlobal(
+    context.globalState,
+    context.workspaceState,
+  )
     .catch((err) => {
       logger.appendLine(`[ghola] module-settings global migration failed (non-fatal): ${err}`);
     })
@@ -716,6 +735,22 @@ export function activate(context: vscode.ExtensionContext): void {
   // is per-extension and persists across workspaces, which matches the user's
   // expectation that the feedback log follows them.
   const feedbackFilePath = path.join(context.globalStorageUri.fsPath, 'feedback.json');
+  // Path of the PR-comment CAPTURE file that `bb-bridge capture-comments` appends
+  // to — one JSON Lines record per PR comment, the raw material for a
+  // per-project reviewer dossier. Resolved here, exactly as `feedbackFilePath`
+  // is, and handed to BOTH consumers: `BitbucketPrClient` (which does the
+  // appending) and `SettingsPanel` (which injects it into the agent-facing
+  // Session Manifest at compose time), so host and agent can never disagree
+  // about which file this is.
+  //
+  // Resolving it host-side is the whole point. The prose-only comment log this
+  // supersedes declared a RELATIVE default (`pr-comment-log.json`) documented to
+  // live in globalStorage but injected nowhere and carried by no env var, so an
+  // agent had no way to resolve it and would have written into the work repo —
+  // where `.gitignore`'s `*.log` would not have matched a `.json` file.
+  // `globalStorageUri` is per-extension and outside every workspace, so the
+  // capture file follows the operator across repos and can never be committed.
+  const prCommentCapturePath = path.join(context.globalStorageUri.fsPath, 'pr-comment-capture.jsonl');
 
   // ─── Atlassian Suite wiring ─────────────────────────────────────────
   // Emitter fired whenever EITHER product's token state changes (set or
@@ -954,7 +989,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // lazily on every request via the bridge + setting accessor, so one
   // instance lives for the extension's lifetime and naturally honors
   // token / workspace changes without rebuilding.
-  const bitbucketPrClient = new BitbucketPrClient(atlassianBridge, readAtlassianSetting);
+  // The capture path is passed at construction (rather than read per request
+  // like the token / workspace) because unlike those it is fixed for the life of
+  // the extension host — it derives from `globalStorageUri`, which does not
+  // change, and there is no operator setting that can move it.
+  const bitbucketPrClient = new BitbucketPrClient(
+    atlassianBridge,
+    readAtlassianSetting,
+    prCommentCapturePath,
+  );
 
   // ───── Ticket-link status-bar buttons (ticket-work mode) ───────────
   // Two text-label buttons beside the Ghola pill: the ticket key (e.g.
@@ -1175,6 +1218,131 @@ export function activate(context: vscode.ExtensionContext): void {
       ? jiraPostComment
       : undefined;
 
+  // Host-side Jira TRANSITION-LIST fetcher passed into the loopback bridge. Same
+  // containment story as `jiraGetTicket`: settings and token are read here, the
+  // token never leaves the host, and only a sanitized shape goes back.
+  //
+  // This is a READ and is deliberately UNGATED — asking Jira which transitions
+  // exist changes nothing, and withholding it would only leave an operator with
+  // the write gate off unable to see what the write would even do.
+  //
+  // The three outcomes stay strictly apart, exactly as `jiraGetComments` keeps
+  // its own:
+  //   - issue exists, no transitions available -> { exists: true, transitions: [] } (SUCCESS)
+  //   - issue genuinely absent                 -> { exists: false, transitions: [] }
+  //   - real failure                           -> `error` set, with 'Jira not configured'
+  //     distinguishing "no credentials" from "no ticket".
+  const jiraGetTransitions = async (key: string): Promise<GetTransitionsResult> => {
+    try {
+      const email = readAtlassianSetting('email');
+      const jiraBase = readAtlassianSetting('jiraBase');
+      const jiraToken = await atlassianBridge.getJiraToken();
+      const client = new AtlassianClient({
+        email,
+        jiraToken,
+        jiraBase,
+        bitbucketWorkspace: '',
+      });
+      const result = await client.getIssueTransitions(key);
+      if (result.error) {
+        return { exists: result.exists, transitions: [], error: result.error };
+      }
+      if (!result.exists) {
+        return { exists: false, transitions: [] };
+      }
+      // Rebuilt field by field rather than passed through, for the same reason
+      // `jiraGetComments` does it: only the named fields reach the agent. The
+      // two optional ones are spread-conditional so an unremarkable transition
+      // keeps a minimal wire shape.
+      return {
+        exists: true,
+        transitions: result.transitions.map((t) => ({
+          id: t.id,
+          name: t.name,
+          toStatus: t.toStatus,
+          ...(t.hasScreen !== undefined ? { hasScreen: t.hasScreen } : {}),
+          ...(t.requiredFields !== undefined ? { requiredFields: t.requiredFields } : {}),
+        })),
+      };
+    } catch {
+      // Never surface an internal error (or the token) to the caller.
+      return { exists: false, transitions: [], error: 'transition lookup failed' };
+    }
+  };
+
+  // Host-side Jira TRANSITION executor passed into the loopback bridge. The
+  // extension's second and last Jira write. Same containment story as the
+  // readers above — settings and token are read here, the token never leaves the
+  // host, and only a sanitized result shape goes back to the agent.
+  //
+  // Authorization does NOT live here. Agent cores forbid ticketing-system
+  // mutations outright; the transition flow in `integration.atlassian-suite` is
+  // what lifts that for a session — and only when the operator has turned on its
+  // `enableJiraTransition` setting, which defaults to off. This closure is the
+  // plumbing that flow drives, not a licence to move tickets.
+  //
+  // It EXECUTES the id it is given. There is no name matching and no fallback
+  // pick anywhere in this stack: the caller reads `/get-transitions` and names
+  // one, so a wrong move is a visible wrong choice rather than a silent guess.
+  //
+  // Note the failure contract, identical to `jiraPostComment`'s: `transitioned:
+  // false` with an error can mean the transition definitely failed OR that it
+  // timed out ambiguously and may have been applied. Nothing here retries,
+  // precisely because of that second case. And `transitioned: true` means Jira
+  // ACCEPTED the request (204), never that the issue's status is now what was
+  // asked for — a post-function can move it again immediately.
+  const jiraTransitionIssue = async (key: string, transitionId: string): Promise<TransitionResult> => {
+    try {
+      const email = readAtlassianSetting('email');
+      const jiraBase = readAtlassianSetting('jiraBase');
+      const jiraToken = await atlassianBridge.getJiraToken();
+      const client = new AtlassianClient({
+        email,
+        jiraToken,
+        jiraBase,
+        bitbucketWorkspace: '',
+      });
+      const result = await client.transitionIssue(key, transitionId);
+      if (result.error) {
+        return {
+          transitioned: false,
+          ...(result.transitionId !== undefined ? { transitionId: result.transitionId } : {}),
+          error: result.error,
+        };
+      }
+      return {
+        transitioned: result.transitioned,
+        ...(result.transitionId !== undefined ? { transitionId: result.transitionId } : {}),
+      };
+    } catch {
+      // Never surface an internal error (or the token) to the caller. The
+      // transition may or may not have been applied — say so honestly rather
+      // than implying a clean failure.
+      return { transitioned: false, error: 'transition failed (state unconfirmed)' };
+    }
+  };
+
+  // HOST-SIDE ENFORCEMENT of `integration.atlassian-suite`'s
+  // `enableJiraTransition` gate. Identical mechanism to `resolveJiraPostComment`
+  // above, reading a SEPARATE setting through a SEPARATE gate module: the bridge
+  // asks this resolver for the executor on EVERY `/transition` request, and while
+  // the gate is shut it gets `undefined` and refuses the route with nothing to
+  // call. A transition is the archetypal forbidden ticketing mutation, so it
+  // ships with the enforcement already in code rather than earning it later.
+  //
+  // Per-request, not activation-time, so turning the setting OFF applies to the
+  // next call rather than at the next window reload. Module enablement is checked
+  // as well as the value, because the value lives in `globalState` while
+  // enablement is per-workspace. `isJiraTransitionEnabled` never throws and
+  // treats every non-`true` outcome as OFF; see `jira-transition-gate.ts`.
+  const resolveJiraTransition = (): TransitionIssueFn | undefined =>
+    isJiraTransitionEnabled({
+      isModuleEnabled: () => loader.find(ATLASSIAN_MODULE_ID)?.isEnabled,
+      readSettings: () => readModuleSettings(context.globalState, context.workspaceState),
+    })
+      ? jiraTransitionIssue
+      : undefined;
+
   // ───── Terminal Manager wiring (tool.terminal) ─────────────────────
   // Constructed when `tool.terminal` is enabled, passed to the bridge so its
   // terminal routes return results instead of 404. When the module is not
@@ -1234,10 +1402,12 @@ export function activate(context: vscode.ExtensionContext): void {
   }));
 
   // Loopback bridge: exposes `bitbucketPrClient` (Bitbucket PR ops),
-  // `jiraGetTicket` (Jira ticket reads), `jiraGetComments` (Jira comment reads)
-  // and `resolveJiraPostComment` (the single Jira write, WITHHELD per request
-  // unless `integration.atlassian-suite`'s `enableJiraCommentWrite` setting is
-  // on) to the CLI agent over a per-session
+  // `jiraGetTicket` (Jira ticket reads), `jiraGetComments` (Jira comment reads),
+  // `jiraGetTransitions` (available-transition reads) and the two Jira WRITES —
+  // `resolveJiraPostComment` and `resolveJiraTransition` — each WITHHELD per
+  // request unless its own `integration.atlassian-suite` setting
+  // (`enableJiraCommentWrite` / `enableJiraTransition`) is on, to the CLI agent
+  // over a per-session
   // bearer-authenticated HTTP server bound to 127.0.0.1. The Bitbucket and Jira
   // API tokens stay host-side; the agent only receives the loopback URL +
   // bearer token via the session env (wired into the launcher below). When the
@@ -1272,6 +1442,8 @@ export function activate(context: vscode.ExtensionContext): void {
       jiraGetTicket,
       jiraGetComments,
       resolveJiraPostComment,
+      jiraGetTransitions,
+      resolveJiraTransition,
       bridgeCoordinatesPath,
       logger,
       terminalManager,
@@ -1289,6 +1461,7 @@ export function activate(context: vscode.ExtensionContext): void {
     configurationsStore,
     resolveModulesDir,
     feedbackFilePath,
+    prCommentCapturePath,
     atlassianBridge,
     moduleSettingsEmitter,
     bitbucketPrClient,
@@ -1403,6 +1576,31 @@ export function activate(context: vscode.ExtensionContext): void {
     logger.appendLine(`[ghola] discovered ${handles.length} module(s)`);
     await seedBuiltInConfigurations(context, configurationsStore, logger);
     await panel.applyDefaultOnStartup();
+
+    // Third and last writer of `ghola.moduleSettings` during activation:
+    // reconcile every stored `keyValue` table against the catalog its manifest
+    // now declares, backfilling missing rows DISABLED and correcting stale
+    // closed-vocabulary value letters. A stored kv map shadows the manifest
+    // default outright, so without this an operator who has ever saved e.g.
+    // `tool.git::allowedCommands` never sees a row added to the catalog since.
+    //
+    // ORDERING, and it is load-bearing: this is placed HERE, not next to the
+    // other two migrations, because it needs `handles` — it can only run once
+    // discovery has resolved. Awaiting `settingsMigrations` first extends that
+    // chain rather than forking it: all three do read-modify-write on the same
+    // globalState key, so a concurrent run could let this pass' stale snapshot
+    // clobber the branch-command flip (the hazard the comment on the chain
+    // describes). `applyDefaultOnStartup` above is likewise a read-modify-write
+    // of that key and has already been awaited, so this pass reads after it too.
+    // Marker-guarded and never throws, so a failure costs the reconciliation and
+    // not activation.
+    await settingsMigrations;
+    await reconcileStoredKeyValueTables(
+      context.globalState,
+      context.workspaceState,
+      handles,
+      logger,
+    );
 
     // Load-time ghola-ledger backfill. `mode.war::enabled` (an Agents
     // configuration tracked in the module-settings store, NOT a loader toggle)

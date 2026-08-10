@@ -1,0 +1,70 @@
+{
+  "id": "tool.reviewer-dossier",
+  "name": "Reviewer Dossier",
+  "version": "0.1.0",
+  "description": "Keeps a durable, per-repo record of what code reviewers actually flag and what we did about it: captured PR comments are classified into patterns, persisted into the project's Obsidian home keyed by canonical repo identity, and surfaced as an advisory line in the pre-PR checklist so a recurring finding is pre-empted before the PR goes out. Declines are recorded as first-class entries and arm the next protest reply rather than driving a code change.",
+  "proactive": false,
+  "category": "orchestration",
+  "kind": "capability",
+  "trigger": "event",
+  "tier": "recommended",
+  "requires": ["tool.obsidian-notes", "tool.pr-prep", "integration.bitbucket-pr-comments"],
+  "contributes": {
+    "promptFragments": [
+      { "target": "all", "contentPath": "reviewer-dossier.md" }
+    ],
+    "settings": {
+      "dossierEnabled": {
+        "type": "boolean",
+        "label": "Dossier Enabled",
+        "description": "Master switch for the reviewer dossier. When on, TPM classifies triaged PR comments into patterns, persists them into the project's notes home, and surfaces matched patterns as an advisory step in the pre-PR checklist. When off, nothing is written and nothing is surfaced; existing dossier entries stay on disk untouched and are simply not read.",
+        "default": true
+      },
+      "captureFilePath": {
+        "type": "path",
+        "label": "Capture File Path",
+        "description": "Absolute path to the PR-comment capture file (JSON Lines) that the bb-bridge capture-comments subcommand appends to. Injected by the host from the extension's global storage at compose time — do not hard-code it, do not guess it, and do not relocate it. Not user-editable: this field exists so the setting is visible, but any value stored here is overwritten by the host injection on every compose.",
+        "default": ""
+      },
+      "acceptThreshold": {
+        "type": "number",
+        "label": "Accept Threshold",
+        "description": "How many accepted occurrences of a pattern, across that many DISTINCT pull requests, are required before the pattern may drive pre-emption. Two comments on one PR are one reviewer pass, not a trend, so the distinct-PR count is what is measured. Occurrences marked accepted-under-protest never count toward this threshold.",
+        "default": 2,
+        "min": 1,
+        "max": 20
+      },
+      "declineVetoDays": {
+        "type": "number",
+        "label": "Decline Veto Days",
+        "description": "A decline (or an accepted-under-protest) recorded within this many days vetoes the pattern outright: it is not surfaced for pre-emption regardless of how many accepts sit above it. This is a veto, not a weighting, because any weighting scheme eventually lets a large accept count outvote a deliberate decision.",
+        "default": 90,
+        "min": 1,
+        "max": 3650
+      },
+      "stalePatternDays": {
+        "type": "number",
+        "label": "Stale Pattern Days",
+        "description": "A pattern with no new evidence for this many days is demoted to advisory-only: it may still be reported as a note, but it can no longer carry a blocking marker or drive a pre-emptive fix. Demotion never deletes the entry; the evidence stays on disk.",
+        "default": 180,
+        "min": 1,
+        "max": 3650
+      },
+      "maxSurfacedPatterns": {
+        "type": "number",
+        "label": "Max Surfaced Patterns",
+        "description": "Top-K cap on the pre-submit advisory. At most this many matched patterns are listed individually, highest confidence first; everything beyond the cap collapses into a single summary line. The cap bounds signal dilution as the dossier grows and keeps the checklist step readable.",
+        "default": 5,
+        "min": 1,
+        "max": 25
+      },
+      "briefInjection": {
+        "type": "enum",
+        "label": "Brief Injection",
+        "description": "Whether accepted patterns are injected into SWE assignment briefs at code-writing time. off (the default) means the dossier is consulted only at the pre-PR apply point. matched-only injects at most three accepted patterns whose trigger matches files the assignment already names, one line each. TPM pays context on every dispatch for this and most patterns are irrelevant to most tasks, which is why it ships off.",
+        "options": ["off", "matched-only"],
+        "default": "off"
+      }
+    }
+  }
+}

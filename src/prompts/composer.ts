@@ -16,6 +16,35 @@ import type { SettingsField, SettingsSchema } from '../manifest/types';
 const GHOLA_MODE_ID = 'mode.war';
 
 /**
+ * Every character that terminates a line somewhere between a raw file, a
+ * markdown renderer, and a JS string literal, mapped to the escape sequence
+ * that stands in for it in a rendered parameter value.
+ *
+ * The spellings are JSON's own on purpose: `renderValue`'s object branch runs
+ * values through `JSON.stringify`, which already escapes LF/CR/VT/FF this exact
+ * way, so applying this map to every branch makes a string value and a value
+ * nested inside a rendered object read identically — and keeps the object
+ * branch's output parseable as JSON, since each replacement is itself a legal
+ * JSON escape.
+ *
+ * U+0085 (NEL), U+2028 (LINE SEPARATOR), and U+2029 (PARAGRAPH SEPARATOR) are
+ * here because `JSON.stringify` does NOT escape them: they are Unicode line
+ * terminators that survive stringification raw and break the manifest line the
+ * same way a bare LF does.
+ */
+const LINE_BREAK_ESCAPES: Record<string, string> = {
+  '\n': '\\n',
+  '\r': '\\r',
+  '\u000b': '\\u000b',
+  '\f': '\\f',
+  '\u0085': '\\u0085',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029',
+};
+
+const LINE_BREAK_PATTERN = /[\n\r\u000b\f\u0085\u2028\u2029]/g;
+
+/**
  * Stateless composer: pure function from (agentId, settings) → composed prompt string.
  *
  * Emits `[core] + [preamble] + [Session Manifest block]`. The core and preamble
@@ -189,18 +218,34 @@ export class PromptComposer {
   // --- parameter rendering -------------------------------------------------
 
   /**
-   * Four-branch rendering for a module's parameters in the Session Manifest:
+   * Three-branch rendering for a module's parameters in the Session Manifest:
    *   - None:          no schema AND no host-injected values     → render `(none)`
    *   - Injected only: no schema but host injected values exist  → render as a sub-list (schema-less, e.g. feedbackFilePath)
-   *   - Defaults:      schema present but no user overrides      → render `(defaults)`
-   *   - Values:        user has overrides (schema + values)      → render as a sub-list of key: value pairs
+   *   - Schema:        schema present                            → render as a sub-list of key: value pairs
    *
    * The "injected only" branch exists because some modules (e.g. tool.feedback-log)
    * declare no user-editable settings schema but receive host-injected parameters
    * at compose time. Without this branch those parameters would be silently dropped,
    * leaving the agent with `(none)` and no path to operate.
    *
-   * In the "Values" branch, stored keys the schema does not declare are FILTERED
+   * The "Schema" branch resolves the schema's DECLARED DEFAULTS underneath any
+   * stored overrides, so every declared setting renders with a concrete value.
+   * It used to print a bare `(defaults)` sentinel when the user had no overrides,
+   * which was not merely terse but wrong: the preamble's "Parameter Allowlists
+   * Are Authoritative" rule makes a comma-separated allowlist the ONLY permitted
+   * set of values and forbids substituting when one is absent, so an unresolved
+   * `(defaults)` reads to a strict agent as an EMPTY allowlist. The same sentinel
+   * hid numeric backstops (e.g. mode.ticket-pr's maxAutonomousIterations /
+   * maxTicketsPerRun) whose own prose cites them by name. The schema is already
+   * in hand here, so resolve it rather than making every preset pin the defaults
+   * by hand — a stopgap that only ever helped fresh installs, because preset
+   * seeding copies a preset's `settings` by name once.
+   *
+   * The sentinel survives in exactly one case: a schema whose fields declare no
+   * defaults at all and that has no stored overrides, which resolves to zero
+   * rows. Emitting `parameters:` with nothing under it would be worse.
+   *
+   * In the "Schema" branch, stored keys the schema does not declare are FILTERED
    * OUT (and logged) rather than rendered — see the comment on the filter itself.
    * Only that branch filters: the "injected only" branch has no schema to check
    * against, so nothing there can be validated or dropped.
@@ -217,8 +262,8 @@ export class PromptComposer {
 
     // Schema-less but host injected values exist — render them directly. There
     // is no schema to validate these against, so the undeclared-key filter in
-    // the Values branch below deliberately does not apply here; this is exactly
-    // the case its `schema &&` guard exists to protect.
+    // the Schema branch below deliberately does not apply here; this is exactly
+    // the case that branch's scoping exists to protect.
     if (!hasSchema && hasValues) {
       const out: string[] = ['  - parameters:'];
       for (const key of Object.keys(userValues!)) {
@@ -229,33 +274,46 @@ export class PromptComposer {
       return out;
     }
 
+    const declared = schema!;
     const overrides = hasValues ? userValues : undefined;
-    if (!overrides) return ['  - parameters: (defaults)'];
 
+    // Walk the SCHEMA, not the stored keys: that resolves declared defaults for
+    // every field the module ships and layers the stored override on top where
+    // one exists (stored wins, default fills the rest). Walking the schema also
+    // makes row order deterministic — manifest order, which is the order the
+    // settings panel shows — instead of globalState's arbitrary insertion order.
     const rows: string[] = [];
-    const skipped: string[] = [];
-    for (const key of Object.keys(overrides)) {
-      // Undeclared stored key: module settings persist as flat `id::field` keys
-      // in globalState and nothing prunes them, so a setting that is removed or
-      // renamed leaves its value orphaned in the store forever. The preamble
-      // tells agents that manifest parameters are AUTHORITATIVE, so rendering an
-      // orphan promotes dead storage into a live instruction the operator cannot
-      // see or edit in any panel — worst case a stale allowlist sitting next to
-      // the real one with no marker for which is live. Drop it instead.
-      //
-      // Guarded on `schema` on purpose: a module may legitimately have stored
-      // values and no declared settings at all (tool.feedback-log's injected
-      // feedbackFilePath). `!field` alone would blank those. That case is
-      // already routed to the branch above, but keep the guard so the filter
-      // stays correct if these branches are ever merged.
-      if (schema && !schema[key]) {
-        skipped.push(key);
-        continue;
-      }
-      const field = schema ? schema[key] : undefined;
-      const projected = this.projectValueForAgent(field, overrides[key]);
+    for (const [key, field] of Object.entries(declared)) {
+      const stored =
+        overrides !== undefined &&
+        Object.prototype.hasOwnProperty.call(overrides, key);
+      // A field with no stored value AND no declared default has nothing to say;
+      // emit no row rather than the literal string `undefined`. A stored value is
+      // rendered verbatim even when it is nullish, exactly as it was before
+      // defaults were resolved here.
+      if (!stored && field.default === undefined) continue;
+      const value = stored ? overrides![key] : field.default;
+      const projected = this.projectValueForAgent(field, value);
       const rendered = this.renderValue(projected);
       rows.push(`    - ${key}: ${rendered}`);
+    }
+
+    // Undeclared stored key: module settings persist as flat `id::field` keys
+    // in globalState and nothing prunes them, so a setting that is removed or
+    // renamed leaves its value orphaned in the store forever. The preamble
+    // tells agents that manifest parameters are AUTHORITATIVE, so rendering an
+    // orphan promotes dead storage into a live instruction the operator cannot
+    // see or edit in any panel — worst case a stale allowlist sitting next to
+    // the real one with no marker for which is live. Drop it instead.
+    //
+    // Walking the schema above already excludes orphans structurally; this pass
+    // exists only to keep reporting them. It is scoped to this branch on
+    // purpose: a module may legitimately have stored values and no declared
+    // settings at all (tool.feedback-log's injected feedbackFilePath), and
+    // those are routed to the schema-less branch above, which must not filter.
+    const skipped: string[] = [];
+    for (const key of Object.keys(overrides ?? {})) {
+      if (!declared[key]) skipped.push(key);
     }
 
     // Do not drop orphans silently: a skipped key is invisible in the composed
@@ -268,8 +326,9 @@ export class PromptComposer {
       );
     }
 
-    // Every stored value was an orphan — the module has no live overrides, so
-    // report defaults rather than emitting a `parameters:` header with no rows.
+    // Nothing resolved: every schema field is default-less and the module has no
+    // live overrides (all stored keys were orphans, or there were none). Keep the
+    // sentinel rather than emit a `parameters:` header with no rows under it.
     if (rows.length === 0) return ['  - parameters: (defaults)'];
     return ['  - parameters:', ...rows];
   }
@@ -329,11 +388,35 @@ export class PromptComposer {
     return false;
   }
 
+  /**
+   * Render one parameter value as a single manifest line.
+   *
+   * A rendered value is emitted inside a markdown list item (`    - key: ...`),
+   * so it MUST NOT contain a raw line terminator: the moment it does, every
+   * character after the break sits at column 0 and stops being part of the
+   * list. That is not cosmetic. `integration.atlassian-suite`'s
+   * `attributionSuffix` default begins with `\n\n---\n`, which used to emit a
+   * bare `---` at column 0 — a markdown horizontal rule an agent can read as
+   * the Session Manifest having ended, silently dropping every module below it.
+   *
+   * Line terminators are therefore ESCAPED, not stripped and not folded to a
+   * space. Escaping is what the object branch already does (via
+   * `JSON.stringify`) and it is the only option that preserves meaning: a value
+   * whose line breaks are load-bearing — `tool.pr-prep`'s `descriptionTemplate`
+   * is a PR-description skeleton whose blank lines ARE the structure — survives
+   * as something the agent can reconstruct, where folding or deleting would
+   * hand it a mangled template it would reproduce verbatim.
+   *
+   * Escaping runs on the final `str` so it covers every branch: raw strings,
+   * host-injected values, and the JSON of an object/kv-table alike (nested
+   * newlines inside a `keyValue` key or value included). Only line-terminating
+   * characters are touched — backslashes and tabs are left exactly as-is, so a
+   * value with no line break renders byte-for-byte as it did before.
+   */
   private renderValue(value: unknown): string {
     let str: string;
     if (typeof value === 'string') {
-      // Strip \r\n from string values per spec.
-      str = value.replace(/\r\n/g, '').replace(/\r/g, '');
+      str = value;
     } else if (value === null || value === undefined) {
       str = String(value);
     } else if (typeof value === 'object') {
@@ -345,6 +428,8 @@ export class PromptComposer {
     } else {
       str = String(value);
     }
+
+    str = str.replace(LINE_BREAK_PATTERN, (ch) => LINE_BREAK_ESCAPES[ch]);
 
     // Wrap in backticks. If the value contains a backtick, fall back to single-quote
     // escape (\'). Spec note: this is adequate for an agent reading it; cosmetic

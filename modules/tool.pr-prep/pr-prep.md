@@ -2,7 +2,7 @@
 
 When this module is loaded, the session has a multi-stage PR-handoff toolkit: a structured **pre-PR quality gate** (the checklist), a structured **PR-description generator**, and a **reviewer configuration**. They run in sequence as the user hands a task off to a PR. The checklist runs first, catching the kinds of issues automated PR reviewers (CodeRabbit, Copilot review, etc.) commonly flag; the description runs next, drafting a PR body the user edits directly before submission; reviewers are confirmed last before the PR is created. Every agent reads this same fragment; TPM owns all stages, SWE and QA feed findings into both the checklist and description, and role-specific framing is collected at the end.
 
-This module is **not proactive**. It does not fire at session start. It fires when the user signals they are ready to PR (per `parameters.checklistAutoOffer` for the checklist) or when the user explicitly asks. When the checklist completes cleanly, TPM proceeds directly to generating the PR description with a one-to-two sentence change summary — no offer, no prompt, just do it. Treat it as a handoff ritual, not a continuous check.
+This module is **not proactive**. It does not fire at session start. It fires when the user signals they are ready to PR (per `parameters.checklistAutoOffer` for the checklist) or when the user explicitly asks. When the checklist completes cleanly, TPM proceeds directly to generating the PR description with a change summary of at most three sentences (the hard cap in the generation contract) — no offer, no prompt, just do it. Treat it as a handoff ritual, not a continuous check.
 
 ## PR-handoff sequence
 
@@ -75,11 +75,12 @@ Then ask: "Address the flagged items before creating the PR, or proceed anyway?"
 
 ### How each check is evaluated
 
-TPM evaluates checks from three inputs, all read-only:
+TPM evaluates checks from three inputs, all read-only (a fourth joins when `tool.reviewer-dossier` is loaded):
 
 - `git diff --name-only`, `git diff`, and `git status` — the canonical view of what is about to ship.
 - Session memory — the assignments, SWE returns, and QA verdicts already in the conversation. SWE's edge-case calls and QA's findings are first-class inputs, not afterthoughts.
 - The check description in `parameters.checks[<name>].value` — this tells TPM what pattern the check is looking for.
+- The reviewer dossier (`tool.reviewer-dossier`, when loaded) — a read-only reference of patterns known reviewers reliably flag, consulted for the "Known reviewer patterns pre-empted" check and never written to from this module.
 
 TPM does **not** run tests itself. The "Tests pass locally" check asks the user; it does not invoke any test runner, build command, or CI hook. TPM does **not** modify files during the checklist — the entire sweep is a read-only inspection. Any fix the user wants TPM to make happens AFTER the checklist, as a separate SWE task.
 
@@ -115,7 +116,7 @@ Do not merge these cases.
 
 ## PR Description
 
-Once the checklist (and the regression scan, when `tool.regression-scan` is enabled) has completed cleanly, TPM **immediately** drafts a plain-language PR description with a one-to-two sentence change summary appended. No offer, no prompt — just generate it. The description is free of double-dashes (and any other token in `parameters.bannedTokens`) and ticket-aware when `mode.ticket-work` is active. The draft is presented to the user as editable text; the user edits it directly and what they approve is what gets submitted.
+Once the checklist (and the regression scan, when `tool.regression-scan` is enabled) has completed cleanly, TPM **immediately** drafts a plain-language PR description with a change summary of at most three sentences appended — the generation contract's hard cap, and it is not negotiable against diff size. No offer, no prompt — just generate it. The description is free of double-dashes (and any other token in `parameters.bannedTokens`) and ticket-aware when a ticket-scoped mode (`mode.ticket-work` or `mode.ticket-pr`) is active. The draft is presented to the user as editable text; the user edits it directly and what they approve is what gets submitted.
 
 ### When to generate a description
 
@@ -135,19 +136,20 @@ Do **not** generate a description:
 
 These rules apply to every draft.
 
+- **Change summary: three sentences maximum. Hard cap.** The change summary is AT MOST THREE SENTENCES. Three is a ceiling, not a target — one or two is better when one or two will do. Count them before presenting the draft: a sentence is any span ending in `.`, `?`, or `!`. Bullets, fragments, headings, and semicolon-joined clauses each count as a sentence; splitting the summary into a list does not exempt it from the cap, and a list is never a substitute for the sentences. If the draft runs over, do NOT present it — cut to the three that matter most (what changed, why, and the user-visible effect) and drop the rest. Detail that does not fit belongs in the diff, the ticket, or the per-ticket notes, never in the summary. Re-count after every regeneration and after the user's own edits, in the same pass as the banned-tokens scan; if the final text is over, surface it ("The change summary is four sentences now — cut it to three, or submit as-is?"). There is NO exception for a large diff, a many-file change, or a change the user calls complicated: a bigger change gets a shorter, higher-altitude summary, not a longer one. This cap governs even when `parameters.descriptionTemplate` says otherwise.
 - **Banned tokens.** No token from `parameters.bannedTokens` may appear in the final output. Parse the parameter as comma-separated, trim each entry, and scan every draft for each entry as a substring match. If a banned token slips in (TPM caught itself writing one), rewrite the sentence to avoid it — usually by replacing the dash with a comma or restructuring the clause. Em-dashes (`—`, U+2014) are FINE — banned tokens are about double-dashes (`--`) and double-dash-adjacent patterns, not em-dashes. Scan the **final** text (after user edits) before submission; if the user introduced a banned token in their edit, surface it and ask whether to rewrite or accept.
 - **Plain language.** No jargon the user would not say in conversation. Drop adjectives that do not add information. Active voice over passive when possible. Reviewers should be able to read the description once and understand the change.
-- **Ticket reference.** When `mode.ticket-work` is enabled AND `parameters.ticketId` is non-empty, prepend the ticket id to the description as a convention (e.g., `PROJ-123: ...`). When ticket-work is not active or the ticket id is empty, drop the ticket prefix gracefully.
+- **Ticket reference.** When a ticket-scoped mode (`mode.ticket-work` or `mode.ticket-pr`) is active and has resolved a ticket key for the session (derived from the branch, per that mode's ticket resolution), prepend the ticket id to the description as a convention (e.g., `PROJ-123: ...`). When no ticket-scoped mode is active or no ticket key has been resolved, drop the ticket prefix gracefully.
 - **What and why, not how.** Reflect what changed (the user-observable behavior) and why (the motivation or the bug it fixes). Do not enumerate implementation details, internal function names, or refactor mechanics. Reviewers see the diff for the how.
-- **Template awareness.** When `parameters.descriptionTemplate` is non-empty, use it as the starting structure for the draft. Fill in the template sections with content derived from the session's work. When the template is empty, draft free-form based on the input sources below.
+- **Template awareness.** When `parameters.descriptionTemplate` is non-empty, use it as the starting structure for the draft. Fill in the template sections with content derived from the session's work. When the template is empty, draft free-form based on the input sources below. The template supplies structure only, never permission to exceed the three-sentence cap: an operator-customized template whose placeholder text asks for more (or omits the limit entirely) does not raise the ceiling.
 
 ### Input sources TPM uses to write the description
 
 TPM composes the draft from these inputs, all read-only:
 
 - **Session memory** — SWE return messages (especially the one-sentence per-file explanations), QA verdicts, edge cases flagged during the work. This is the primary source for the "what" content.
-- **`git diff --stat` and `git diff --name-only`** — context for the change-summary bullets (always included) and a sanity check that the session memory matches what is actually staged.
-- **`mode.ticket-work` ticket summary** — when active, the Jira summary provides "why" context for free, used as plain context for the description.
+- **`git diff --stat` and `git diff --name-only`** — background context for the change summary and a sanity check that the session memory matches what is actually staged. This is raw material to draw from, not a list to reproduce: the summary is prose, never a per-file or per-change bullet list, and nothing in the diff is "always included". A wide diff still gets at most three sentences (see the hard cap in the generation contract) — it raises the altitude of the summary, it does not extend it.
+- **Ticket-scoped mode's ticket summary** (`mode.ticket-work` or `mode.ticket-pr`) — when active, the Jira summary provides "why" context for free, used as plain context for the description.
 - **`tool.obsidian-notes` per-ticket or per-project notes** — when enabled, read the relevant notes file for "why" framing the user articulated earlier in the session (Implementation Notes, Ticket Summary). Use the read paths the notes module already exposes; do not invent a path.
 - **The user's own framing in the current session** — if the user said "this fixes the auth race we found earlier", lift that framing verbatim or near-verbatim into the description. It is almost always the best "why" content.
 
@@ -160,7 +162,7 @@ After generating a draft that satisfies the generation contract:
 1. Show the draft to the user in a large editable block (in the settings panel's PR Prep textarea or in chat), formatted as it will appear in the PR. No extra prose around it.
 2. Tell the user: "Edit the description above, then confirm to submit." The user edits the text directly — what they see is what gets submitted.
 3. If the user asks to **regenerate** ("regenerate", "try again with a different angle"), ask for the angle ("more emphasis on impact", "less technical", etc.) and draft again. Do not loop indefinitely — if the user regenerates more than twice, ask whether the inputs are insufficient (maybe SWE returns were vague, maybe no ticket summary is available) so the issue can be addressed at the source.
-4. Before submission, re-apply the banned-tokens scan to the final text (which may have been edited by the user). If a banned token is present, surface it and ask whether to rewrite or accept.
+4. Before submission, re-apply the banned-tokens scan AND re-count the change summary's sentences against the three-sentence hard cap, on the final text (which may have been edited by the user). One pass, both checks. If a banned token is present, or the summary is over three sentences, surface it and ask whether to rewrite or accept.
 
 ### Description: module-disabled vs feature-disabled
 
@@ -185,13 +187,24 @@ Reviewers come from two sources:
 
 ### How reviewers are passed to the bridge
 
-When TPM calls the `create-pr` bridge route, reviewers are passed as:
+When TPM calls `create-pr`, reviewers are passed via the `--reviewers` flag as a JSON array of account ID strings:
 
-```json
-"reviewers": [{ "account_id": "..." }, { "account_id": "..." }]
+```bash
+node "$GHOLA_ROOT/scripts/bb-bridge.mjs" create-pr \
+  --repo my-repo --source feature/PROJ-123 --target dev \
+  --title "PROJ-123: Add widget" --draft \
+  --reviewers '["712020:abc123", "712020:def456"]'
 ```
 
-This array includes both default reviewers and any per-PR additions the user selected. TPM merges the two lists, deduplicating by account ID.
+The wrapper maps each string to `{ account_id: id }` before sending to Bitbucket. To add or change reviewers after PR creation, use `update-pr`:
+
+```bash
+node "$GHOLA_ROOT/scripts/bb-bridge.mjs" update-pr \
+  --repo my-repo --pr 1556 \
+  --reviewers '["712020:abc123", "712020:def456"]'
+```
+
+TPM merges default reviewers (`parameters.defaultReviewers`) and any per-PR additions the user selected, deduplicating by account ID, before constructing the array.
 
 ### Presenting reviewers before PR creation
 
@@ -209,19 +222,23 @@ The description composes cleanly with the checklist stage of this module and thr
 
 #### Pre-PR Checklist (this module, first stage)
 
-The checklist and the description form the PR-handoff pair within this module: checklist first (the gate), description second (the artifact). When the checklist completes with no `✗` flags, TPM proceeds directly to generating the description with a change summary — no offer, no delay. When the checklist surfaced `✗` flags, TPM holds the description until the flags are addressed. The user can still ask explicitly ("draft the PR body anyway") and TPM generates, noting once: "The checklist still has open flags — confirm you want to proceed to the description?"
+The checklist and the description form the PR-handoff pair within this module: checklist first (the gate), description second (the artifact). When the checklist completes with no `✗` flags, TPM proceeds directly to generating the description with a change summary of at most three sentences (the generation contract's hard cap) — no offer, no delay. When the checklist surfaced `✗` flags, TPM holds the description until the flags are addressed. The user can still ask explicitly ("draft the PR body anyway") and TPM generates, noting once: "The checklist still has open flags — confirm you want to proceed to the description?"
 
 #### `tool.regression-scan`
 
 When enabled, the regression scan is a **separate** module that runs between the checklist and the description in the PR-handoff sequence. TPM chains the description offer only after the regression scan (and the checklist) has completed cleanly. When it is not enabled, the description follows the checklist directly with no intervening stage.
 
-#### `mode.ticket-work`
+#### `mode.ticket-work` / `mode.ticket-pr`
 
-Provides the `ticketId` for prepending to the PR description. Provides the Ticket Summary as a strong candidate for the "why" content, used as plain context when composing the description. Without ticket-work active, the ticket prefix is dropped gracefully.
+Either ticket-scoped mode provides the resolved ticket key (derived from the branch, per that mode's ticket resolution) for prepending to the PR description. Either provides the Ticket Summary as a strong candidate for the "why" content, used as plain context when composing the description. Without a ticket-scoped mode active, the ticket prefix is dropped gracefully.
 
 #### `tool.obsidian-notes`
 
 The per-ticket or per-project notes file is a rich input source — TPM reads it (via the read paths the notes module already exposes) to find the "why" framing the user articulated earlier in the session. Implementation Notes and Ticket Summary are the highest-value sections. Do NOT write back to the notes file from this module — generation is read-only. The user's PR body lives in Bitbucket or GitHub, not in Obsidian.
+
+#### `tool.reviewer-dossier`
+
+When enabled, the checklist's "Known reviewer patterns pre-empted" row consults the dossier (in the vault, under the project's `## Reviewer Dossier` section) as its fourth read-only input, alongside the diff, session memory, and the check description. As with `tool.obsidian-notes`, TPM only reads the dossier here — capture, classification, and dossier writes are owned elsewhere, never by this module.
 
 ---
 
@@ -231,7 +248,7 @@ The body above applies identically to every agent. The notes below are short fra
 
 ### TPM
 
-You own all three stages (checklist, description, reviewers). **For the checklist:** you decide when to offer it (per the signal rules in the checklist's When-to-Run section), you read the git diff, consult session memory, and evaluate each check. You present findings using the `✓ / ⚠ / ✗` format. You do **not** delegate check evaluation to SWE — the checklist is a TPM-level synthesis that combines SWE returns, QA verdicts, and your own read of the diff. If SWE has already noted a side effect or QA has already flagged an issue, use that as input; do not re-dispatch SWE to look at what SWE just looked at. **For the description:** you read session memory (SWE returns, QA verdicts, user framing), you run `git diff --stat` and `git diff --name-only` for change-summary context, and you read the per-ticket or per-project notes file when `tool.obsidian-notes` is enabled. You apply the generation contract — banned-tokens scan, plain-language pass — before presenting any draft, treating any Jira-derived text from `mode.ticket-work` as plain context for the description. You present the draft as editable text; the user edits it directly and confirms before submission. You do not delegate generation to SWE or QA — this is a TPM-level synthesis, and SWE / QA findings are inputs, not drafts. **For reviewers:** you present the reviewer list (defaults from `parameters.defaultReviewers` plus any per-PR additions) to the user and confirm before PR creation. You merge default and per-PR reviewers, deduplicating by account ID, and pass the final list to the `create-pr` bridge call.
+You own all three stages (checklist, description, reviewers). **For the checklist:** you decide when to offer it (per the signal rules in the checklist's When-to-Run section), you read the git diff, consult session memory, and evaluate each check. You present findings using the `✓ / ⚠ / ✗` format. You do **not** delegate check evaluation to SWE — the checklist is a TPM-level synthesis that combines SWE returns, QA verdicts, and your own read of the diff. If SWE has already noted a side effect or QA has already flagged an issue, use that as input; do not re-dispatch SWE to look at what SWE just looked at. **For the description:** you read session memory (SWE returns, QA verdicts, user framing), you run `git diff --stat` and `git diff --name-only` for change-summary context (background material, not a list to reproduce), and you read the per-ticket or per-project notes file when `tool.obsidian-notes` is enabled. You apply the generation contract — three-sentence cap on the change summary, banned-tokens scan, plain-language pass — before presenting any draft, and you re-count and re-scan the final text after the user's edits, treating any Jira-derived text from a ticket-scoped mode (`mode.ticket-work` or `mode.ticket-pr`) as plain context for the description. You present the draft as editable text; the user edits it directly and confirms before submission. You do not delegate generation to SWE or QA — this is a TPM-level synthesis, and SWE / QA findings are inputs, not drafts. **For reviewers:** you present the reviewer list (defaults from `parameters.defaultReviewers` plus any per-PR additions) to the user and confirm before PR creation. You merge default and per-PR reviewers, deduplicating by account ID, and pass the final list to the `create-pr` bridge call.
 
 ### SWE
 
