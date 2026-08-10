@@ -16,37 +16,37 @@
       "testRoots": {
         "type": "string",
         "label": "Test Roots",
-        "description": "Comma-separated list of directory names that hold tests in this project. The scan walks these directories (relative to the repo root or any sub-tree) and greps for references to symbols changed in this session. Defaults cover the common conventions across JavaScript, TypeScript, Python, and .NET projects. Tighten the list to speed up large repos or add project-specific roots.",
+        "description": "Directory names holding tests, comma-separated. The scan greps these for references to symbols changed this session. Defaults cover common JS/TS/Python/.NET conventions.",
         "default": "tests, test, __tests__, spec, specs, e2e"
       },
       "fileExtensions": {
         "type": "string",
         "label": "File Extensions",
-        "description": "Comma-separated list of file extensions the scan will inspect inside the test roots. Each entry includes the leading dot. Limit this when your test files use only one or two extensions to avoid spurious matches in fixture data or generated files.",
+        "description": "File extensions (with leading dot) the scan inspects inside test roots. Narrow it to avoid false matches in fixtures or generated files.",
         "default": ".ts, .tsx, .js, .jsx, .py, .cs, .java, .go, .rs"
       },
       "scanSignals": {
         "type": "string",
         "label": "Scan Signals",
-        "description": "Comma-separated list of symbol categories the scan looks for. classes catches class names from added/modified class definitions. methods catches method names within those classes. exported-functions catches top-level exported functions. public-types catches exported interfaces or type aliases. The agent chooses which extraction patterns to use based on what is enabled here; disabling categories reduces noise on projects with conventions that make a category irrelevant.",
+        "description": "Symbol categories the scan looks for: classes, methods, exported-functions, public-types. Disable categories that don't apply to your codebase to cut noise.",
         "default": "classes, methods, exported-functions, public-types"
       },
       "runMode": {
         "type": "string",
         "label": "Run Mode",
-        "description": "Controls how findings are presented. summary groups all matches into a single table by source file, useful for fast triage. perSymbol walks each modified symbol one at a time and lists every test file that references it, useful when you want to investigate one suspected breakage in depth. Both modes use the same underlying grep results; only the presentation differs.",
+        "description": "How findings are presented. summary (default): groups matches into one table by file. perSymbol: lists every referencing test file per modified symbol.",
         "default": "summary"
       },
       "autoOfferOnSignal": {
         "type": "boolean",
         "label": "Auto-Offer On Signal",
-        "description": "When on, TPM proactively offers to run the regression scan after the pre-PR checklist completes, or when the user signals PR readiness without running the checklist. When off, TPM only runs the scan when the user explicitly asks. On is the typical flow where the scan is the third gesture after the checklist and description.",
+        "description": "When on, TPM proactively offers the scan after the pre-PR checklist or when the user signals PR readiness. Off requires an explicit request. Default on.",
         "default": true
       },
       "flagThreshold": {
         "type": "number",
         "label": "Flag Threshold",
-        "description": "Minimum number of test references a modified symbol must have for the scan to flag it as worth attention. Default 1 surfaces every match. Raise it to filter out symbols with only incidental references in fixture data (e.g., set to 2 for projects where most names appear in at least one boilerplate file).",
+        "description": "Minimum test references a symbol needs to be flagged. Default 1 shows every match; raise it to filter out incidental fixture references.",
         "default": 1
       }
     }

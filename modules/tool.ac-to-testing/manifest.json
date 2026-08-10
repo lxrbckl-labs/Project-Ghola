@@ -16,31 +16,31 @@
       "procedureTemplate": {
         "type": "string",
         "label": "Procedure Template",
-        "description": "Template shape used for each testing procedure. steps-expected-edge produces a numbered Steps list, an Expected Outcome paragraph, and an Edge Cases bullet list — the default for projects that want manual + edge coverage in one block. steps-expected drops the Edge Cases section for projects where edges are tracked separately. gherkin produces Given/When/Then blocks for teams familiar with BDD-style specs. All three formats output to the Testing Procedures section of the per-ticket notes file.",
+        "description": "Template for each testing procedure. steps-expected-edge (default): adds Steps, Expected Outcome, and Edge Cases. steps-expected: drops Edge Cases. gherkin: produces Given/When/Then blocks.",
         "default": "steps-expected-edge"
       },
       "autoOfferOnAcComplete": {
         "type": "boolean",
         "label": "Auto-Offer On AC Complete",
-        "description": "When on, TPM proactively offers to draft testing procedures when the user signals AC is met (marking the last AC item complete, saying 'AC complete', etc.). When off, TPM only generates procedures when the user explicitly asks. On is the typical flow where testing is the next gesture after AC completion.",
+        "description": "When on (default), TPM offers to draft testing procedures as soon as the user signals AC is complete. When off, TPM only generates them on explicit request.",
         "default": true
       },
       "oneProcedurePerAcItem": {
         "type": "boolean",
         "label": "One Procedure Per AC Item",
-        "description": "When on, TPM produces a separate testing procedure per AC item — useful for scenario isolation and easier translation to Playwright specs later. When off, TPM produces one consolidated procedure covering all AC items in a single flow — fits compact tickets where the AC items are tightly coupled. On is the safer default for clean automated-test mapping downstream.",
+        "description": "When on (default), TPM writes a separate testing procedure per AC item, easing later Playwright mapping. When off, TPM writes one consolidated procedure covering all AC items.",
         "default": true
       },
       "probeEdgeCases": {
         "type": "boolean",
         "label": "Probe Edge Cases",
-        "description": "When on, TPM actively asks the user for edge cases per AC item during procedure generation — null inputs, boundary values, concurrent access, permission denials, network failures, etc. When off, TPM only captures edge cases the user volunteers. On is the deeper-coverage default; turn off for projects where AC is tightly scoped and the conversation overhead isn't worth it.",
+        "description": "When on (default), TPM asks the user for edge cases per AC item during generation (null inputs, boundary values, permission denials, etc.). When off, it only captures edge cases the user volunteers.",
         "default": true
       },
       "writeToNotes": {
         "type": "boolean",
         "label": "Write To Notes",
-        "description": "When on, TPM writes generated procedures into the Testing Procedures section of the active per-ticket Obsidian notes file (requires tool.obsidian-notes and a resolved vault). When off, TPM presents procedures in the session output only — useful for projects without a notes layer or for one-off testing runs. Off does not block downstream tool.playwright consumption from session memory, but persistence across sessions requires the notes write.",
+        "description": "When on (default), TPM writes procedures to the ticket's notes file (requires tool.obsidian-notes and a resolved vault). When off, procedures appear in session output only and don't persist across sessions.",
         "default": true
       }
     }

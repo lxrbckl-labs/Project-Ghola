@@ -28,6 +28,7 @@
       "maxConcurrentTerminals": {
         "type": "number",
         "label": "Max Concurrent Terminals",
+        "description": "Caps how many terminals can exist in the pool at once. When the pool is at capacity, /terminal/create refuses with an error naming the cap instead of creating a new terminal.",
         "default": 3,
         "min": 1,
         "max": 8
@@ -35,17 +36,20 @@
       "defaultShell": {
         "type": "enum",
         "label": "Default Shell",
+        "description": "Shell used when a /terminal/create request omits shell; also refused if not present in Allowed Shells. bash (default): Linux/WSL/macOS, has Shell Integration. powershell: Windows PowerShell 5.x, Windows-only. pwsh: PowerShell Core 7.x, cross-platform. zsh: cross-platform, has Shell Integration. cmd: Windows-only, no Shell Integration. fish: cross-platform, has Shell Integration.",
         "default": "bash",
         "options": ["bash", "powershell", "pwsh", "zsh", "cmd", "fish"]
       },
       "autoDisposeOnSessionEnd": {
         "type": "boolean",
         "label": "Auto-dispose terminals when session ends",
+        "description": "Inert — TerminalManager.dispose(), which runs on extension deactivation, disposes every pooled terminal unconditionally; this flag is stored in config but no code path reads it to gate that behavior. terminal.md documents it as controlling auto-dispose, but restoring the real behavior needs a code change, not a settings change.",
         "default": true
       },
       "commandTimeoutMs": {
         "type": "number",
         "label": "Default Command Timeout (ms)",
+        "description": "Default timeout for a /terminal/exec command run without waitForHuman; a per-call timeoutMs overrides it. On timeout the terminal returns to idle and the response reports whatever output was captured with timedOut: true.",
         "default": 120000,
         "min": 5000,
         "max": 600000
@@ -53,6 +57,7 @@
       "humanInterventionTimeoutMs": {
         "type": "number",
         "label": "Human Intervention Timeout (ms)",
+        "description": "Timeout for a /terminal/exec command sent with waitForHuman: true, longer than Command Timeout since a human needs time to read, respond, and type. On timeout the terminal returns to idle rather than staying blocked, and the response reports the captured output with timedOut: true.",
         "default": 300000,
         "min": 30000,
         "max": 900000

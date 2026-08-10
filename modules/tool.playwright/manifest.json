@@ -18,49 +18,49 @@
       "specsDir": {
         "type": "string",
         "label": "Specs Dir",
-        "description": "Root directory under which Playwright specs are written. Inside it the agent creates a per-repo scope dir named <repo-basename>-<12-hex-hash-of-repo-path>, and a per-ticket subdir under that (e.g. ~/.ghola/tests/cmms0-2f44a92693f1/CMMS-1234/). The scope dir holds the durable artifacts shared by every session working that repo: specs, playwright.config.ts, and AC-walkthrough.md. Per-run output is nested one level deeper under runs/<session-id>/ (test-results/, playwright-report/, videos/), keyed on the launcher's GHOLA_SESSION_ID, so two sessions running concurrently in the SAME repo do not overwrite each other. Specs persist across sessions for re-running; run dirs accumulate and are the operator's to prune. Customize for projects with team-shared spec locations.",
+        "description": "Root dir for Playwright specs. Creates a per-repo scope dir (specs, config, walkthrough) and a per-ticket subdir; per-run output nests under runs/<session-id>/ so concurrent sessions in the same repo don't collide. Specs persist; run dirs are the operator's to prune.",
         "default": "~/.ghola/tests"
       },
       "configTemplate": {
         "type": "string",
         "label": "Config Template",
-        "description": "Shape of the generated per-scope playwright.config.ts. base-url-env emits a config that reads BASE_URL from env and throws when it is unset (recommended for dev/staging/prod re-use). hardcoded-base-url emits a config pinned to an explicit URL you supply at generation time (hardcoded-localhost is a legacy alias for it and no longer defaults to localhost:3000). minimal emits the bare-minimum config and lets the user customize. Every template pins outputDir and the HTML report under runs/<session-id>/, resolved from GHOLA_SESSION_ID at run time rather than baked in, so the one durable config stays correct for every session that uses it. No template ever guesses a base URL: an unset BASE_URL is refused rather than defaulted, so one repo's specs can never be pointed at another repo's live stack. Default base-url-env matches the standard SWT pattern.",
+        "description": "Shape of the generated playwright.config.ts. base-url-env (default): reads BASE_URL from env and throws if unset (recommended). hardcoded-base-url: pins an explicit URL you supply. minimal: is bare-bones. No template ever guesses a base URL.",
         "default": "base-url-env"
       },
       "autoOfferOnProcedures": {
         "type": "boolean",
         "label": "Auto-Offer On Procedures",
-        "description": "When on, QA proactively offers to write Playwright specs whenever fresh testing procedures from tool.ac-to-testing are added to the ticket notes. When off, no proactive offer is made and specs are written only on explicit request (an explicit ask can also route the work to a SWE agent). On is the typical flow; off is for projects with strict manual-test conventions.",
+        "description": "When on, QA proactively offers to write specs when fresh testing procedures are added to ticket notes. Off requires an explicit request. Default on.",
         "default": true
       },
       "specPerProcedure": {
         "type": "boolean",
         "label": "Spec Per Procedure",
-        "description": "When on, the agent generates one spec file per TP (TP-1.spec.ts, TP-2.spec.ts, etc.). When off, the agent consolidates all TPs into a single spec file per ticket. On is preferred for parallel execution and isolated failures; off is preferred for compact spec sets.",
+        "description": "When on, generates one spec file per testing procedure (TP-1.spec.ts, etc). Off consolidates all TPs into one file per ticket. Default on.",
         "default": true
       },
       "includeSetupTeardown": {
         "type": "boolean",
         "label": "Include Setup Teardown",
-        "description": "When on, every generated spec includes beforeAll/afterAll hooks scaffolded for common needs (browser context init, baseline data setup, cleanup). When off, specs are pure test() blocks with no shared setup. On is the safer default; off is for teams that handle setup centrally.",
+        "description": "When on, generated specs include beforeAll/afterAll hooks for setup and cleanup. Off produces pure test() blocks with no shared setup. Default on.",
         "default": true
       },
       "edgeProfileAuth": {
         "type": "boolean",
         "label": "Edge Profile Auth",
-        "description": "When on, generated Playwright specs use Microsoft Edge's persistent user profile for Azure AD authentication, avoiding programmatic login. When off, specs use Playwright's default browser context (no SSO). On is required for testing apps behind Azure AD; off is fine for unauthenticated apps.",
+        "description": "When on, specs use Edge's persistent profile for Azure AD auth instead of programmatic login. Required for apps behind Azure AD. Default off.",
         "default": false
       },
       "edgeProfilePath": {
         "type": "string",
         "label": "Edge Profile Path",
-        "description": "Path to the Edge user profile directory used for auth context. The <scope> token expands to the per-repo scope name and <session> to the launcher's GHOLA_SESSION_ID, so the default gives every session its own profile and no two concurrent runs contend on the single-writer profile lock. The tradeoff is real: a per-session profile starts empty every session, so you sign in to Azure AD interactively on each session's first headed run. Drop the <session> token (~/.ghola/edge-profiles/<scope>) to sign in just once per repo, at the cost of only one session at a time being able to run Edge specs. Set an explicit path with no tokens (e.g. the OS-default Edge profile, typically %LOCALAPPDATA%/Microsoft/Edge/User Data on Windows) to reuse an existing signed-in profile, at the cost of only one session anywhere being able to use it. Has no effect when Edge Profile Auth is off.",
+        "description": "Path to the Edge profile used for auth. Default's <scope>/<session> tokens give every session its own profile (re-sign-in each time). Drop <session> to share one profile per repo (one session at a time); a fixed path reuses an existing signed-in profile (one session anywhere). No effect when Edge Profile Auth is off.",
         "default": "~/.ghola/edge-profiles/<scope>/<session>"
       },
       "authChannelOverride": {
         "type": "string",
         "label": "Auth Channel Override",
-        "description": "Playwright browser channel used for auth-context specs. msedge uses installed Microsoft Edge with the persistent profile. msedge-beta or msedge-dev for non-stable channels. Has no effect when Edge Profile Auth is off. Default msedge is the typical channel for Azure AD scenarios.",
+        "description": "Browser channel passed as channel: to chromium.launchPersistentContext() for auth-context specs; no effect when Edge Profile Auth is off. msedge (default): the stable channel. msedge-beta: a non-stable channel. msedge-dev: a non-stable channel.",
         "default": "msedge"
       },
       "verificationVideo": {
@@ -68,7 +68,7 @@
         "label": "Verification Video",
         "default": "on-request",
         "options": ["on-request", "always", "off"],
-        "description": "Controls whether the tester records annotated Playwright videos of the AC flow. on-request records only when the user or TPM asks. always records whenever specs are generated during ticket work. off never records. Applies only in ticket or project work where a ticket id is in scope. Two behaviors ride along with any recording and are deliberately NOT separately toggleable: setup work (browser launch, SSO sign-in, the warm-up navigation, first-run interstitials) is kept outside the recording context so the video does not open on a blank viewport, and each produced .webm is stream-copy remuxed with ffmpeg afterwards to correct its container duration. The remux is skipped, with a note in the run report, only when NO ffmpeg resolves at all - neither one on PATH nor Playwright's own bundled build, which is present wherever playwright install has run; the raw video is still the deliverable in that case. Set this to off to suppress both along with the video itself."
+        "description": "Controls recording of annotated verification videos. on-request (default): only when asked. always: for every spec generation. off: never. Ticket work only. Setup/sign-in is excluded from the recording, and each video is remuxed via ffmpeg (system or bundled) to fix duration; if no ffmpeg resolves at all, the raw video ships with a note."
       },
       "annotateVideoSteps": {
         "type": "boolean",
@@ -81,7 +81,7 @@
         "label": "AC Walkthrough",
         "default": "on-request",
         "options": ["on-request", "always", "off"],
-        "description": "Controls whether the tester writes a human-readable AC walkthrough doc (AC-walkthrough.md) alongside the specs. on-request writes only when the user or TPM asks. always writes whenever specs are generated during ticket work. off never writes. Applies only in ticket or project work where a ticket id is in scope."
+        "description": "Controls writing an AC-walkthrough.md alongside specs. on-request (default): only when asked. always: with every spec generation. off: never. Ticket work only."
       }
     }
   }

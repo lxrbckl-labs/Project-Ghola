@@ -16,13 +16,13 @@
       "vaultPath": {
         "type": "string",
         "label": "Vault Path",
-        "description": "Absolute path to the Obsidian vault root. Set it explicitly, OR use the Detect Vault button in this panel to auto-fill it by scanning for a directory containing a .obsidian marker. When set, it is used verbatim for the session. Leave blank to disable Obsidian notes.",
+        "description": "Absolute path to the Obsidian vault root. Set it manually or via the Detect Vault button. Empty disables notes and the session continues. A set but unresolvable path is a configuration error: notes are skipped, and a Ticket PR queue aborts.",
         "default": ""
       },
       "writeFrontmatter": {
         "type": "boolean",
         "label": "Write Frontmatter",
-        "description": "When on, every notes file this module writes opens with a YAML frontmatter block (title, type, created, updated, tags, plus per-type fields) as defined in the module's frontmatter schema. Turn off to write the section skeletons without any frontmatter block; all other structure conventions still apply.",
+        "description": "When on (default), every notes file opens with a YAML frontmatter block (title, type, dates, tags, per-type fields). Off skips frontmatter; other structure conventions still apply.",
         "default": true
       }
     }

@@ -16,13 +16,13 @@
       "enforceDiscipline": {
         "type": "boolean",
         "label": "Enforce Discipline",
-        "description": "Master switch for the stay-in-cwd discipline. When on, agents refuse to operate on paths outside cwd unless one of the configured exceptions applies. When off, agents may freely read/write any path the OS permits. Off is rarely correct outside controlled environments.",
+        "description": "Master switch for stay-in-cwd discipline. When on (default), agents refuse paths outside cwd unless a configured exception applies. When off, agents may access any path the OS permits.",
         "default": true
       },
       "allowedExceptionPaths": {
         "type": "keyValue",
         "label": "Allowed Exception Paths",
-        "description": "User-managed list of absolute paths or path patterns agents are permitted to access even when they sit outside cwd. Each entry is a path plus a one-line rationale. Keys may reference an environment variable (${GHOLA_VAULT}) or another module's parameter (${tool.obsidian-notes:vaultPath}); either one expands to the empty string when unset, which makes the entry a no-op rather than a wildcard. The seeds cover only what an enabled baseline module already requires: the Obsidian vault, the installed extension's module content and helper scripts, and the feedback log. Add project-specific exceptions (e.g. a shared config dir, a downstream service repo), and remove any seed whose module you do not run.",
+        "description": "Paths agents may access outside cwd, each with a one-line rationale. Keys may reference ${ENV_VAR} or ${module:param}, which becomes a no-op (not a wildcard) if unset. Seeds cover baseline module needs; add or remove entries as needed.",
         "default": {
           "${tool.obsidian-notes:vaultPath}/**": { "value": "Obsidian vault reads/writes that tool.obsidian-notes mandates - the stored path form, which is the form that module resolves first", "enabled": true },
           "${GHOLA_VAULT}/**": { "value": "The same vault in the host-native path form the launcher exports, for when the stored form needed translating", "enabled": true },
@@ -39,13 +39,13 @@
       "onRedirectMidSession": {
         "type": "string",
         "label": "On Redirect Mid-Session",
-        "description": "How TPM responds when the user verbally redirects the session to a different path mid-session (let's look at /other/path). accept treats the new path as in-scope for the remainder of the session without challenge. confirm prompts the user to confirm the redirect once before treating the path as in-scope. refuse blocks the redirect entirely and requires the user to disable cwd discipline. Default accept matches the existing universal posture.",
+        "description": "How TPM handles a mid-session redirect to a different path. accept (default): treat it as in-scope without asking. confirm: ask once first. refuse: block the redirect entirely.",
         "default": "accept"
       },
       "treatModeBindingsAsExceptions": {
         "type": "boolean",
         "label": "Treat Mode Bindings As Exceptions",
-        "description": "When on, an active session mode that binds the agent to a specific path (mode.cd binds to a project dir; mode.support binds per-app) implicitly extends cwd discipline to include the bound path. When off, mode bindings do not relax cwd discipline and the user must add each mode-bound path to Allowed Exception Paths manually. On is the typical default; off is for projects that want strict cwd-only.",
+        "description": "When on (default), an active mode's bound path (e.g. mode.cd's project dir, mode.support's per-app path) is automatically treated as an exception. When off, bound paths must be added to Allowed Exception Paths manually.",
         "default": true
       }
     }

@@ -20,13 +20,13 @@
         "label": "Reply Instruction",
         "multiline": true,
         "default": "Write a 1-2 sentence professional PR reply explaining why we are declining the requested change (the finding is incorrect, out of scope, or intentionally not being made). No double-dashes.",
-        "description": "Instruction used to compose the reply we post when we are pushing back on a comment rather than making the requested change (the disagree-path counter-comment, drafted for operator approval before posting). Protest replies are the only replies we send: an accepted finding is fixed, pushed, left silent on replies, and then resolved by us once CodeRabbit's re-review adds its green-check confirming the fix."
+        "description": "Instruction for composing the pushback reply when declining a requested change (drafted for operator approval before posting). Protest replies are the only replies we send — accepted findings are fixed and resolved after CodeRabbit's re-review confirms, not replied to."
       },
       "coderabbitReplyPersona": {
         "type": "string",
         "label": "CodeRabbit Reply Persona",
         "default": "",
-        "description": "Optional persona or voice instruction layered on top of the Reply Instruction when the parent comment author is CodeRabbit. Leave blank to use the Reply Instruction unchanged for CodeRabbit replies."
+        "description": "Optional persona/voice layered on the Reply Instruction for CodeRabbit-authored comments. Blank uses the Reply Instruction unchanged."
       },
       "coderabbitReplyPersonaIntensity": {
         "type": "number",
@@ -34,120 +34,120 @@
         "default": 5,
         "min": 1,
         "max": 10,
-        "description": "How much the reply ACTS LIKE the persona — its character and mannerisms — while STILL fully conveying the actual message. This is not a measure of any single trait (e.g. how sarcastic); it is how strongly the reply stays in-character. The substance is always delivered at every level; the level only changes how much persona flavor rides on top. 1 = mostly plain, just a light touch of the persona; 5 (default) = clearly in-character but balanced; 10 = fully in-character. Only matters when a persona is set. Affects VOICE only — never the no-severity/no-rating/no-attribution rule or the approval gate. Self-contained to this module (does not depend on tool.operator-profile)."
+        "description": "How strongly the reply stays in-character (1 = light touch, 5 = balanced default, 10 = fully in-character); the message is always fully conveyed at every level. Only matters when a persona is set. Voice only — never affects the approval gate or content rules."
       },
       "flagFalselyResolved": {
         "type": "boolean",
         "label": "Flag Falsely-Resolved Comments",
         "default": true,
-        "description": "When on, the agent scans PR comments whose body claims the issue is resolved (e.g., 'resolved', 'fixed', 'done') but which Bitbucket still marks as unresolved, and surfaces them for review. It does not auto-resolve anything."
+        "description": "When on, flags PR comments claiming resolution (e.g. 'fixed', 'done') that Bitbucket still marks unresolved. Never auto-resolves anything."
       },
       "coderabbitResolveRequiresConfirmation": {
         "type": "boolean",
         "label": "CodeRabbit Resolve Requires Confirmation",
         "default": true,
-        "description": "When enabled, a CodeRabbit-authored comment is only auto-included in a resolve selection (ordinals, resolve all, or a natural-language text filter) when it carries CodeRabbit's own resolution confirmation (green-check plus resolution language such as resolved/addressed/verified/done); a plain textual claim of resolution does not count. Otherwise it is not pre-selected but called out for the operator to confirm before resolving, so the operator keeps final authority. Applies to CodeRabbit-authored comments only — human and other-author comments are unaffected. When off, resolve behaves as before with no CodeRabbit gate."
+        "description": "When on, a CodeRabbit comment auto-selects for resolve only with CodeRabbit's own resolution confirmation (green-check + resolved/addressed/etc.) — a plain text claim doesn't count and needs operator confirmation instead. Human comments are unaffected. Off removes this gate."
       },
       "driveToZeroCloseout": {
         "type": "boolean",
         "label": "Drive To Zero Closeout",
         "default": true,
-        "description": "When on, at the end of a round-trip (and on demand) the agent runs a closeout accounting pass that enumerates every unresolved comment, buckets each by disposition (CodeRabbit green-check confirmed and resolve-eligible; fix pushed but awaiting re-review; not yet addressed; counter-comment posted or declined; outdated as a pending Phase-2 disposition), and reports the concrete gap to 0 unresolved comments so nothing is silently left behind. It never resolves or posts anything on its own — it reports the tally and routes each bucket through the existing gates."
+        "description": "When on, at round-trip end (and on demand) the agent runs a closeout pass that buckets every unresolved comment by disposition and reports the gap to zero unresolved. Never resolves or posts anything itself — routes each bucket through existing gates."
       },
       "resolveDeclinedBotThreads": {
         "type": "boolean",
         "label": "Resolve Declined Bot Threads",
         "default": true,
-        "description": "After we post a counter-comment on (or decline) a CodeRabbit (bot) thread we are pushing back on, resolve that thread. A bot does not need the thread kept open for a reply. Authorship is detected by the comment author display name containing 'coderabbit' (case-insensitive), the same convention the resolve gate uses. When off, declined bot threads are left unresolved."
+        "description": "After posting a counter-comment on (or declining) a CodeRabbit thread, resolve it — a bot doesn't need the thread kept open. Detected by 'coderabbit' in the author name (case-insensitive). Off leaves declined bot threads unresolved."
       },
       "resolveDeclinedHumanThreads": {
         "type": "boolean",
         "label": "Resolve Declined Human Threads",
         "default": false,
-        "description": "After we post a counter-comment on (or decline) a human reviewer's thread we are pushing back on, resolve that thread. Off by default: resolving a thread you just pushed back on reads as dismissive to a person, so the thread is left unresolved for the reviewer to respond. When on, declined human threads are resolved like bot threads."
+        "description": "Same as Resolve Declined Bot Threads but for human reviewers. Off by default — resolving a thread you just pushed back on reads as dismissive to a person."
       },
       "pipelineStatusEnabled": {
         "type": "boolean",
         "label": "Pipeline Status Enabled",
         "default": false,
-        "description": "When on, TPM can read and report the current pipeline/build status for a PR or branch via the Bitbucket REST API using the atlassian-suite credentials; read-only, no triggering builds."
+        "description": "When on, TPM can read and report PR/branch pipeline status via the Bitbucket REST API. Read-only — never triggers builds."
       },
       "postOrdinalsEnabled": {
         "type": "boolean",
         "label": "Post Ordinals Enabled",
         "default": true,
-        "description": "Enables the post <ordinals> verb for publishing selected SWE Review Mode findings as inline Bitbucket PR comments. When off, the inbound address <ordinals> verb still works but outbound posting is refused. On is the typical setting for active code reviewers who want a one-step publish for triaged findings."
+        "description": "Enables the post <ordinals> verb for publishing SWE Review Mode findings as inline PR comments. Off refuses outbound posting; the inbound address <ordinals> verb still works."
       },
       "postPolishPrompt": {
         "type": "string",
         "label": "Post Polish Prompt",
         "multiline": true,
         "default": "Polish this SWE finding into a 1-2 sentence professional PR comment. Drop hedging language, keep the specific file:line reference, and avoid double-dashes.",
-        "description": "The instruction TPM applies when polishing a raw SWE finding into a PR-ready comment. Default produces concise, file-line-anchored comments without hedging or double-dashes. Customize per-team to match reviewer conventions (more formal, less formal, specific tone)."
+        "description": "Instruction TPM uses when polishing a raw SWE finding into a PR-ready comment. Default keeps it concise, file:line-anchored, and free of hedging or double-dashes."
       },
       "minRatingToPost": {
         "type": "number",
         "label": "Min Rating To Post",
         "default": 1,
-        "description": "Minimum Rating field a SWE Review Mode finding must carry to be posted. Findings rated below this threshold are excluded from post all and post all <lens> selections; they can still be posted by explicit ordinal. Default 1 includes everything. Raise to 3 to filter to should-fix-or-worse, or 4 to filter to critical-only."
+        "description": "Minimum Rating a finding must carry to be included in post all / post all <lens> (still postable by explicit ordinal below this). Default 1 includes everything; raise to 3 or 4 to filter to more severe findings only."
       },
       "postCommentLocation": {
         "type": "string",
         "label": "Post Comment Location",
         "default": "inline-when-possible",
-        "description": "Where the comment lands on the PR. inline-when-possible places the comment at the file:line cited in the finding when one is parseable, falling back to the PR overview otherwise. inline-only refuses to post if no file:line is parseable. overview-only always posts to the PR overview, useful for summary-level findings that don't anchor cleanly. Default favors inline placement to keep reviewer context."
+        "description": "Where the comment lands. inline-when-possible (default): file:line when parseable, else PR overview. inline-only: refuses if no file:line parses. overview-only: always posts to the PR overview."
       },
       "requireUserApproval": {
         "type": "boolean",
         "label": "Require User Approval",
         "default": true,
         "securitySensitive": true,
-        "description": "When on, TPM presents the polished findings for user approval before posting (the user types ok, revise N: <change>, or cancel). When off, TPM posts immediately after polishing — faster but no safety gate. On is strongly recommended; the off path exists only for scripted bulk workflows. One narrow exception exists even when on: in a Ticket PR (mode.ticket-pr) session the preview is waived for a top-level comment whose body is exactly '@coderabbitai review' and nothing else, so the sentry can request a re-review without stopping. Any other text, including any other @coderabbitai command, still gates."
+        "description": "When on (strongly recommended), TPM presents polished findings for user approval (ok / revise N / cancel) before posting. Off posts immediately after polishing. One exception even when on: in mode.ticket-pr, a bare '@coderabbitai review' comment posts without preview."
       },
       "logCommentsEnabled": {
         "type": "boolean",
         "label": "Log Comments Enabled",
         "default": false,
-        "description": "Enables persistent logging of every PR comment fetched during the address or post workflow to a JSON file. Useful as historical data for downstream consumers (e.g. tool.qa-pr-learning, manual review). Off keeps comments in session memory only. Default off so first-run installs do not silently accumulate data."
+        "description": "Enables persistent JSON logging of every PR comment fetched, for downstream use (e.g. tool.qa-pr-learning). Off (default) keeps comments in session memory only."
       },
       "logFilePath": {
         "type": "string",
         "label": "Log File Path",
         "default": "pr-comment-log.json",
-        "description": "Filesystem path the comment log is written to. Relative paths resolve to the extension's globalStorageUri (the same location tool.feedback-log uses). Absolute paths are used verbatim. The log is append-only — TPM never edits prior entries."
+        "description": "Path the comment log is written to. Relative paths resolve to the extension's global storage; absolute paths used verbatim. Append-only — prior entries are never edited."
       },
       "logRetentionDays": {
         "type": "number",
         "label": "Log Retention Days",
         "default": 90,
-        "description": "How many days of comment entries to retain in the log. Entries older than this are pruned on the next write. Set to 0 to disable pruning entirely (the log grows unbounded). Default 90 covers a quarter of review history."
+        "description": "Days of comment entries to retain; older entries are pruned on the next write. 0 disables pruning (log grows unbounded)."
       },
       "logIncludeReplies": {
         "type": "boolean",
         "label": "Log Include Replies",
         "default": true,
-        "description": "When on, the log captures replies the agent POSTS in addition to the source comments it READS. When off, only inbound comments are logged. On gives the fullest training signal; off is preferred if you want the log to be a pure record of WHAT colleagues said."
+        "description": "When on, the log also captures the agent's own posted replies, not just inbound comments. Off logs inbound comments only."
       },
       "markReadyEnabled": {
         "type": "boolean",
         "label": "Mark Ready Enabled",
         "default": false,
         "securitySensitive": true,
-        "description": "Enables the mark ready / ready for review verb, which marks the current branch's draft Bitbucket PR ready for review via the bb-bridge.mjs wrapper's mark-ready subcommand. This is a Bitbucket draft-to-ready write, always behind an explicit user confirmation gate before it runs. Off by default so first-run installs cannot flip a PR's state without opting in."
+        "description": "Off by default. Enables the mark-ready verb, flipping the branch's draft PR to ready for review via bb-bridge. Always behind an explicit user confirmation before running."
       },
       "toDraftEnabled": {
         "type": "boolean",
         "label": "To Draft Enabled",
         "default": false,
         "securitySensitive": true,
-        "description": "Enables the to draft / back to draft verb, which flips the current branch's ready-for-review Bitbucket PR back to draft via the bb-bridge.mjs wrapper's to-draft subcommand. The exact reverse of mark ready and, like it, a Bitbucket write always behind an explicit user confirmation gate. Off by default so first-run installs cannot flip a PR's state without opting in."
+        "description": "Off by default. Enables the to-draft verb, flipping the branch's PR back to draft via bb-bridge — the reverse of mark ready. Always behind an explicit user confirmation before running."
       },
       "deleteCommentEnabled": {
         "type": "boolean",
         "label": "Delete Comment Enabled",
         "default": true,
         "securitySensitive": true,
-        "description": "Enables the delete verb, which deletes PR comment(s) via the bb-bridge.mjs wrapper's delete-comment subcommand — either specific comments by ordinal/id or, via delete resolved, every resolved comment on the PR. Deletion is DESTRUCTIVE and IRREVERSIBLE on Bitbucket (there is no undo), so it is always behind an explicit user confirmation gate. Its primary use is freeing room under Bitbucket's 200-comment-per-PR cap by clearing resolved comments. On by default; every deletion still requires explicit per-delete confirmation before it runs."
+        "description": "On by default. Enables the delete verb (bb-bridge delete-comment), including delete resolved for bulk cleanup. DESTRUCTIVE and IRREVERSIBLE on Bitbucket — always behind an explicit per-delete confirmation."
       }
     }
   }

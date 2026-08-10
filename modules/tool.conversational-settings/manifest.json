@@ -16,37 +16,37 @@
       "enableDetection": {
         "type": "boolean",
         "label": "Enable Detection",
-        "description": "Master switch for natural-language settings detection. When on, TPM watches user turns for phrases that match settings-edit intent. When off, the user must edit settings directly via the Modules tab. On is the typical default for ergonomics.",
+        "description": "Master switch for natural-language settings detection. When on, TPM watches user turns for settings-edit intent. When off, settings must be edited directly via the Modules tab.",
         "default": true
       },
       "triggerPhrases": {
         "type": "string",
         "label": "Trigger Phrases",
-        "description": "Comma-separated list of substring patterns that suggest a settings-edit intent. Matched case-insensitively. Tune for false-positive avoidance — phrases like set and change are broad and may trigger on non-settings contexts; the fuzzy-match step downstream usually filters those out.",
+        "description": "Comma-separated, case-insensitive substrings suggesting settings-edit intent. Broad phrases (set, change) may over-trigger; the downstream fuzzy-match step usually filters false positives.",
         "default": "turn on, turn off, enable, disable, set, change, raise, lower, switch, flip, toggle, update setting, configure"
       },
       "applicationMode": {
         "type": "string",
         "label": "Application Mode",
-        "description": "How TPM responds to a recognized settings-edit intent. propose surfaces the exact panel edit needed (e.g., Modules tab → Database Access → toggle off) for the user to apply manually. apply attempts to apply the change directly via the settings-write verb — falls back to propose if Enable Settings Write is off or the host refuses the write for any reason (undeclared key, bad value, autonomous mode active, kv-table target, host-managed value). ask prompts the user to choose per occurrence. Default propose is the conservative choice: flip to apply only once you also want the write gate itself on (see Enable Settings Write below) — the two settings are independent switches, and this one alone never writes anything.",
+        "description": "How TPM responds to a recognized settings-edit intent. propose (default): surfaces the exact panel edit for the user to apply manually. apply: applies directly via settings-write (falls back to propose if Enable Settings Write is off or the host refuses). ask: prompts per occurrence. Independent of Enable Settings Write — this alone never writes anything.",
         "default": "propose"
       },
       "enableSettingsWrite": {
         "type": "boolean",
         "label": "Enable Settings Write",
-        "description": "The master gate the host enforces on every settings write this module attempts. While this is off — and off is the default — set-module-setting is refused outright for every request regardless of Application Mode, however the operator phrases it. Turning it on does not by itself cause any write: Application Mode must also be apply (or ask, with the operator choosing apply) for a write to be attempted at all, and every write is still subject to the host's other checks (schema membership, value validation, the self-reference denylist protecting this module's own settings, and the bar on writing during mode.ticket-pr or War Mode). This setting and Application Mode are two independent switches; neither one opens the other.",
+        "description": "Off by default — set-module-setting is refused for every request regardless of Application Mode. On doesn't itself cause a write: Application Mode must also be apply (or ask-then-apply), and every write remains subject to host checks (schema, self-reference denylist, the mode.ticket-pr/War Mode bar).",
         "default": false
       },
       "requireConfirmationFor": {
         "type": "string",
         "label": "Require Confirmation For",
-        "description": "Comma-separated list of setting categories that require explicit user confirmation before TPM proposes or applies a change. all is a sentinel that means everything; the other tags (secrets, allowlists, modes) name categories TPM recognizes per the configured manifests. Tighten this list to skip confirmation on routine settings; widen to add safety friction.",
+        "description": "Comma-separated setting categories requiring explicit confirmation before a change. all means everything; other tags (secrets, allowlists, modes) name recognized categories. Tighten to skip confirmation on routine settings.",
         "default": "all, secrets, allowlists, modes"
       },
       "fuzzyMatchThreshold": {
         "type": "number",
         "label": "Fuzzy Match Threshold",
-        "description": "Percent confidence required for TPM to act on a fuzzy-matched setting name. Default 70 is conservative; raise to 85 for strict matching (fewer false positives, more I'm not sure what setting you mean prompts); lower to 50 for permissive matching (more direct action, more risk of acting on the wrong setting).",
+        "description": "Confidence percent required to act on a fuzzy-matched setting name. Raise for stricter matching (fewer false positives, more clarifying prompts); lower for more permissive matching.",
         "default": 70
       }
     }

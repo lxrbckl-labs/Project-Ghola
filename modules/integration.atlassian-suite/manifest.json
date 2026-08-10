@@ -17,103 +17,103 @@
       "email": {
         "type": "string",
         "label": "Atlassian Email",
-        "description": "Email address tied to your Atlassian account. Used to authenticate live Jira and Bitbucket API requests — ticket verification and PR lookups run against this identity. The API token paired with this email is stored separately in VS Code's SecretStorage and managed from this module's panel — it is not entered here.",
+        "description": "Email tied to your Atlassian account, used to authenticate Jira/Bitbucket API requests (ticket checks, PR lookups). The paired API token is stored separately in SecretStorage and managed from this panel.",
         "default": ""
       },
       "jiraBase": {
         "type": "string",
         "label": "Jira Base URL",
-        "description": "Base URL used to form Jira ticket links: <jiraBase>/browse/<KEY>. Trailing slashes are stripped automatically. Change this if your Atlassian instance lives at a non-default domain.",
+        "description": "Base URL for Jira ticket links: <jiraBase>/browse/<KEY>. Trailing slashes are stripped automatically.",
         "default": "https://herzog.atlassian.net"
       },
       "bitbucketWorkspace": {
         "type": "string",
         "label": "Bitbucket Workspace",
-        "description": "Bitbucket Cloud workspace slug (the organization slug, e.g. herzog-technologies) that scopes every branch and PR lookup. When set, this value takes priority; leave it blank to auto-detect the slug from origin's git remote URL. CRITICAL: a wrong or renamed slug makes find-pr query the wrong workspace and silently report no PR even when one exists — if PR lookups come up empty, verify this matches your actual Bitbucket workspace.",
+        "description": "Bitbucket Cloud workspace slug scoping every branch/PR lookup. Blank auto-detects from origin's git remote URL. CRITICAL: a wrong or renamed slug makes find-pr silently report no PR even when one exists.",
         "default": "herzog-technologies"
       },
       "bitbucketUsername": {
         "type": "string",
         "label": "Bitbucket Username",
-        "description": "The operator's Bitbucket account username/nickname (the handle, not the display name), used to detect REVIEW mode: when the open PR's author is NOT this handle, the session is reviewing someone else's work rather than authoring. Empty disables identity-based review detection (falls back to the git-author heuristic). This is a non-secret identifier, not a credential.",
+        "description": "Operator's Bitbucket handle (not display name), used to detect REVIEW mode when the open PR's author isn't this handle. Empty falls back to the git-author heuristic. Not a credential.",
         "default": ""
       },
       "jiraAccountId": {
         "type": "string",
         "label": "Jira Account / Username",
-        "description": "The operator's Jira account identifier. Reserved for future identity-based review detection via ticket assignee/reporter; not yet wired. Optional.",
+        "description": "Operator's Jira account identifier. Reserved for future assignee/reporter-based review detection; not yet wired. Optional.",
         "default": ""
       },
       "boardId": {
         "type": "string",
         "label": "Board Id",
         "default": "",
-        "description": "The Jira agile board whose active sprint is queried. Leave empty to query by project and openSprints without a specific board."
+        "description": "Jira agile board whose active sprint is queried. Empty queries by project and openSprints without a specific board."
       },
       "boardUrl": {
         "type": "string",
         "label": "Board URL",
         "default": "",
-        "description": "Optional board URL referenced in answers so the user can open the board directly."
+        "description": "Optional board URL shown in answers so the user can open the board directly."
       },
       "resultFormat": {
         "type": "enum",
         "label": "Result Format",
         "default": "table",
         "options": ["table", "grouped", "list"],
-        "description": "How results are presented: a compact table, grouped by status or assignee, or a plain list."
+        "description": "How sprint and board query results are presented. table (default): columns for key, summary, status, assignee. grouped: grouped by status or by assignee. list: a plain list of key and summary."
       },
       "includeDoneInSprintView": {
         "type": "boolean",
         "label": "Include Done In Sprint View",
         "default": false,
-        "description": "Whether a general what is in the sprint answer includes Done items or focuses on active work."
+        "description": "Whether a general sprint question includes Done items or only active work."
       },
       "defaultTargetBranch": {
         "type": "string",
         "label": "Default PR Target Branch",
         "default": "",
-        "description": "The branch new pull requests target when you run the create pr verb, e.g. dev. Leave empty to be asked for the target branch each time."
+        "description": "Branch new PRs target when running the create-pr verb, e.g. dev. Empty asks for the target branch each time."
       },
       "createAsDraft": {
         "type": "boolean",
         "label": "Create PRs as Draft",
         "default": true,
-        "description": "When on, new pull requests are created as drafts so you can mark them ready for review after prep. Turn off to create ready-for-review PRs directly."
+        "description": "When on, new PRs are created as drafts. Off creates ready-for-review PRs directly."
       },
       "enableJiraCommentWrite": {
         "type": "boolean",
         "label": "Enable Jira Comment Write",
         "default": false,
         "securitySensitive": true,
-        "description": "The outer gate on this suite's comment write. While this is off — and off is the default — every request to post a Jira comment is refused outright, however it is phrased and whatever Require Operator Approval is set to. Turning it on grants exactly one capability: posting a new comment to an existing issue. Every other Jira mutation stays refused by this gate — creating or cloning an issue, assigning it, changing any field, and editing or deleting any comment including one the agent posted itself. Transitioning an issue is not covered by this gate at all: it is a separate capability behind the separate Enable Jira Transition setting below, and stays refused unless that one is on. This gate decides whether comment posting exists at all; Require Operator Approval below decides whether each individual post is previewed and confirmed first."
+        "description": "Off by default — every Jira comment-post request is refused outright, regardless of phrasing. On grants exactly one capability: posting a new comment to an existing issue. No other Jira mutation (create, assign, field edit, edit/delete comments, transitions) is enabled by this gate. Require Operator Approval below governs whether each post is previewed and confirmed."
       },
       "attributionSuffix": {
         "type": "string",
         "label": "Attribution Suffix",
         "multiline": true,
         "default": "\n\n---\nPosted via Ghola on behalf of the ticket owner.",
-        "description": "Appended verbatim to every Jira comment this module posts, so a teammate reading the ticket can tell the comment was agent-authored rather than typed by a person. Shown to the operator as part of the approval preview, since it is part of what gets posted. Set to an empty string to disable attribution entirely — not recommended, as unattributed agent comments on a shared ticket are a transparency problem, and the operator is the one whose name is on the account."
+        "description": "Appended verbatim to every posted Jira comment so readers can tell it's agent-authored. Shown in the approval preview. Empty disables attribution entirely — not recommended."
       },
       "requireOperatorApproval": {
         "type": "boolean",
         "label": "Require Operator Approval",
         "default": true,
-        "description": "When on, TPM must show the operator the full, final Jira comment text and receive an explicit confirmation before posting. This is the comment-write capability's central safety gate and should be left on. It exists as a setting only so the value is visible and auditable in the panel; turning it off removes the last check between a drafted comment and a permanent, publicly-visible write on a shared ticket, and no workflow in this module is designed to run without it."
+        "description": "When on (recommended), TPM must show the operator the final Jira comment text and get explicit confirmation before posting. Off removes the last check before a permanent, publicly-visible write — no workflow here is designed to run without it."
       },
       "commentPolishPrompt": {
         "type": "string",
         "label": "Comment Polish Prompt",
         "multiline": true,
         "default": "Write a concise, professional Jira comment stating the update plainly. No hedging, no double-dashes, no severity ratings.",
-        "description": "The instruction TPM applies when drafting a Jira comment body from raw session material (a SWE report, a QA verdict, a status update). Governs tone and shape only — it never changes the approval gate, and the operator always sees and approves the final text the prompt produced."
+        "description": "Instruction TPM uses when drafting a Jira comment from session material. Governs tone and shape only — the operator always sees and approves the final text."
       },
       "enableJiraTransition": {
         "type": "boolean",
         "label": "Enable Jira Transition",
         "default": false,
         "securitySensitive": true,
-        "description": "The outer gate on this suite's second Jira write, and the only one that can move a ticket. While this is off — and off is the default — every request to transition a Jira issue is refused outright, however it is phrased. Turning it on grants exactly one capability: executing a workflow transition on an existing issue, by transition id, chosen from the list Jira reports as legal from that issue's current status. Every other Jira mutation stays refused — creating, cloning, or deleting an issue, assigning it, changing any field, and posting, editing, or deleting any comment (comment posting has its own separate Enable Jira Comment Write gate above; neither gate implies the other). Enforced host-side and re-read on every request: with this off, the transition route answers 403 and nothing reaches Jira. Turning it on does not remove the requirement that the agent resolve the target by destination status name and show the operator the resolved transition and its id before executing."
+        "description": "Off by default — every Jira transition request is refused outright (enforced host-side, re-read on every request; the route answers 403). On grants exactly one capability: executing a workflow transition on an existing issue, by a transition id Jira reports as legal from its current status. No other Jira mutation is enabled — comment posting has its own separate gate above. The agent must still resolve the target by status name and show the operator the resolved transition before executing."
       }
     }
   }

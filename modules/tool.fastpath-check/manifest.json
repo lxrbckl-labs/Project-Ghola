@@ -16,31 +16,31 @@
       "fastpathDirectory": {
         "type": "string",
         "label": "Fast Path Directory",
-        "description": "Parent directory under which the launcher looks for a subdirectory matching your workspace basename when Auto-cd is on (e.g. ~/projects + workspace Foo → ~/projects/Foo). When Auto-cd is off, the launcher cd's directly into this directory. Leave blank to let the launcher compute a target from the workspace path (e.g. /mnt/c/Users/<user>/Foo → ~/projects/Foo).",
+        "description": "Parent directory the launcher looks under for a matching workspace subdirectory when Workspace Repository Resolution is on, or cd's into directly when off. Leave blank to auto-compute a target from the workspace path.",
         "default": "~/projects"
       },
       "autoCdIntoRepo": {
         "type": "boolean",
         "label": "Workspace Repository Resolution",
-        "description": "Opens the terminal in your repo's matching subdirectory under Fast Path Directory when it exists. Falls back to the Fast Path Directory itself when there's no match or this is off.",
+        "description": "When on (default), opens the terminal in your repo's matching subdirectory under Fast Path Directory if one exists. When off (or no match found), opens Fast Path Directory itself.",
         "default": true
       },
       "offerMigration": {
         "type": "boolean",
         "label": "Offer Migration",
-        "description": "When on, TPM offers to walk the user through migrating the workspace from /mnt/c/... to ~/projects/... when a slow path is detected. When off, TPM only emits the original detect-and-advise message without offering the migration playbook. On is the typical default for users who want help with the move.",
+        "description": "When on (default), TPM offers to walk through migrating the workspace off a detected slow /mnt/c/... path. When off, TPM only emits the detect-and-advise message.",
         "default": true
       },
       "migrationStrategy": {
         "type": "string",
         "label": "Migration Strategy",
-        "description": "Strategy TPM uses for the migration playbook. clone uses git clone of the remote into the new path (cleanest; works for tracked-only state). rsync uses rsync to copy the working tree including uncommitted changes (preserves dirty state, slower). ask prompts the user to choose per migration. Default clone is the typical safe choice when the working tree is committed.",
+        "description": "Migration strategy. clone (default): does a git clone of the remote into the new path. rsync: copies the working tree including uncommitted changes (slower). ask: prompts the user each time.",
         "default": "clone"
       },
       "postMigrationChecks": {
         "type": "boolean",
         "label": "Post-Migration Checks",
-        "description": "When on, TPM walks the user through post-migration sanity checks (npm install in the new path, run build, confirm git remote, confirm uncommitted changes preserved if rsync was used). When off, migration ends after the copy step. On is recommended.",
+        "description": "When on (default), TPM runs post-migration sanity checks (install, build, confirm remote, confirm uncommitted changes preserved). When off, migration ends after the copy step.",
         "default": true
       }
     }

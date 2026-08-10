@@ -16,37 +16,37 @@
       "showVersion": {
         "type": "boolean",
         "label": "Show Version",
-        "description": "NOT CURRENTLY READ BY EITHER RENDERER - toggling this changes nothing today. Ghola module settings live in VS Code's globalState (an opaque Memento with no on-disk representation), and the two renderers are standalone scripts the Claude Code harness runs outside the extension, so they cannot read this value at all. There is also nothing for it to govern by default: THE TERMINAL STATUSLINE EMITS NOTHING AT ALL now, so no version segment is shown. Set GHOLA_STATUSLINE_SILENT=0 and the whole rendered line is the version - [Ghola vX.Y.Z] and nothing else - so in that state this toggle would be an on/off switch for the entire footer rather than for one segment among several.",
+        "description": "Inert — not read by either renderer (they're standalone scripts; VS Code's globalState isn't visible to them). The statusline is silent by default; GHOLA_STATUSLINE_SILENT=0 shows only [Ghola vX.Y.Z].",
         "default": true
       },
       "showCumulativeTokens": {
         "type": "boolean",
         "label": "Show Context Token Count (RETIRED)",
-        "description": "RETIRED and INERT. The token-count segment has been REMOVED from both renderers, so there is no longer a figure for this setting to show or hide: leaving it on does NOT put one back, and turning it off changes nothing either. The setting's key and its default are retained UNCHANGED only so a value you have already saved keeps a home instead of being orphaned - nothing reads it and nothing should start. What the footer renders now is NOTHING AT ALL: both renderers are silent by default, and even with GHOLA_STATUSLINE_SILENT=0 the entire line is [Ghola vX.Y.Z] - no token figure, no percentages, no separators, no color. Why the absolute went away first: 196k next to 19% was one measurement printed twice - 196k / 0.19 recovers the window size the percentage already reported - and the field behind it, context_window.total_input_tokens + total_output_tokens, stopped meaning cumulative session spend in Claude Code v2.1.132, where it became the size of the CURRENT context window. The number itself is NOT gone from Ghola, and it is NOT unrendered either: both renderers still write it to disk as session_tokens (a cross-module contract with tool.usage-observer), and the VS Code status-bar pill DOES display it, abbreviated, as one of the fields in Ghola: cmms2@win - Ticket Work - 34k - 5h 3% - which is why formatTokenCount in src/session/statusline-state.ts is a live function with a live caller. Note also that this setting could never have worked as written, for the same reason as Show Version: Ghola module settings live in VS Code's globalState, an opaque Memento with no on-disk representation, and the renderers are standalone scripts the Claude Code harness runs outside the extension host.",
+        "description": "Retired and inert — the token-count segment was removed from both renderers; toggling this does nothing. The value is still written to disk as session_tokens and shown (abbreviated) in the VS Code status-bar pill.",
         "default": true
       },
       "showContextPercent": {
         "type": "boolean",
         "label": "Show Context Percent",
-        "description": "NOT CURRENTLY READ BY EITHER RENDERER - toggling this changes nothing today; see Show Version for why (globalState is not visible to a standalone script). It is worse than unread: THE CONTEXT-PERCENT SEGMENT NO LONGER EXISTS in either renderer, so there is nothing for this to show or hide. The statusline emits nothing at all by default, and with GHOLA_STATUSLINE_SILENT=0 the whole line is [Ghola vX.Y.Z]. The number is still computed and still written to disk as context_pct, and the VS Code status-bar pill is where context usage is surfaced now.",
+        "description": "Inert — the context-percent segment no longer exists in either renderer. The value is still written to disk as context_pct and shown in the VS Code status-bar pill.",
         "default": true
       },
       "showRollingWindowPercent": {
         "type": "boolean",
         "label": "Show Rolling Window Percent",
-        "description": "NOT CURRENTLY READ BY EITHER RENDERER - toggling this changes nothing today; see Show Version for why (globalState is not visible to a standalone script). It is worse than unread: THE 5-HOUR SEGMENT NO LONGER EXISTS in either renderer, so there is nothing for this to show or hide. The statusline emits nothing at all by default, and with GHOLA_STATUSLINE_SILENT=0 the whole line is [Ghola vX.Y.Z]. The number is still computed and still written to disk as five_hour_pct (when the payload carries a rate_limits block at all - a Pro/Max account, after the first API response), and the VS Code status-bar pill is where it is surfaced now, as the 5h field of Ghola: cmms2@win - Ticket Work - 34k - 5h 3%.",
+        "description": "Inert — the 5-hour segment no longer exists in either renderer. The value is still written to disk as five_hour_pct (when rate limits are available) and shown in the VS Code status-bar pill.",
         "default": true
       },
       "redThresholdPercent": {
         "type": "number",
         "label": "Red Threshold Percent",
-        "description": "NOT CURRENTLY READ BY EITHER RENDERER - changing this number changes nothing today; see Show Version for why (globalState is not visible to a standalone script). It is worse than unread: THERE IS NO THRESHOLD AND NO COLOR LEFT TO THRESHOLD. Both percentage segments were removed from the rendered line, and the red-at-85 tint went with them - it was the only ANSI escape either renderer ever emitted, and neither writes one on any path now. The statusline emits nothing at all by default, and with GHOLA_STATUSLINE_SILENT=0 the whole line is an uncolored [Ghola vX.Y.Z]. Restoring a threshold would mean restoring the segments first, which is a code edit in both renderers, not a settings change.",
+        "description": "Inert — no threshold or color remains; both percentage segments and the red tint were removed from both renderers. Restoring this needs a code change, not a settings change.",
         "default": 85
       },
       "fallbackToVersionOnly": {
         "type": "boolean",
         "label": "Fallback To Version Only",
-        "description": "NOT CURRENTLY READ BY EITHER RENDERER - toggling this changes nothing today; see Show Version for why (globalState is not visible to a standalone script). It is also moot in both directions now: a missing, malformed, or unparseable payload produces the same ZERO BYTES that a perfectly good payload produces, because the statusline is silent by default. Un-silenced with GHOLA_STATUSLINE_SILENT=0, every payload - good, empty, or malformed - yields the same [Ghola vX.Y.Z] (or [Ghola vunknown] if the VERSION file cannot be read), because the version is the only thing rendered. Either way the exit code is always 0 and no error text is ever printed.",
+        "description": "Inert — moot either way: every payload (good, missing, or malformed) yields the same silent output by default, or the same [Ghola vX.Y.Z] with GHOLA_STATUSLINE_SILENT=0.",
         "default": true
       }
     }

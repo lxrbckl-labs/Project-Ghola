@@ -16,7 +16,7 @@
       "allowlist": {
         "type": "keyValue",
         "label": "Connection Allowlist",
-        "description": "Project-keyed map of database connections SWE may target. Each entry pairs a project identifier with a LINQPad-sourced connection name. Numbered clones of a repo (cmms0, cmms1, ...) normalize to one project key by stripping trailing digits, so they share a single entry. Empty map means no DB access. See the table below to manage entries.",
+        "description": "Project-keyed map of database connections SWE may target. Numbered repo clones (cmms0, cmms1, ...) normalize to one key by stripping trailing digits. Empty map means no DB access.",
         "default": {},
         "valueSource": "linqpad-connections",
         "keyLabel": "Project",

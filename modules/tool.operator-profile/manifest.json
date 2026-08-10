@@ -17,20 +17,20 @@
         "type": "string",
         "label": "Your Name",
         "default": "",
-        "description": "Your name, used to personalize the greeting (e.g. 'Good evening, Alex'). The bootstrap composes it with the time-derived salutation to address you by name at session start and where it reads naturally. Leave empty to use no name — the salutation is then time-only with no name."
+        "description": "Your name, used in the session greeting (e.g. 'Good evening, Alex'). Leave empty for a time-only greeting with no name."
       },
       "persona": {
         "type": "string",
         "multiline": true,
         "label": "TPM Persona",
         "default": "",
-        "description": "An optional voice/tone/personality overlay for the TPM's user-facing communication (greeting, discussion, phrasing). A non-empty value flavors HOW the TPM talks to you throughout the session; it rides on top of the immutable cores and hard rules and can never relax the safety floor, change engineering discipline, or authorize anything the default TPM couldn't do. An EMPTY value means no persona — the TPM behaves with its default voice, identical to this module being off."
+        "description": "Optional voice/tone overlay for how the TPM talks to you. It can never relax hard rules or the safety floor. Empty means no persona - default TPM voice, same as this module being off."
       },
       "personaIntensity": {
         "type": "number",
         "label": "Persona Intensity (0-10)",
         "default": 5,
-        "description": "Master strength dial (0-10) for how strongly ANY configured persona colors the TPM's user-facing voice. 0 = persona effectively off (default TPM voice even if a persona is set); 5 (default) = moderate, clearly the persona but balanced with clarity; 10 = persona at maximum. Higher = the persona's voice/tone/mannerisms come through more strongly. Applies to the operator-profile persona (the TPM's own voice). Only matters when a persona is actually set — an empty persona means the dial does nothing. Note: integration.bitbucket-pr-comments has its OWN intensity dial (coderabbitReplyPersonaIntensity) for CodeRabbit PR replies, independent of this one. It changes only HOW strongly the persona colors the voice, never what the TPM does, is allowed to do, or the safety floor."
+        "description": "Strength dial (0-10) for how strongly the persona colors the TPM's voice: 0 = off, 5 = moderate (default), 10 = max. No effect if persona is empty. Separate from integration.bitbucket-pr-comments' own intensity dial for CodeRabbit replies."
       },
       "compactProposalThresholdPct": {
         "type": "number",
@@ -38,7 +38,7 @@
         "default": 70,
         "min": 0,
         "max": 95,
-        "description": "Context-usage percentage at which the TPM offers you a compaction, in ONE line, at most once per crossing. IT CANNOT COMPACT FOR YOU - /compact is a slash command, so it is your input only; no agent can trigger compaction of its own context. The TPM reads the percentage from the statusline snapshot (~/.ghola/statusline/state/<GHOLA_STATE_KEY>.json) and stays silent if that snapshot is older than 90 seconds. 70 (default) proposes well before Claude Code's own auto-compaction fires near the ceiling, so you can compact deliberately with a focus argument (/compact <focus>) instead of having it happen to you. Set 0 to disable entirely; any negative, out-of-range, or non-numeric value also degrades to DISABLED rather than to the default, so a typo can never make the TPM nag. Telling the TPM not to ask mutes it for the rest of that session; 0 is the durable off switch. This setting has NO effect on Claude Code's own auto-compaction threshold, which is not configurable and not readable by an agent."
+        "description": "Context-usage % at which TPM offers a one-line /compact suggestion, at most once per crossing - it cannot compact for you. Default 70. Set 0 to disable; invalid or out-of-range values also disable rather than fall back to the default. No effect on Claude Code's own auto-compaction."
       }
     }
   }

@@ -16,25 +16,25 @@
       "enforceIsolation": {
         "type": "boolean",
         "label": "Enforce Isolation",
-        "description": "Master switch for the cross-ticket isolation rule. When on, TPM refuses to write content about a non-active ticket into the active ticket's notes file. When off, no isolation is enforced and TPM may write whatever the user says without scope-checking. Off is rarely correct outside one-off sessions where the user explicitly wants cross-ticket annotations.",
+        "description": "Master switch for cross-ticket isolation. When on (default), TPM refuses to write non-active-ticket content into the active ticket's notes. When off, no isolation is enforced.",
         "default": true
       },
       "allowCrossTicketNoteWrite": {
         "type": "boolean",
         "label": "Allow Cross-Ticket Note Write",
-        "description": "When on, TPM is permitted to write a standalone note to ANOTHER ticket's notes file when a discovery from the active session genuinely belongs there. When off, TPM refuses all writes outside the active ticket's notes file even when the discovery is relevant elsewhere. On is the typical permissive default; off is the strictest discipline.",
+        "description": "When on (default), TPM may write a standalone note to another ticket's notes file when a discovery genuinely belongs there. When off, all writes outside the active ticket are refused.",
         "default": true
       },
       "promptBeforeCrossWrite": {
         "type": "boolean",
         "label": "Prompt Before Cross-Write",
-        "description": "When on, TPM asks for user confirmation before writing a standalone note to another ticket's notes file (\"This discovery seems to belong in TICKET-X — write to its notes file?\"). When off, TPM writes the cross-ticket note directly without asking. On is the safer default; off speeds up workflows where the user trusts TPM's judgment.",
+        "description": "When on (default), TPM asks for confirmation before writing a cross-ticket note. When off, TPM writes it directly without asking.",
         "default": true
       },
       "onIsolationViolation": {
         "type": "string",
         "label": "On Isolation Violation",
-        "description": "How TPM responds when a SWE return or a user request would cause a cross-ticket note write into the active ticket's file. refuse blocks the write and surfaces the violation. log-only writes the note anyway but adds a warning marker so the user sees the violation in the notes. ask prompts the user to choose per occurrence. Default refuse is the safest discipline.",
+        "description": "How TPM responds to a would-be cross-ticket write into the active ticket's file. refuse (default): block it and surface the violation. log-only: write it with a warning marker. ask: prompt per occurrence.",
         "default": "refuse"
       }
     }

@@ -16,19 +16,19 @@
       "searchRoots": {
         "type": "string",
         "label": "Search Roots",
-        "description": "Comma-separated list of directories under which TPM searches for a matching repo name. First match wins. Add or trim to match your conventions; if all your repos live under one root, set just that one.",
+        "description": "Directories TPM searches for a matching repo name, comma-separated. First match wins.",
         "default": "~/projects, ~/src, ~/code, ~/workspace"
       },
       "fuzzyMatch": {
         "type": "boolean",
         "label": "Fuzzy Match",
-        "description": "When on, TPM treats the user's input as a partial match against directory basenames (case-insensitive substring). When off, requires an exact basename match. On is the typical default for ergonomic navigation.",
+        "description": "When on, matches input as a case-insensitive substring of directory names. Off requires an exact match. Default on.",
         "default": true
       },
       "openCommand": {
         "type": "string",
         "label": "Open Command",
-        "description": "Command TPM surfaces for opening the resolved path. code for VS Code, code-insiders for VS Code Insiders, cursor for the Cursor editor. Set to any command name that accepts a path argument. The command runs in the user's shell after they confirm.",
+        "description": "Command TPM suggests for opening the resolved path (e.g. code, code-insiders, cursor). Any command accepting a path argument works; it runs after the user confirms.",
         "default": "code"
       },
       "triggerPhrases": {
@@ -40,7 +40,7 @@
       "onMultipleMatches": {
         "type": "string",
         "label": "On Multiple Matches",
-        "description": "When the fuzzy match returns multiple candidates. ask presents the list and lets the user pick. first silently takes the first match (by search-root order). refuse responds with ambiguous match — be more specific. Default ask is the safest.",
+        "description": "How multiple fuzzy matches are handled. ask (default): lets the user pick. first: silently takes the first match. refuse: asks for a more specific name.",
         "default": "ask"
       }
     }

@@ -16,19 +16,19 @@
       "performanceCores": {
         "type": "number",
         "label": "Performance Cores",
-        "description": "Number of high-capability SWE slots TPM may use concurrently. Performance cores handle the main task — primary code work, complex logic, critical path. Always dispatched first. Raise for parallel-heavy workflows; lower for cost-conscious sessions.",
+        "description": "Number of high-capability SWE slots for main-task work (primary code, complex logic, critical path). Always dispatched first.",
         "default": 2
       },
       "efficiencyCores": {
         "type": "number",
         "label": "Efficiency Cores",
-        "description": "Number of lower-priority SWE slots TPM may use concurrently. Efficiency cores handle side tasks when performance cores are busy — minor fixes, research passes, simple changes. Set to 0 to disable secondary parallelism entirely.",
+        "description": "Number of lower-priority SWE slots for side tasks (minor fixes, research, simple changes) while performance cores are busy. Set to 0 to disable.",
         "default": 1
       },
       "modelByDifficulty": {
         "type": "keyValue",
         "label": "Model By Difficulty",
-        "description": "User-managed map of task-difficulty tier to model name. TPM selects the model per dispatch based on the assignment's declared difficulty. Defaults match the SWT convention (Haiku for low, Sonnet for medium, Opus for high). Adjust per project — e.g. drop Opus entirely for cost control, or promote everything to Opus for max quality.",
+        "description": "Maps task difficulty to model name; TPM selects per dispatch. Defaults: Haiku for low, Sonnet for medium, Opus for high.",
         "default": {
           "low": { "value": "haiku", "enabled": true },
           "medium": { "value": "sonnet", "enabled": true },
@@ -43,13 +43,13 @@
       "highPriorityMode": {
         "type": "string",
         "label": "High Priority Mode",
-        "description": "How TPM dispatches when the user signals a high-priority task. all-hands deploys EVERY available SWE slot (performance + efficiency) on the same task — all-hands-on-deck. perf-only deploys performance cores only; efficiency stays on standby. normal ignores priority hints; dispatches per the standard performance-first pattern. Default all-hands matches the SWT convention.",
+        "description": "How TPM dispatches a high-priority task. all-hands (default): deploys every SWE slot. perf-only: uses performance cores only, efficiency stays on standby. normal: ignores priority hints.",
         "default": "all-hands"
       },
       "announceDispatchPlan": {
         "type": "boolean",
         "label": "Announce Dispatch Plan",
-        "description": "When on, TPM proactively tells the user its dispatch plan before spawning SWEs (Putting SWE-1 and SWE-2 on the main logic with Opus, SWE-3 on standby for side tasks). When off, TPM dispatches silently. On builds trust and lets the user redirect; off cuts session-output noise.",
+        "description": "When on (default), TPM tells the user its dispatch plan before spawning SWEs. When off, TPM dispatches silently.",
         "default": true
       }
     }

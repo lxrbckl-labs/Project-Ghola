@@ -17,19 +17,19 @@
       "pullOnStart": {
         "type": "boolean",
         "label": "Pull On Start",
-        "description": "When on, TPM auto-pulls the ticket from Jira at session start via the Atlassian Suite integration. When off, no Jira pull runs and the ticket description must be supplied manually. This setting governs only that pull: the ticket key is always derived from the branch name, so the notes file location is the same either way. Leave on for the common I want to work this ticket flow.",
+        "description": "When on, TPM auto-pulls the ticket from Jira at session start via Atlassian Suite. When off, the ticket description must be supplied manually. The ticket key is always derived from the branch name either way.",
         "default": true
       },
       "crossTicketStrictness": {
         "type": "string",
         "label": "Cross Ticket Strictness",
-        "description": "Controls how TPM responds when the user references work outside the active ticket. Set to ask to confirm before treating the cross-ticket reference as in-scope, hard-block to refuse any cross-ticket work until this mode is disabled, or soft-warn to warn once and proceed. Mirrors Directory Navigation's redirect strictness — higher values keep the session focused on one ticket, lower values reduce friction at the cost of drift.",
+        "description": "How TPM responds to references to work outside the active ticket. ask (default): confirm before treating it as in-scope. hard-block: refuse until this mode is disabled. soft-warn: warn once and proceed.",
         "default": "ask"
       },
       "notesSections": {
         "type": "string",
         "label": "Notes Sections",
-        "description": "Comma-separated list of top-level sections the per-ticket notes file should contain, in the order TPM writes them when creating the file. Trim entries you do not use or extend with custom sections to taste. Note that Session Handoff in this list is the heading the tool.session-handoff module manages — Ticket Work mode ensures the heading exists but defers the writing of that block to that module. The section structure, YAML frontmatter, update discipline, and per-type templates are defined authoritatively by tool.obsidian-notes; this list only selects which of that module's ticket-note catalog sections appear and in what order.",
+        "description": "Comma-separated top-level sections for the per-ticket notes file, in write order. Session Handoff's content is written by tool.session-handoff; section structure and templates come from tool.obsidian-notes — this list only selects and orders sections.",
         "default": "Ticket Summary, Implementation Notes, Changes Made, Edge Cases, Testing Procedures, QA Findings, Session Handoff"
       }
     }

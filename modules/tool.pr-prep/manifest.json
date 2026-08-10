@@ -16,7 +16,7 @@
       "checks": {
         "type": "keyValue",
         "label": "Checks",
-        "description": "User-managed list of pre-PR checks. Each entry is a check name plus a one-line description of what TPM should look for. Add or remove checks per project to match what your team's automated reviewer flags. The agent runs every enabled check in order and reports findings to the user before the PR is created.",
+        "description": "User-managed pre-PR checks (name + what TPM should look for). Add or remove per project. TPM runs every enabled check in order and reports findings before the PR is created.",
         "default": {
           "Tests pass locally": { "value": "Confirm with the user that they have run the project test suite and it passed. Do not assume; ask if uncertain.", "enabled": true },
           "No unintended file changes": { "value": "Inspect git diff --name-only and confirm every modified file is genuinely part of the work. Flag anything that looks like it leaked from a prior task or local-only configuration.", "enabled": true },
@@ -39,32 +39,32 @@
       "runMode": {
         "type": "string",
         "label": "Run Mode",
-        "description": "Controls how TPM presents the checklist. Interactive walks through each check one at a time and asks for user confirmation before moving on, useful for cases where the user wants to review each finding. Batched runs all checks at once and presents a single summary with all findings grouped together, faster but requires more context-switching to address issues. Allowed values: interactive or batched.",
+        "description": "How TPM presents the checklist. interactive (default): walks through checks one at a time with confirmation. batched: runs all checks and presents one summary.",
         "default": "interactive"
       },
       "checklistAutoOffer": {
         "type": "boolean",
         "label": "Checklist Auto-Offer",
-        "description": "When on, TPM proactively offers to run the pre-PR checklist when the user signals they're done or ready to PR (ready for PR, let's wrap up, create a PR). When off, TPM only runs the checklist when the user explicitly asks for it. On is the typical flow for ticket-work sessions where the checklist is the first step of the PR-handoff ritual.",
+        "description": "When on, TPM proactively offers the pre-PR checklist when the user signals they're done (e.g. \"ready for PR\"). When off, it only runs on explicit request.",
         "default": true
       },
       "descriptionTemplate": {
         "type": "string",
         "label": "PR Description Template",
-        "description": "Template for the PR description. TPM generates a draft here based on the session's work, then the operator edits it directly before submission. Supports markdown. The template is pre-filled when TPM drafts a description; edit it freely -- what you see is what gets submitted.",
+        "description": "Template for the PR description draft. TPM fills it in from the session's work; the operator edits it before submission. Supports markdown.",
         "default": "Change Summary:\n[CHANGE SUMMARY - THREE SENTENCES MAXIMUM]\n\nVerification: [LINK TO TESTING PROCS]\n\nHas the UI been signed off by PO or manager? [ANSWER]",
         "multiline": true
       },
       "bannedTokens": {
         "type": "string",
         "label": "Banned Tokens",
-        "description": "Comma-separated list of token sequences that must NEVER appear in the generated description. The default forbids ASCII double-dashes (which CodeRabbit flags), em-dash-with-hyphen-prefix, and the common '-- ' misuse. The agent scans every draft for these tokens and rewrites them before presenting the result to the user.",
+        "description": "Comma-separated token sequences that must NEVER appear in the generated description (default forbids double-dash variants CodeRabbit flags). The agent scans every draft and rewrites them before presenting it.",
         "default": "--, -—, -- "
       },
       "defaultReviewers": {
         "type": "keyValue",
         "label": "Default Reviewers",
-        "description": "Reviewers to add to every PR. Each entry is a display name plus a Bitbucket account ID. Use the reviewer search in the PR Prep panel to find and add reviewers, or enter them manually. These are added by default; additional reviewers can be selected per-PR.",
+        "description": "Reviewers added to every PR by default (display name + Bitbucket account ID). Additional reviewers can be selected per-PR.",
         "default": {},
         "keyLabel": "Name",
         "valueLabel": "Account ID",

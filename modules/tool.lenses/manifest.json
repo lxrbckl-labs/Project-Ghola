@@ -36,25 +36,25 @@
       "autoKickReviewOnColleagueBranch": {
         "type": "boolean",
         "label": "Auto-Kick Review On Colleague Branch",
-        "description": "When on, TPM inspects branch authorship at session start and auto-kicks Review Mode (security/logic/quality lens dispatch) if every commit on the current branch was authored by someone other than the current user. Useful for reviewers who routinely pull down colleague branches for code review and want the lens dispatch ready before they ask. Off requires the user to manually request Review Mode. Default off so the trigger is opt-in and does not surprise users on fresh installs.",
+        "description": "When on, TPM auto-starts Review Mode at session start if every commit on the branch was authored by someone else. Off requires manually requesting Review Mode. Default off.",
         "default": false
       },
       "autoKickPlanningOnFreshBranch": {
         "type": "boolean",
         "label": "Auto-Kick Planning On Fresh Branch",
-        "description": "When on, TPM inspects commit count at session start and auto-kicks Planning Mode (architecture/implementation/test-strategy lens dispatch) if the current branch has zero commits ahead of its base. Useful for users who start sessions on freshly-created branches and want a planning pass before any work happens. Off requires the user to manually request Planning Mode. Default off for the same reason as the review trigger.",
+        "description": "When on, TPM auto-starts Planning Mode at session start if the branch has zero commits ahead of its base. Off requires manually requesting Planning Mode. Default off.",
         "default": false
       },
       "triggerBaseBranch": {
         "type": "string",
         "label": "Trigger Base Branch",
-        "description": "The reference branch the planning trigger compares against when counting commits ahead. Common values are main, master, or develop depending on the project's main-line branch name. Set this once per project to match the team's convention. Has no effect when Auto-Kick Planning On Fresh Branch is off.",
+        "description": "Base branch the planning trigger compares against for commit count (e.g. main, master, develop). No effect when Auto-Kick Planning On Fresh Branch is off.",
         "default": "main"
       },
       "mixedAuthorBehavior": {
         "type": "string",
         "label": "Mixed Author Behavior",
-        "description": "How the review trigger handles a branch where SOME commits are by the current user and others are by colleagues. ask prompts the user to confirm whether this is a review session or their own work, useful for collaborators who routinely co-author branches. skip silently treats mixed branches as author-mode and does not kick Review Mode. kick treats any colleague commit as a review trigger and kicks immediately, useful for solo reviewers who never co-author. Default ask is the safest middle ground.",
+        "description": "How the review trigger handles a branch with mixed authorship. ask (default): confirms with the user. skip: treats it as author-mode. kick: starts Review Mode immediately.",
         "default": "ask"
       }
     }

@@ -18,13 +18,13 @@
         "label": "Autonomy",
         "default": "autonomous",
         "options": ["autonomous", "propose", "allowlist"],
-        "description": "Posture for installing a missing tool. autonomous (default): when a task is blocked by a missing tool the agent installs it and continues, then reports what and why. propose: the agent names the tool and the exact install command and waits for approval before running it. allowlist: tools named in the Allowlist setting install freely (autonomous), and anything not listed falls back to propose. The harness's own permission prompt on the install command is always the real execution gate regardless of this setting."
+        "description": "Posture for installing a missing tool. autonomous (default): installs and reports afterward. propose: names the tool and command and waits for approval. allowlist: auto-installs only listed tools, else falls back to propose. The harness's own permission prompt always still gates execution."
       },
       "allowlist": {
         "type": "string",
         "label": "Allowlist",
         "default": "",
-        "description": "Comma-separated list of tool/package names (e.g. jq, ripgrep, shellcheck) that may be installed freely. Authoritative ONLY when Autonomy is allowlist: per the preamble's parameter-allowlist rule, the listed tools are the only ones installable without a proposal, and any tool not present here falls back to the propose posture. Ignored when Autonomy is autonomous or propose."
+        "description": "Comma-separated tool/package names (e.g. jq, ripgrep) that may install freely. Used only when Autonomy is allowlist; anything not listed falls back to propose. Ignored otherwise."
       }
     }
   }

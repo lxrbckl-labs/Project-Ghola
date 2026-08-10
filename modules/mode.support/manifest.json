@@ -18,7 +18,7 @@
         "type": "keyValue",
         "optionalValue": true,
         "label": "App Map",
-        "description": "Maps app names to their local repo paths. Each key is the short name the user uses to reference an app in conversation; each value is the absolute filesystem path to that app's repo (leave empty for apps not yet mapped — TPM will ask for the path when needed). All support investigations route through this map to resolve which repo to target.",
+        "description": "Maps app short names to their local repo paths. Leave a value empty for TPM to ask for the path when needed.",
         "fullWidth": true,
         "default": {
           "CMMS": "",
@@ -30,33 +30,33 @@
       "scriptLanguage": {
         "type": "string",
         "label": "Script Language",
-        "description": "The default language for investigative scripts generated during support work. Set to sql for raw T-SQL queries suitable for direct execution against the database, or csharp for LINQPad C# script bodies that can be pasted into a LINQPad tab. This preference applies globally unless overridden per-app via App Script Overrides.",
+        "description": "Default language for investigative scripts. sql (default): generates T-SQL queries. csharp: generates LINQPad C# script bodies. Overridden per-app by App Script Overrides.",
         "default": "sql"
       },
       "appScriptOverrides": {
         "type": "keyValue",
         "optionalValue": true,
         "label": "App Script Overrides",
-        "description": "Per-app overrides for the script language preference. Keys are app names matching entries in the App Map; values are sql or csharp. When an app has an override here, investigative scripts for that app use the override language instead of the global Script Language setting. Apps without an entry here fall through to the global default.",
+        "description": "Per-app overrides for Script Language. Keys must match App Map entries; values are sql or csharp. Apps without an entry here use the global default.",
         "fullWidth": true,
         "default": {}
       },
       "investigationLenses": {
         "type": "string",
         "label": "Investigation Lenses",
-        "description": "Comma-separated list of the SWE investigation lenses TPM deploys in parallel when the user reports a support issue. Each lens is a distinct angle of attack — reproduction and isolation narrows the trigger, code-path tracing follows the execution from entry to failure, and regression scan checks recent changes for the culprit. Reorder or trim to change the default investigation shape.",
+        "description": "Comma-separated SWE investigation lenses TPM deploys in parallel on a reported issue: reproduction narrows the trigger, code-path traces execution to the failure, regression checks recent changes. Reorder or trim to change the shape.",
         "default": "reproduction, code-path, regression"
       },
       "pivotBehavior": {
         "type": "string",
         "label": "Pivot Behavior",
-        "description": "Controls how TPM responds when the user references a different app mid-investigation. Set to accept to pivot immediately without confirmation, confirm to ask the user before switching the active app, or refuse to block pivots until the current investigation wraps. Higher friction keeps investigations focused; lower friction lets the user jump between apps freely.",
+        "description": "How TPM handles a mid-investigation app switch. accept (default): pivot immediately. confirm: ask first. refuse: block pivots until the current investigation wraps.",
         "default": "accept"
       },
       "knowledgeFilePerApp": {
         "type": "boolean",
         "label": "Knowledge File Per App",
-        "description": "When on, TPM maintains a persistent knowledge file per app at the Obsidian vault path Support/<APP>.md, accumulating cross-session findings, known gotchas, and resolution patterns for each app. When off, investigation findings live in session memory only and do not persist beyond the session. Requires tool.obsidian-notes to be loaded for file writes.",
+        "description": "When on, TPM maintains a persistent per-app knowledge file at Support/<APP>.md in the vault. When off (default), findings live in session memory only. Requires tool.obsidian-notes.",
         "default": false
       }
     }

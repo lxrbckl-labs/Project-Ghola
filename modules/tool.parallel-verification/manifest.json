@@ -16,7 +16,7 @@
       "splitThreshold": {
         "type": "number",
         "label": "Split Threshold",
-        "description": "Changed-file count at or above which TPM splits verification across several agents instead of dispatching one. Counted from read-only git across tracked and untracked paths. Lower it only if you want fan-out on smaller changes, and know that fan-out costs MORE total tokens than a single verifier - it buys wall-clock latency, never spend. Setting this near 1 gets the cost of a split with none of the benefit.",
+        "description": "Changed-file count at or above which TPM splits verification across several agents. Fan-out costs MORE total tokens than one verifier — it buys latency, not savings. Setting near 1 gets the cost with none of the benefit.",
         "default": 8,
         "min": 2,
         "max": 100
@@ -24,7 +24,7 @@
       "maxSlices": {
         "type": "number",
         "label": "Max Slices",
-        "description": "Hard ceiling on how many verifiers TPM may run concurrently for one verification pass, including the whole-picture verifier when it is enabled. TPM never exceeds this even when every split trigger fires, and it is still bounded by the QA and SWE concurrency caps on top. Raise it for wide changes on a machine with slots to spare; lower it to cap the fan-out tax.",
+        "description": "Hard ceiling on concurrent verifiers per pass (includes the whole-picture verifier; also bounded by QA/SWE concurrency caps). Raise for wide changes with spare capacity; lower to cap fan-out cost.",
         "default": 3,
         "min": 2,
         "max": 8
@@ -32,20 +32,20 @@
       "sliceAxis": {
         "type": "enum",
         "label": "Slice Axis",
-        "description": "How TPM partitions a verification pass. Set to by-file to give each verifier a disjoint set of changed files, seeded from the SWE ownership statement TPM already wrote - this is the default and the safe choice, because it preserves the full QA checklist per file. Set to by-check-type to give each verifier a different class of check across the whole diff, which is a narrow fallback for a small file count with a wide check surface and is only valid when the dispatched check types together cover all eight QA checklist dimensions.",
+        "description": "How TPM partitions a pass. by-file (default, safe): each verifier gets a disjoint set of changed files, preserving the full QA checklist per file. by-check-type: each verifier covers one check class across the whole diff — only valid if the dispatched types together cover all 8 QA checklist dimensions.",
         "options": ["by-file", "by-check-type"],
         "default": "by-file"
       },
       "sweVerifierOverflow": {
         "type": "boolean",
         "label": "SWE Verifier Overflow",
-        "description": "When on, TPM may staff verification slices with SWE agents in Verification Mode once the QA slots are exhausted, strictly read-only - a verifier never edits, not even a typo it finds inside its own slice. When off, a verification pass is capped at the QA concurrency limit and TPM narrows the split or falls back to a single verifier instead. Leave on unless you want verification staffed by QA agents exclusively.",
+        "description": "When on, TPM may staff overflow verification slices with SWE agents in Verification Mode once QA slots are exhausted — strictly read-only, never edits. When off, a pass is capped at the QA concurrency limit.",
         "default": true
       },
       "wholePictureSlice": {
         "type": "boolean",
         "label": "Whole Picture Slice",
-        "description": "When on, one extra verifier reads the entire diff and runs ONLY the cross-cutting checks - side effects, cross-file consistency, scope, duplication - that a per-file partition structurally cannot see. It is forbidden from re-doing per-file correctness, which would erase the latency benefit. When off, the fan-out has no cross-cutting reader and coupling defects that span two slices are substantially more likely to escape.",
+        "description": "When on, one extra verifier reads the whole diff for cross-cutting checks only (side effects, cross-file consistency, scope, duplication) — never per-file correctness. When off, coupling defects spanning two slices are more likely to escape.",
         "default": true
       }
     }

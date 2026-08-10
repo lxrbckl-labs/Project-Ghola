@@ -16,7 +16,7 @@
       "allowedCommands": {
         "type": "keyValue",
         "label": "Allowed Commands",
-        "description": "gh (GitHub CLI) commands the agent is permitted to run. Toggle each row's Enabled checkbox to grant or revoke that specific command. The Category column labels the operation type: r = read-only (safe inspection of PRs, issues, repos, runs), w = state-modifying but recoverable (create/comment/edit PRs and issues, clone, fork, etc.), d = destructive, irreversible, or sensitive (merge, delete, secret set, auth logout, raw api). The Description column is a short reminder of what each command does - it's panel-only metadata and is not passed to the agent. Defaults grant all r commands and refuse everything else; enable individual w / d commands as needed for the task.",
+        "description": "gh commands the agent may run, each tagged r (read-only), w (recoverable write), or d (destructive/sensitive). Toggle a row to grant or revoke it. Defaults allow all r commands and block every w/d command until enabled.",
         "keywordsPath": "permissions-keywords.json",
         "default": {
           "gh auth status": { "value": "r", "enabled": true, "description": "Show the active gh authentication state and which account/host is logged in." },
@@ -89,7 +89,7 @@
       "protectedRepos": {
         "type": "keyValue",
         "label": "Protected Repos",
-        "description": "Repositories (owner/name) against which the agent must NOT run destructive (d-category) gh operations - delete, merge, secret set, etc. - regardless of which commands are enabled. Type a repository plus an optional note, then click Add. An empty list means no repositories are protected by this module.",
+        "description": "Repos (owner/name) where the agent must never run destructive (d) gh commands, no matter what's enabled. Add a repo plus an optional note. Empty list means no repos are protected.",
         "default": {},
         "keyLabel": "Repository",
         "valueLabel": "Description",

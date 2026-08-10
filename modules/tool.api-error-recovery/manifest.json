@@ -18,44 +18,44 @@
         "label": "Posture",
         "default": "autonomous",
         "options": ["autonomous", "ask"],
-        "description": "How TPM handles a qualifying transient API failure. autonomous (default): TPM checks Claude status and retries automatically, posting one line per attempt as it goes. ask: TPM reports the failure and the status result, then waits for the user to approve before redeploying. Per the preamble's parameter-authority rule this value is authoritative over any looser default."
+        "description": "How TPM handles a transient API failure. autonomous (default): checks Claude status and retries automatically, posting one line per attempt. ask: reports the failure and waits for approval before retrying."
       },
       "maxRetries": {
         "type": "number",
         "label": "Max Retries",
         "default": 3,
         "min": 1,
-        "description": "Hard cap on total retry attempts for a single failed delegation before TPM stops and escalates to the user. This is a non-relaxable safety stop: TPM never loops past it and never ignores it. Attempt 1 is the first redeploy after the original failure."
+        "description": "Hard cap on retry attempts for a single failed delegation before TPM stops and escalates to the user. Non-relaxable. Attempt 1 is the first redeploy after the original failure."
       },
       "backoffSeconds": {
         "type": "string",
         "label": "Backoff Seconds",
         "default": "5,15,45",
-        "description": "Comma-separated escalating wait, in seconds, before each retry attempt: the first value is the wait before attempt 1, the second before attempt 2, and so on. If there are more attempts than values, the last value is reused. Empty means no wait between attempts."
+        "description": "Comma-separated wait times in seconds before each retry attempt, in order. The last value repeats if there are more attempts than values. Empty means no wait."
       },
       "checkStatusPage": {
         "type": "boolean",
         "label": "Check Status Page",
         "default": true,
-        "description": "When on (default), TPM fetches the Claude status page on a qualifying failure and reports the incident indicator in one line before retrying. When off, TPM skips the status check and proceeds straight to backoff and redeploy. A failed status fetch never blocks recovery either way."
+        "description": "When on (default), TPM checks the Claude status page and reports the incident before retrying. When off, it skips straight to backoff and redeploy. A failed fetch never blocks recovery."
       },
       "statusUrl": {
         "type": "string",
         "label": "Status URL",
         "default": "https://status.claude.com/api/v2/summary.json",
-        "description": "Read-only URL TPM GETs to read Claude service health. Defaults to the Atlassian Statuspage summary endpoint, whose JSON exposes status.indicator, status.description, and an incidents array. Fetched only when Check Status Page is on."
+        "description": "Read-only URL TPM GETs for Claude service health. Fetched only when Check Status Page is on."
       },
       "retriableErrors": {
         "type": "string",
         "label": "Retriable Error Signatures",
         "default": "529, 500, 502, 503, 504, 429, Overloaded, API Error, terminated early due to an API error, overloaded_error, temporarily unavailable",
-        "description": "Comma-separated HTTP status codes and text markers that classify a subagent failure as a transient server-side/infra error eligible for retry. Anything NOT matching one of these is treated as a genuine task failure and reported normally, never auto-retried. Per the preamble's parameter-authority rule these signatures are authoritative for what counts as retriable."
+        "description": "Comma-separated status codes and text markers that mark a subagent failure as a retriable infra error. Anything not matching here is a genuine task failure and is never auto-retried."
       },
       "reduceConcurrencyOnOverload": {
         "type": "boolean",
         "label": "Reduce Concurrency On Overload",
         "default": true,
-        "description": "When on (default), an overload/429 failure prompts TPM to reduce parallelism and stagger dispatch on redeploy — fewer simultaneous subagents to ease pressure during an incident. When off, TPM redeploys at the same concurrency. Applies only to overload/rate-limit signatures, not other transient errors."
+        "description": "When on (default), an overload/429 failure makes TPM reduce parallelism and stagger dispatch on redeploy. When off, TPM redeploys at the same concurrency. Applies only to overload/rate-limit failures."
       }
     }
   }

@@ -16,7 +16,7 @@
       "allowedCommands": {
         "type": "keyValue",
         "label": "Allowed Commands",
-        "description": "Commands the agent is permitted to run. Toggle each row's Enabled checkbox to grant or revoke that specific command. The Category column labels the operation type: r = read-only (safe in all contexts), w = state-modifying but recoverable (commit, push, pull, etc.), d = destructive or history-rewriting (reset --hard, push --force, etc.). The Description column is a short reminder of what each command does — it's panel-only metadata and is not passed to the agent. Defaults grant all r commands plus the two branch commands 'git branch <name>' and 'git switch', and refuse everything else; enable individual w / d commands as needed for the task.",
+        "description": "Commands the agent may run. Toggle each row to grant or revoke it. r = read-only, w = recoverable state-modifying, d = destructive/history-rewriting. Description column is panel-only, not sent to the agent. Defaults grant all r commands plus 'git branch <name>' and 'git switch'; everything else is off.",
         "keywordsPath": "permissions-keywords.json",
         "default": {
           "git blame": { "value": "r", "enabled": true, "description": "Show who last modified each line of a file and in which commit." },
@@ -89,7 +89,7 @@
       "protectedBranches": {
         "type": "keyValue",
         "label": "Protected Branches",
-        "description": "Branches the agent must NOT modify regardless of which commands are enabled. Type a branch name plus an optional description, then click Add. An empty list means no branches are protected by this module.",
+        "description": "Branches the agent must NOT modify, regardless of enabled commands. Add a branch name plus an optional note. Empty list means none are protected.",
         "default": {},
         "keyLabel": "Branch",
         "valueLabel": "Description",
@@ -100,14 +100,14 @@
       "commitMessageFormat": {
         "type": "string",
         "label": "Commit Message Format",
-        "description": "Single-line template the agent fills in when you ask it to draft a commit message from the staged diff. Placeholders the agent substitutes: <TICKET> for the active ticket id if known, substituted bare, and <summary> for a concise one-line description. When no ticket is known, the <TICKET>: prefix (the ticket id, the colon, and the following space) is dropped cleanly, so the message is just the summary — never a leading colon or space. Keep this on one line; the Session Manifest renders each parameter as a single line, so a multi-line template reaches the agent malformed. Drafting is generation only — the agent hands the message back as text and never stages, commits, or pushes. Changing this changes how every future drafted message is worded.",
+        "description": "Single-line template for drafted commit messages. <TICKET> and <summary> are substituted; the <TICKET>: prefix is dropped cleanly when no ticket is known. Must stay one line. Generation only — never stages, commits, or pushes.",
         "default": "<TICKET>: <summary>"
       },
       "gitEmail": {
         "type": "string",
         "label": "Git Email",
         "default": "",
-        "description": "The operator's git commit email, used to refine the fallback author/review heuristic (compare against branch commit authors) when identity-based detection via integration.atlassian-suite's `bitbucketUsername` is unavailable. Optional; empty uses `git config user.email`. This is a non-secret identifier, not a credential."
+        "description": "Operator's git commit email, used as a fallback for the author/review heuristic when integration.atlassian-suite's `bitbucketUsername` is unavailable. Optional; empty uses `git config user.email`. Not a credential."
       }
     }
   }

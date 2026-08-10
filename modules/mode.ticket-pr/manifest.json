@@ -18,43 +18,43 @@
       "pullOnStart": {
         "type": "boolean",
         "label": "Pull On Start",
-        "description": "When on, TPM auto-pulls the ticket from Jira at session start via the Atlassian Suite integration. When off, no Jira pull runs and the ticket description must be supplied manually. This setting governs only that pull: the ticket key is always derived from the branch name, so the notes file location is the same either way, and the end-of-run ticket status is reported as UNKNOWN rather than read. Leave on for the common I want to work this ticket flow.",
+        "description": "When on, TPM auto-pulls the ticket from Jira at session start via Atlassian Suite. When off, the ticket description must be supplied manually and end-of-run status is reported as UNKNOWN. The ticket key is always derived from the branch name either way.",
         "default": true
       },
       "crossTicketStrictness": {
         "type": "string",
         "label": "Cross Ticket Strictness",
-        "description": "Controls how TPM responds when the user references work outside the active ticket. Set to ask to confirm before treating the cross-ticket reference as in-scope, hard-block to refuse any cross-ticket work until this mode is disabled, or soft-warn to warn once and proceed. Mirrors Directory Navigation's redirect strictness — higher values keep the session focused on one ticket, lower values reduce friction at the cost of drift.",
+        "description": "How TPM responds to references to work outside the active ticket. ask (default): confirm before treating it as in-scope. hard-block: refuse until this mode is disabled. soft-warn: warn once and proceed.",
         "default": "ask"
       },
       "notesSections": {
         "type": "string",
         "label": "Notes Sections",
-        "description": "Comma-separated list of top-level sections the per-ticket notes file should contain, in the order TPM writes them when creating the file. Trim entries you do not use or extend with custom sections to taste. Note that Session Handoff in this list is the heading the tool.session-handoff module manages — Ticket Work mode ensures the heading exists but defers the writing of that block to that module. The section structure, YAML frontmatter, update discipline, and per-type templates are defined authoritatively by tool.obsidian-notes; this list only selects which of that module's ticket-note catalog sections appear and in what order.",
+        "description": "Comma-separated top-level sections for the per-ticket notes file, in write order. Session Handoff's content is written by tool.session-handoff; section structure and templates come from tool.obsidian-notes — this list only selects and orders sections.",
         "default": "Ticket Summary, Implementation Notes, Changes Made, Edge Cases, Testing Procedures, QA Findings, Session Handoff"
       },
       "offerPrCreationWhenAbsent": {
         "type": "boolean",
         "label": "Offer PR Creation When Absent",
-        "description": "When on and the ticket's branch has no open pull request, the sentry's first move is to offer to create one via the pre-PR checklist and the Atlassian Suite's create pr verb; that verb's operator ok is still required and is never waived. When off, the sentry reports that there is no PR to watch and stops.",
+        "description": "When on and the ticket's branch has no open PR, the sentry offers to create one via the pre-PR checklist and Atlassian Suite's create-pr verb; operator approval is still required and never waived. When off, it reports no PR to watch and stops.",
         "default": true
       },
       "autoResolveBotThreads": {
         "type": "boolean",
         "label": "Auto Resolve Bot Threads",
-        "description": "When on, the sentry resolves bot-authored threads (CodeRabbit and other bots) on its own once the fix is pushed, with no operator turn. When off, every resolve waits for the operator's ok exactly as in Ticket Work. Human-authored threads are never auto-resolved either way.",
+        "description": "When on, the sentry resolves bot-authored threads (CodeRabbit, etc.) automatically once the fix is pushed. When off, every resolve waits for operator ok. Human-authored threads are never auto-resolved either way.",
         "default": true
       },
       "autoCommitAndPush": {
         "type": "boolean",
         "label": "Auto Commit And Push",
-        "description": "When on, the sentry commits and pushes each verified fix to the ticket's own branch without asking per change. This never grants the git commands themselves — tool.git's Allowed Commands allowlist is the only authority for those, and pushes to a protected branch stay refused.",
+        "description": "When on, the sentry commits and pushes each verified fix to the ticket's branch without asking per change. Doesn't grant the git commands themselves — tool.git's allowlist governs those, and pushes to protected branches stay refused.",
         "default": true
       },
       "maxAutonomousIterations": {
         "type": "number",
         "label": "Max Autonomous Iterations",
-        "description": "Runaway backstop on the sentry loop, applied PER TICKET — the maximum number of fetch, fix, push, resolve, re-review passes the sentry runs on one ticket before it stops and reports. Every ask-CodeRabbit-to-review-again trigger is one of these passes, so this is also the bound on how many times the sentry can ask for a re-review of one pull request. When a run works a queue of tickets, each ticket gets its own fresh budget and the run also stops at this value multiplied by Max Tickets Per Run, so one ticket cannot starve the rest and the queue as a whole still has a ceiling. Reaching either bound is a stop, never a silent continue, and the report names which one was hit. Raise it for long review cycles, lower it to keep an unattended run short.",
+        "description": "PER-TICKET cap on fetch/fix/push/resolve/re-review passes before the sentry stops and reports. A queued run also caps at this value times Max Tickets Per Run, so no ticket can starve the rest. Raise for long review cycles, lower to keep unattended runs short.",
         "default": 10,
         "min": 1,
         "max": 100
@@ -62,7 +62,7 @@
       "maxTicketsPerRun": {
         "type": "number",
         "label": "Max Tickets Per Run",
-        "description": "Upper bound on how many tickets one run may work when the operator hands the sentry a queue. The queue is always an explicit list of ticket keys the operator supplies — there is no board or column query anywhere in this system, and the sentry never goes looking for more work once the queue is accepted. A longer list is truncated to this bound and the sentry says which keys it accepted and which it dropped before starting. This value also sets the whole-queue iteration ceiling together with Max Autonomous Iterations. Leave it at 1 to keep every session single-ticket.",
+        "description": "Cap on tickets worked per run from an operator-supplied queue (an explicit key list — never a board/column query). Excess keys are dropped and reported before starting. Set to 1 for single-ticket sessions.",
         "default": 3,
         "min": 1,
         "max": 20
@@ -70,13 +70,13 @@
       "reviewStatusNames": {
         "type": "string",
         "label": "Review Status Names",
-        "description": "Comma-separated allowlist of the Jira status names that count as in review for this project. Used two ways at the end of a clean run: as the target set when the sentry offers to move the ticket after the PR is marked ready — the operator confirms that move in its own turn, and the sentry never transitions on its own — and as the test for whether the ticket already sits in a review column. The list is authoritative — a status not named here is not a review status, and the sentry never substitutes a synonym. Jira workflows are per project, so replace these defaults with your board's actual column names.",
+        "description": "Comma-separated allowlist of Jira status names counting as \"in review\" — exact match only, never a synonym or inferred equivalent. Used to offer the post-PR move (operator-confirmed, never automatic) and to check if the ticket is already in review. Replace with your board's actual column names.",
         "default": "In Review, Code Review, Peer Review"
       },
       "statusReportVerbosity": {
         "type": "enum",
         "label": "Status Report Verbosity",
-        "description": "How much detail the sentry's status roll-up carries. Set to summary for the counts plus anything failed, blocked, unverified, or flagged; set to detailed to additionally list every thread by ordinal, author, and disposition.",
+        "description": "How much detail the status roll-up carries. summary (default): counts plus anything failed, blocked, unverified, or flagged. detailed: also lists every thread by ordinal, author, and disposition.",
         "options": ["summary", "detailed"],
         "default": "summary"
       }

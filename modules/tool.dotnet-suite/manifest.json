@@ -16,7 +16,7 @@
       "allowedCommands": {
         "type": "string",
         "label": "Allowed Dotnet Subcommands",
-        "description": "Comma-separated list of dotnet subcommands the agents may run. Entries may be multi-word (e.g. 'tool install', 'tool uninstall') — each entry matches the full token after 'dotnet '. See the keyword table below for each available subcommand. Default empty string means no dotnet commands allowed.",
+        "description": "Comma-separated dotnet subcommands agents may run. Entries may be multi-word (e.g. 'tool install') matching the full token after 'dotnet '. Empty (default) means none allowed.",
         "default": "",
         "keywordsPath": "allowed-commands-keywords.json",
         "multiSelect": true,

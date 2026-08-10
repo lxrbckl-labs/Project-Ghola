@@ -16,7 +16,7 @@
       "steps": {
         "type": "keyValue",
         "label": "Steps",
-        "description": "Ordered list of session-start steps TPM runs before responding to the first user message. Each entry is a step name plus a one-line instruction naming the digest fields the step reads and POINTING AT this module's matching per-step section, which is authoritative for the exact lines rendered — the seeded defaults deliberately do not restate those lines, because a copy here drifts out of step with the prose and the prose is the single source of truth. The seeded defaults are the Ghola startup sequence (the analog of SWT's TPM Startup Sequence); domain steps delegate to the relevant proactive module and degrade gracefully when it is off. Reorder by editing the kv-table (declared order is run order); add custom steps for project-specific boot work (a custom step's description IS its instruction, since no module section defines it); disable individual steps without deleting them. Note that saving any change to this table persists the WHOLE map as an override, so edit an entry's wording only when you intend that wording to govern the step.",
+        "description": "Ordered list of session-start steps; table order is run order. Each step's instruction points to this module's matching section, which is authoritative for the exact rendered lines. Add custom steps freely (their text is their instruction); disable without deleting. Editing any entry saves the WHOLE table as an override.",
         "default": {
           "version": { "value": "Read `version` from the probe digest ($GHOLA_VERSION, else $GHOLA_ROOT/VERSION, else `unknown` — the probe has no third fallback). Render per this module's step 1 `version` section, which is authoritative for the exact lines.", "enabled": true },
           "environment": { "value": "Read `env_state` (and `env_missing` when present) — the probe confirms $GHOLA_ROOT plus the three agent prompt files ($GHOLA_TPM_PROMPT_FILE, $GHOLA_SWE_PROMPT_FILE, $GHOLA_QA_PROMPT_FILE). Render per this module's step 2 `environment` section, which is authoritative for the exact lines.", "enabled": true },
@@ -37,19 +37,19 @@
       "outputFormat": {
         "type": "string",
         "label": "Output Format",
-        "description": "Format for the user-facing boot diagnostics. detailed (default) emits one line per step in the shared contract shape — '[ghola] ✅ <desc>' on success or '[ghola] ❌ <desc> (<reason>)' on failure. compact emits a single line summarizing the full boot phase. silent emits nothing (steps still run and their side effects still apply, but the user sees only the orientation paragraph). detailed is the most informative.",
+        "description": "Boot diagnostics format. detailed (default): shows one check/cross line per step. compact: shows one summary line. silent: shows nothing, though steps still run.",
         "default": "detailed"
       },
       "failureBehavior": {
         "type": "string",
         "label": "Failure Behavior",
-        "description": "How TPM responds when a step fails (e.g., a proactive module errors, a git command fails, a file is missing). warn-and-continue (default) prints the cross line for the failed step and proceeds to the next step — the hard rule is that the sequence never stalls on a failed step. halt is available for critical setups but must never block a git/ticket/notes step whose downstream degrades gracefully. retry-once attempts the failed step a second time before falling back to warn-and-continue.",
+        "description": "How TPM handles a failed boot step. warn-and-continue (default): logs it and moves on - the sequence never stalls. halt: stops for critical setups. retry-once: retries once before falling back to warn-and-continue.",
         "default": "warn-and-continue"
       },
       "includeTimings": {
         "type": "boolean",
         "label": "Include Timings",
-        "description": "When on, each step's elapsed time is appended to its boot diagnostics line (e.g. '[ghola] ✅ Branch: main — 48ms'). Useful for diagnosing slow boots. When off (the typical default), no timings are shown; turn it on temporarily when investigating slow startups.",
+        "description": "When on, each boot step's line shows its elapsed time (e.g. '48ms'). Off by default; enable temporarily to diagnose slow startups.",
         "default": false
       }
     }

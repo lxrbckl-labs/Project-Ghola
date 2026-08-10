@@ -17,31 +17,31 @@
       "learningEnabled": {
         "type": "boolean",
         "label": "Learning Enabled",
-        "description": "Master switch for the PR-comment learning loop. When on, QA reads the comment log before each review and uses patterns found there to inform its own findings. When off, QA reviews are based solely on the in-session diff. On is the default — learning passively improves review quality without changing QA's interactive behavior.",
+        "description": "Master switch for the PR-comment learning loop. When on (default), QA reads the comment log before each review and uses found patterns to inform findings. When off, QA relies solely on the in-session diff.",
         "default": true
       },
       "logSourcePath": {
         "type": "string",
         "label": "Log Source Path",
-        "description": "Path to the PR-comment log QA reads from. Empty defers to the log path configured in integration.bitbucket-pr-comments (the canonical source). Set explicitly only when QA should learn from a log other than the one the comments module writes (e.g. a curated team-wide log, an exported training set, or the tool.reviewer-dossier dossier when that module is loaded).",
+        "description": "Path to the PR-comment log QA reads from. Empty defers to integration.bitbucket-pr-comments' log path. Set explicitly only to point QA at a different log (e.g. a curated log or the reviewer-dossier).",
         "default": ""
       },
       "patternExtractionMode": {
         "type": "string",
         "label": "Pattern Extraction Mode",
-        "description": "How QA distills patterns from the log. recurring-themes groups comments by topic (null checks, naming, error handling) and surfaces themes that appear in three or more comments. author-styles indexes comments by author and learns each reviewer's recurring concerns. literal-quotes surfaces specific phrasings from past comments as exemplars when QA is drafting verdict text. recurring-themes is the most useful default.",
+        "description": "How QA distills patterns from the log. recurring-themes (default): groups comments by topic, surfaces ones in 3+ comments. author-styles: indexes by reviewer. literal-quotes: surfaces past phrasings as exemplars.",
         "default": "recurring-themes"
       },
       "minLogEntriesToActivate": {
         "type": "number",
         "label": "Min Log Entries To Activate",
-        "description": "Minimum number of log entries required before the learning loop activates. Below this threshold, QA reverts to its non-learning behavior since the sample size is too small to produce reliable patterns. Default 10 is conservative; raise for stricter signal or lower for faster activation in new projects.",
+        "description": "Minimum log entries required before the learning loop activates; below this, QA reverts to non-learning behavior. Raise for stricter signal, lower for faster activation on new projects.",
         "default": 10
       },
       "surfaceLearnedPatterns": {
         "type": "boolean",
         "label": "Surface Learned Patterns",
-        "description": "When on, QA explicitly mentions learned patterns in its verdict (\"This null check matches a recurring team pattern from CMMS-1234, CMMS-2456, CMMS-3567\"). When off, QA uses the patterns internally to inform findings but does not cite them. On is useful for transparency and onboarding; off keeps verdicts cleaner for established teams.",
+        "description": "When on, QA cites learned patterns by name in its verdict. When off, patterns inform findings internally without being cited — cleaner verdicts for established teams.",
         "default": true
       }
     }

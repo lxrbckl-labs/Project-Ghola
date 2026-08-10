@@ -17,31 +17,31 @@
       "autoOpenWarRoom": {
         "type": "boolean",
         "label": "Auto-Open War Room",
-        "description": "When on, launching in War Mode (and every subsequent mission start) auto-reveals the War Room tab so the roster and activity feed are on screen without a manual click. When off, the War Room stays wherever the user last left it; the mission still runs, but its progress is not surfaced until the user opens the tab themselves. Default on because ghola mode removes the usual back-and-forth, so surfacing the board proactively is the main way the user stays oriented.",
+        "description": "When on (default), starting or resuming War Mode auto-reveals the War Room tab so roster and activity are visible without a manual click. When off, the tab stays wherever the user left it.",
         "default": true
       },
       "tournament": {
         "type": "boolean",
         "label": "Tournament Mode",
-        "description": "When on, TPM may grow rival gholas for a hard sub-purpose (two or more independent attempts) and keep whichever result is best, retiring the rest. When off, TPM grows exactly one ghola per sub-purpose. Default off because tournament mode multiplies token and time cost for every sub-purpose it touches; turn it on deliberately for missions where getting a hard sub-purpose right is worth paying for redundant attempts.",
+        "description": "When on, TPM may run rival gholas on a hard sub-purpose and keep the best result, retiring the rest. When off (default), exactly one ghola runs per sub-purpose. On multiplies token and time cost.",
         "default": false
       },
       "maxConcurrentGholas": {
         "type": "number",
         "label": "Max Concurrent Gholas",
-        "description": "Ceiling on how many gholas may be in the active state at once for this mission. 0 (default) means unbounded; TPM sizes the roster purely by the mission's decomposition. Set a positive number to cap concurrency (e.g. on a shared machine, or to keep cost predictable); TPM must then keep additional sub-purposes dormant or queued until a slot frees up rather than exceeding the cap. The cap does not relax the file-ownership rule; every active ghola still gets explicit, non-overlapping file ownership in its brief regardless of how many are running.",
+        "description": "Ceiling on gholas active at once for this mission. 0 (default) means unbounded. A positive number queues additional sub-purposes until a slot frees; the file-ownership rule still applies regardless.",
         "default": 0
       },
       "dryRun": {
         "type": "boolean",
         "label": "Dry Run",
-        "description": "When on, TPM plans the crew and the first moves for the mission (decomposition, roster shape, initial ghola briefs) without spawning gholas or editing any files, then reports the plan for review. When off, TPM proceeds straight into an autonomous run. Default off (full autonomy is the point of ghola mode); turn dry-run on as a one-time sanity check before loosing a mission whose blast radius is unfamiliar or high-stakes.",
+        "description": "When on, TPM plans the mission (decomposition, roster, initial briefs) and reports it for review, without spawning gholas or editing files. Off (default) runs straight into an autonomous run.",
         "default": false
       },
       "autoVerify": {
         "type": "boolean",
         "label": "Auto-run QA Verification",
-        "description": "Controls WHEN the QA/verification pass is dispatched, not WHETHER it is required. When off (default), the TPM does not auto-spawn the QA ghola once the crew returns fixes; instead it PROPOSES the verification pass (the per-sub-purpose adversarial 'done means verified' check and the mission integration checkpoint over the combined diff) and WAITS for the operator's go-ahead before dispatching a QA ghola, leaving unverified sub-purposes in a pending-verification state until approved. When on, the TPM auto-dispatches verification as soon as the crew returns (the prior behavior). Either way the 'done means verified' quality gate still holds: a sub-purpose is not done until verification has PASSED and the mission cannot Declare-Done without it — this toggle only defers the dispatch, never the requirement.",
+        "description": "Controls WHEN QA verification is dispatched, not whether it's required. Off (default): TPM proposes the verification pass and waits for the operator's go-ahead. On: TPM auto-dispatches QA as soon as the crew returns. Either way, a sub-purpose is never done until verification passes.",
         "default": false
       }
     }

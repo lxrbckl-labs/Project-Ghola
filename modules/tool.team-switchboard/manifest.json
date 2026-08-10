@@ -17,43 +17,43 @@
         "type": "path",
         "label": "Comms root directory",
         "default": "",
-        "description": "Absolute path to the shared _AgentComms/ directory. Leave empty to derive <obsidian-vault-root>/_AgentComms/ at runtime, resolving the vault root from tool.obsidian-notes' Vault Path first and the GHOLA_VAULT environment variable second; the derived location sits inside the vault exception tool.cwd-discipline already seeds, whereas a path set here pointing outside the vault needs its own Allowed Exception Paths entry. ALL teams must point at the same absolute location for cross-team messaging to work — if even one team uses a different path, its messages land in an isolated subtree no other team will see."
+        "description": "Absolute path to the shared _AgentComms/ directory. Blank derives it from tool.obsidian-notes' Vault Path (or GHOLA_VAULT) at runtime. ALL teams must use the exact same path, or messages silently land in an isolated subtree no one else sees."
       },
       "staleAfterDays": {
         "type": "number",
         "label": "Roster stale threshold (days)",
         "default": 14,
-        "description": "Roster rows whose Last active date is older than this many days are flagged as stale when listing active teams. Stale rows are never deleted — only marked so operators can see which teams have gone quiet. Reduce this value to surface inactivity sooner; increase it for teams that work in longer bursts with natural gaps."
+        "description": "Roster rows with a Last active date older than this many days are flagged stale (never deleted). Lower to surface inactivity sooner; raise for teams with long natural gaps."
       },
       "handledMessageRetentionDays": {
         "type": "number",
         "label": "Handled message retention (days)",
         "default": 3,
-        "description": "How many days a handled directed message (a '[x]' item) is kept in this team's own inbox-<slug>.md before it is pruned. At session start, after the inbox check, the agent deletes handled '[x]' items whose sent date is this many days or more before today. Only this team's OWN inbox is touched, only directed messages, only ones already marked '[x]'; unread '[ ]' items and all inbox-all.md broadcasts are never pruned regardless of age. Increase to keep handled reply-history longer; set to a large value to effectively disable pruning."
+        "description": "Days to keep handled ('[x]') directed messages in this team's own inbox before pruning at session start. Never touches unread items or inbox-all.md broadcasts. Raise to keep history longer, or set high to effectively disable pruning."
       },
       "detectParentProject": {
         "type": "boolean",
         "label": "Detect parent project from path nesting",
         "default": true,
-        "description": "When on, at session start the agent checks the roster for a team whose repo path is a proper ancestor of this team's repo path (nearest ancestor wins) and, if found, surfaces the parent relationship and groups this team's roster row under the parent. Detection uses workspace path nesting only, never the team name or #N suffix or git remote. Channels are never merged and no inbox is moved — this is roster presentation plus an optional aggregated read view. Turn off for a flat roster."
+        "description": "When on, detects a parent team via repo path nesting (nearest ancestor wins) and groups this team's roster row under it. Path-based only — never team name or git remote. Channels/inboxes are never merged. Off = flat roster."
       },
       "mergeDeadChildren": {
         "type": "boolean",
         "label": "Offer to reclaim dead child channels",
         "default": true,
-        "description": "When on, and this team is a parent (per detectParentProject), the agent may OFFER to reclaim a child channel that is dead — defined strictly as a roster row stale past staleAfterDays AND whose inbox holds no unhandled '[ ]' directed items. The reclamation is ALWAYS operator-confirmed and never automatic; this toggle only controls whether the offer appears. Folding or removing another team's dead inbox is a cross-team action whose mechanics and authorization live in the canonical vault _Switchboard.md — this module surfaces the offer but defers the actual cross-team fold to that doc. Turn off to suppress the offer entirely."
+        "description": "When on and this team is a parent, offers to reclaim a child channel that's stale (past staleAfterDays) with no unhandled messages. Reclamation always requires operator confirmation; this only controls whether the offer appears. Off suppresses the offer."
       },
       "checkInboxOnBoot": {
         "type": "boolean",
         "label": "Check inbox when asked",
         "default": false,
-        "description": "There is no automatic session-start check anymore — the switchboard only activates when the operator explicitly asks about cross-team comms. When on, that on-demand check also reads inbox-<team>.md and inbox-all.md and surfaces a concise summary of unread messages (sender, subject, date) to the operator. When off, the agent still checks the inbox on explicit request, but skips the summary framing — useful for sessions where inbox noise would be distracting."
+        "description": "The switchboard only activates when explicitly asked, never automatically. When on, that on-demand check also surfaces a summary of unread messages (sender, subject, date). When off, it still checks but skips the summary."
       },
       "heartbeatOnBoot": {
         "type": "boolean",
         "label": "Update roster when asked",
         "default": false,
-        "description": "There is no automatic session-start heartbeat anymore — the roster is only touched when the operator explicitly asks the switchboard to register or check in. When on, that on-demand request also refreshes this team's row in _Switchboard.md (current focus + today's date), adding the row if this team has never registered. When off, the operator's request is treated as a read-only lookup and the roster row is left untouched — useful for a review session that should not advertise presence even when explicitly asked to check the switchboard."
+        "description": "The roster is only touched when explicitly asked, never automatically. When on, that request also refreshes this team's roster row (focus + date), adding it if new. When off, the request is read-only and the roster is left untouched."
       }
     }
   }

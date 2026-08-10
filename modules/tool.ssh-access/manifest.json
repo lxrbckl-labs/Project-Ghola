@@ -17,7 +17,7 @@
       "allowedHosts": {
         "type": "keyValue",
         "label": "Allowed Hosts",
-        "description": "User-managed list of hosts agents may SSH to. Each entry is a hostname (or user@host) plus a one-line description of what the host is for. Default empty refuses every SSH invocation. Add entries per project — bastion hosts, deployment targets, dev VMs.",
+        "description": "Hosts agents may SSH to, each with a short description. Empty (default) refuses every SSH invocation.",
         "default": {},
         "keyLabel": "Host",
         "valueLabel": "Description",
@@ -28,25 +28,25 @@
       "allowedCommandPatterns": {
         "type": "string",
         "label": "Allowed Command Patterns",
-        "description": "Comma-separated list of command-prefix patterns agents may execute on the remote. Matched as prefix substring against the remote command. Default covers read-only inspection patterns. Add destructive patterns explicitly (e.g. systemctl restart) and only after the user reviews them.",
+        "description": "Command-prefix patterns agents may run on the remote host. Defaults cover read-only inspection; add destructive patterns only after review.",
         "default": "ls, pwd, ps, df, free, uptime, journalctl --user, systemctl --user status, docker ps, docker logs, tail -n, cat, less, head"
       },
       "requireKnownHosts": {
         "type": "boolean",
         "label": "Require Known Hosts",
-        "description": "When on, SSH invocations refuse unless the target host is in the user's ~/.ssh/known_hosts (prevents man-in-the-middle on first connect). When off, accepts new host keys silently (NOT recommended outside trusted networks). On is the safer default.",
+        "description": "When on (default), SSH refuses hosts not already in ~/.ssh/known_hosts, preventing MITM on first connect. Off accepts new host keys silently - not recommended outside trusted networks.",
         "default": true
       },
       "onCommandRefusal": {
         "type": "string",
         "label": "On Command Refusal",
-        "description": "How agents respond when a command doesn't match allowedCommandPatterns. refuse blocks the invocation and surfaces the refusal. log-only allows the invocation but emits a warning. ask prompts the user per occurrence. Default refuse is the safest.",
+        "description": "How agents respond to a command not matching allowedCommandPatterns. refuse (default): blocks it. log-only: allows with a warning. ask: prompts the user.",
         "default": "refuse"
       },
       "timeoutSeconds": {
         "type": "number",
         "label": "Timeout Seconds",
-        "description": "Max wall-clock time agents wait for an SSH command to return. Default 30 covers typical inspection commands. Lower for snappier failure on hung connections; raise for known long-running commands (which should arguably not be on the allowlist anyway).",
+        "description": "Max seconds agents wait for an SSH command to return. Default 30. Lower for faster failure on hung connections; raise for known long-running commands.",
         "default": 30
       }
     }

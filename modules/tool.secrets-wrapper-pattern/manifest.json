@@ -16,25 +16,25 @@
       "enforcePattern": {
         "type": "boolean",
         "label": "Enforce Pattern",
-        "description": "Master switch for the secrets-wrapper pattern. When on, agents refuse to read environment variables matching the configured secret patterns or to read the configured secret file paths. When off, the rule is informational only and agents may access secrets directly. Off is rarely correct.",
+        "description": "Master switch for the secrets-wrapper pattern. On (default) blocks agents from reading secret-shaped env vars or files directly. Off makes the rule informational only - rarely correct.",
         "default": true
       },
       "secretEnvPatterns": {
         "type": "string",
         "label": "Secret Env Patterns",
-        "description": "Comma-separated list of glob patterns identifying environment variables agents must NEVER read or echo. Matched case-insensitively against env var names. Add team-specific patterns; remove patterns that fire on false positives (e.g. a public API key that genuinely is not secret).",
+        "description": "Glob patterns (case-insensitive) for env var names agents must never read or echo. Add or remove patterns to fit your team's naming and avoid false positives.",
         "default": "*_TOKEN, *_SECRET, *_KEY, *_PASSWORD, *_PASS, *_CREDENTIAL"
       },
       "secretFilePaths": {
         "type": "string",
         "label": "Secret File Paths",
-        "description": "Comma-separated list of file path patterns agents must NEVER read directly. Wrapper scripts may read them on the agent's behalf. Environment variables in entries (e.g. ${GHOLA_BRIDGE_FILE}) are expanded at runtime. Glob support is the same as Cwd Discipline's Allowed Exception Paths.",
+        "description": "File path patterns agents must never read directly (wrapper scripts may). Env vars in entries (e.g. ${GHOLA_BRIDGE_FILE}) expand at runtime.",
         "default": "${GHOLA_BRIDGE_FILE}, ~/.netrc, ~/.aws/credentials, ~/.ssh/id_*, ~/.config/gh/hosts.yml"
       },
       "approvedWrappers": {
         "type": "keyValue",
         "label": "Approved Wrappers",
-        "description": "User-managed list of wrapper scripts agents may invoke to access secret-protected resources. Each entry is a script path plus a one-line description of what the wrapper handles. Wrappers source the secret at call time and never expose the value in their stdout. Add project-specific wrappers as the ecosystem grows - but only a wrapper that exists on disk belongs here, because an entry pointing at a missing script advertises a capability the session cannot deliver.",
+        "description": "Wrapper scripts agents may invoke for secret-protected resources; each sources its secret at call time without exposing it. Only list wrappers that actually exist on disk.",
         "default": {
           "${GHOLA_ROOT}/scripts/bb-bridge.mjs": { "value": "Bitbucket/Jira bridge client - resolves the bridge bearer token from GHOLA_BRIDGE_FILE or GHOLA_BRIDGE_TOKEN at call time and never prints it", "enabled": true }
         },
@@ -47,7 +47,7 @@
       "onViolation": {
         "type": "string",
         "label": "On Violation",
-        "description": "How agents respond when they would otherwise read a secret-shaped env var, file path, or echo a secret value. refuse blocks the action and surfaces the violation. log-only allows the action but emits a warning. ask prompts the user to confirm. Default refuse is the safest discipline.",
+        "description": "How agents respond to a would-be secret read. refuse (default): blocks it. log-only: allows with a warning. ask: prompts the user.",
         "default": "refuse"
       }
     }
